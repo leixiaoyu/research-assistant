@@ -56,6 +56,30 @@ This document outlines a 4-phase, 7-week delivery plan to build the Automated Re
 - Detects duplicate topics with 90%+ accuracy
 - Generates valid output markdown
 
+#### Security Requirements (MANDATORY) 🔒
+- [ ] All API keys loaded from environment variables
+- [ ] No hardcoded secrets in source code
+- [ ] .env added to .gitignore
+- [ ] .env.template provided with placeholders
+- [ ] All configuration inputs validated with Pydantic
+- [ ] Query input validated to prevent injection
+- [ ] File paths sanitized to prevent traversal
+- [ ] Rate limiting implemented for Semantic Scholar API
+- [ ] Security events logged appropriately
+- [ ] No secrets in logs
+- [ ] Pre-commit hooks configured
+- [ ] Secret scanning enabled
+
+#### Verification Requirements (MANDATORY) ✅
+- [ ] Unit test coverage >80%
+- [ ] Integration tests pass
+- [ ] All security checklist items verified
+- [ ] Manual verification report generated
+- [ ] Feature specification 100% met
+- [ ] No known security vulnerabilities
+
+**Phase 1 cannot proceed to Phase 2 until ALL security and verification requirements are met.**
+
 #### Risk Level: **LOW**
 All technologies are proven and well-documented.
 
@@ -63,7 +87,7 @@ All technologies are proven and well-documented.
 
 ### Phase 2: PDF Processing & LLM Extraction
 **Duration:** 2 weeks
-**Dependencies:** Phase 1
+**Dependencies:** Phase 1 (with security gate passed)
 **Goal:** Full extraction pipeline with intelligent content analysis
 
 #### Key Deliverables
@@ -80,6 +104,30 @@ All technologies are proven and well-documented.
 - Enforces cost limits ($50/day default)
 - 95%+ successful extraction rate
 
+#### Security Requirements (MANDATORY) 🔒
+- [ ] LLM API keys loaded from environment variables
+- [ ] LLM responses sanitized before use
+- [ ] PDF downloads validated (magic bytes check)
+- [ ] PDF file size limits enforced
+- [ ] Temporary files cleaned up securely
+- [ ] Downloaded files isolated to safe directories
+- [ ] No execution of code from PDFs
+- [ ] Circuit breaker for failed LLM calls
+- [ ] Cost limits enforced before API calls
+- [ ] All Phase 1 security requirements maintained
+
+#### Verification Requirements (MANDATORY) ✅
+- [ ] Unit test coverage >80% (including new code)
+- [ ] Integration tests for PDF pipeline
+- [ ] Integration tests for LLM extraction
+- [ ] Cost limit enforcement tested
+- [ ] Fallback behavior tested (no PDF, LLM failure)
+- [ ] Security vulnerability scan passed
+- [ ] Manual verification report generated
+- [ ] Feature specification 100% met
+
+**Phase 2 cannot proceed to Phase 3 until ALL security and verification requirements are met.**
+
 #### Risk Level: **MEDIUM**
 LLM costs and PDF parsing failures are key risks, mitigated by:
 - Strict cost limits and monitoring
@@ -90,7 +138,7 @@ LLM costs and PDF parsing failures are key risks, mitigated by:
 
 ### Phase 3: Intelligence & Optimization
 **Duration:** 2 weeks
-**Dependencies:** Phase 1 & 2
+**Dependencies:** Phase 1 & 2 (with security gates passed)
 **Goal:** Production-grade performance and efficiency
 
 #### Key Deliverables
@@ -99,6 +147,7 @@ LLM costs and PDF parsing failures are key risks, mitigated by:
 ✅ Enhanced paper deduplication
 ✅ Quality filtering and ranking
 ✅ Checkpoint/resume capability
+✅ Autonomous operation with intelligent stopping
 ✅ Resource optimization
 
 #### Success Metrics
@@ -107,6 +156,33 @@ LLM costs and PDF parsing failures are key risks, mitigated by:
 - Detect 95%+ duplicate papers
 - Reduce LLM costs by 40% through filtering
 - Resume from interruption without data loss
+- Autonomous stopping works correctly (quality convergence detected)
+
+#### Security Requirements (MANDATORY) 🔒
+- [ ] Cache keys use secure hashing (no sensitive data in keys)
+- [ ] Cache directory permissions restricted
+- [ ] Checkpoint files atomic writes only
+- [ ] Checkpoint files validated on load
+- [ ] Concurrent access to shared resources protected
+- [ ] No race conditions in credential access
+- [ ] Worker pool limits enforced
+- [ ] Memory limits enforced to prevent DoS
+- [ ] All Phase 1 & 2 security requirements maintained
+
+#### Verification Requirements (MANDATORY) ✅
+- [ ] Unit test coverage >80% (including all new code)
+- [ ] Concurrent processing tested under load
+- [ ] Race condition testing performed
+- [ ] Cache invalidation tested
+- [ ] Checkpoint/resume tested (with interruption)
+- [ ] Autonomous stopping tested (convergence detection)
+- [ ] Performance benchmarks met
+- [ ] Load testing performed (50+ papers)
+- [ ] Security vulnerability scan passed
+- [ ] Manual verification report generated
+- [ ] Feature specification 100% met
+
+**Phase 3 cannot proceed to Phase 4 until ALL security and verification requirements are met.**
 
 #### Risk Level: **MEDIUM**
 Concurrency bugs and race conditions mitigated by:
@@ -118,7 +194,7 @@ Concurrency bugs and race conditions mitigated by:
 
 ### Phase 4: Production Hardening
 **Duration:** 1 week
-**Dependencies:** Phase 1, 2, 3
+**Dependencies:** Phase 1, 2, 3 (with security gates passed)
 **Goal:** Observable, maintainable, production-ready service
 
 #### Key Deliverables
@@ -130,6 +206,7 @@ Concurrency bugs and race conditions mitigated by:
 ✅ Health checks and alerts
 ✅ Deployment configs (Docker, systemd, K8s)
 ✅ Operational runbook
+✅ Security hardening guide
 
 #### Success Metrics
 - All errors traceable via correlation IDs
@@ -137,6 +214,37 @@ Concurrency bugs and race conditions mitigated by:
 - Test coverage > 80%
 - Zero-downtime deployments
 - Mean time to recovery < 15 minutes
+- All security audits passed
+
+#### Security Requirements (MANDATORY) 🔒
+- [ ] Security monitoring enabled
+- [ ] Failed authentication attempts logged
+- [ ] Rate limit violations logged
+- [ ] Anomaly detection configured
+- [ ] Security audit trail complete
+- [ ] Credentials rotatable without downtime
+- [ ] Secrets encrypted at rest (if stored)
+- [ ] Secure communication (HTTPS only for APIs)
+- [ ] Security headers configured
+- [ ] Penetration testing performed
+- [ ] Security incident response plan documented
+- [ ] All Phase 1, 2, 3 security requirements maintained
+
+#### Verification Requirements (MANDATORY) ✅
+- [ ] Final unit test coverage >80%
+- [ ] All integration tests pass
+- [ ] End-to-end tests pass
+- [ ] Load testing passed (sustained operation)
+- [ ] Chaos testing performed (resilience verification)
+- [ ] Security penetration testing passed
+- [ ] Monitoring and alerting tested
+- [ ] Deployment tested in clean environment
+- [ ] Rollback procedure tested
+- [ ] Security vulnerability scan passed (FINAL)
+- [ ] Complete verification report generated
+- [ ] Production readiness checklist 100% complete
+
+**Phase 4 cannot be deployed to production until ALL security and verification requirements are met.**
 
 #### Risk Level: **LOW**
 Standard DevOps practices, well-understood tooling.

@@ -2,6 +2,105 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+---
+
+## Development Philosophy
+
+### 🔒 Security First (Non-Negotiable)
+
+**Security is the #1 priority and cannot be compromised under any circumstances.**
+
+Before writing ANY code, you must:
+1. **Never hardcode secrets** - All credentials via environment variables
+2. **Validate all inputs** - Use Pydantic models for runtime validation
+3. **Sanitize all paths** - Prevent directory traversal attacks
+4. **Log security events** - But never log secrets or credentials
+5. **Scan for secrets** - Check before committing
+
+**Security Checklist (Required for Every Change):**
+- [ ] No hardcoded credentials in code
+- [ ] All user inputs validated with Pydantic
+- [ ] No command injection vulnerabilities
+- [ ] No SQL injection vulnerabilities
+- [ ] All file paths sanitized
+- [ ] No directory traversal vulnerabilities
+- [ ] Rate limiting implemented where needed
+- [ ] Security events logged appropriately
+- [ ] No secrets in logs or commits
+
+See [SYSTEM_ARCHITECTURE.md §9 Security](docs/SYSTEM_ARCHITECTURE.md#security) for complete security requirements.
+
+### 🧪 Test-Driven Development (Required)
+
+**No code should be pushed to remote without complete verification.**
+
+Every feature must have:
+1. **Automated Tests** (preferred):
+   - Unit tests for all functions
+   - Integration tests for service interactions
+   - End-to-end tests for critical workflows
+   - Test coverage >80%
+
+2. **Manual Verification** (when automated tests insufficient):
+   - Step-by-step manual testing by Claude Code
+   - Detailed logging of each test step
+   - Screenshots/outputs captured as evidence
+   - Results documented in verification report
+
+**Verification Report Format:**
+```markdown
+## Feature Verification Report
+
+**Feature:** [Feature name]
+**Date:** [Date]
+**Tested By:** Claude Code
+**Status:** [PASS/FAIL]
+
+### Test Cases
+1. [Test case 1]
+   - Steps: [...]
+   - Expected: [...]
+   - Actual: [...]
+   - Status: PASS ✅
+
+2. [Test case 2]
+   - Steps: [...]
+   - Expected: [...]
+   - Actual: [...]
+   - Status: PASS ✅
+
+### Coverage
+- Unit Tests: X%
+- Integration Tests: Y%
+- Manual Tests: Z test cases
+
+### Security Verification
+- [ ] All security checklist items verified
+- [ ] No vulnerabilities detected
+- [ ] Secret scanning passed
+
+### Conclusion
+[Summary of verification results]
+```
+
+### 📋 Feature Completeness (Required)
+
+Every feature must function **100% of the time** according to its specification before being pushed.
+
+**Definition of Complete:**
+- All specified functionality implemented
+- All edge cases handled
+- All error cases handled gracefully
+- All inputs validated
+- All security requirements met
+- All tests passing
+- All documentation updated
+- Verification report generated
+
+**If ANY requirement is not met, the feature is INCOMPLETE and must not be pushed.**
+
+---
+
 ## Project Overview
 
 **Automated Research Ingestion & Synthesis Pipeline (ARISP)** automates the discovery, extraction, and synthesis of cutting-edge AI research papers based on user-defined research topics. The pipeline runs on-demand or scheduled, fetches PDFs, converts them to Markdown, extracts code and prompts using an LLM, and outputs Obsidian-ready markdown briefs for engineering teams.
@@ -127,11 +226,66 @@ The pipeline consists of five main modules:
    - Generates markdown: `./output/{topic_slug}/YYYY-MM-DD_Research.md`
    - Updates catalog index
 
+## Development Workflow
+
+### Before Starting Any Work
+1. Review [SYSTEM_ARCHITECTURE.md](docs/SYSTEM_ARCHITECTURE.md) for architectural guidance
+2. Review relevant phase specification in `docs/specs/`
+3. Understand security requirements for the component
+4. Plan test strategy before writing code
+
+### During Development
+1. Write tests first (TDD) or alongside code
+2. Validate all inputs with Pydantic
+3. Never hardcode secrets
+4. Log appropriately (info for operations, never secrets)
+5. Handle all error cases gracefully
+6. Document security considerations
+
+### Before Committing
+1. Run all tests: `pytest tests/`
+2. Check test coverage: `pytest --cov=src --cov-report=term`
+3. Format code: `black .`
+4. Type check: `mypy src/`
+5. Security scan: Check for hardcoded secrets
+6. Review security checklist
+7. Generate verification report
+
+### Before Pushing
+1. **All tests must pass** (100%)
+2. **Coverage must be >80%**
+3. **Security checklist complete**
+4. **Verification report generated**
+5. **Feature specification 100% met**
+
+**If ANY requirement fails, do NOT push. Fix issues first.**
+
+---
+
 ## Coding Standards
+
+### Security Standards (CRITICAL)
+* **Never hardcode secrets**: Use environment variables exclusively
+* **Validate all inputs**: Use Pydantic models with strict validation
+* **Sanitize paths**: Use PathSanitizer for all file operations
+* **Log securely**: Log operations, never credentials
+* **Rate limit**: All external API calls must be rate limited
+
+### Code Quality Standards
 * **Modularity:** Separate concerns across the five main modules
 * **Error Handling:** Implement robust try/except blocks and exponential backoff for API rate limits
-* **Logging:** Use Python's `logging` module, not `print()` for system events
-* **Type Hints:** Required for all function signatures
+* **Logging:** Use `structlog` for structured JSON logging, not `print()`
+* **Type Hints:** Required for all function signatures (enforced by mypy)
+* **Documentation:** All public functions must have docstrings with type annotations
+
+### Testing Standards
+* **Coverage Target:** >80% for all modules
+* **Test Types:**
+  - Unit tests: All functions and methods
+  - Integration tests: Service interactions
+  - End-to-end tests: Full pipeline workflows
+* **Security Tests:** Validate input validation, path sanitization, etc.
+* **Test Naming:** `test_<function>_<scenario>` (e.g., `test_validate_query_rejects_injection`)
 
 ## Key Implementation Details
 

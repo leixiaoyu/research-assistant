@@ -57,32 +57,52 @@ ARISP (Automated Research Ingestion & Synthesis Pipeline) is a production-grade 
 
 ## Design Principles
 
-### 1. **Separation of Concerns**
+### 1. **Security First** ⚠️ **CRITICAL**
+Security is the #1 priority and cannot be compromised in any situation:
+- **Never hardcode secrets**: All credentials via environment variables or secure vaults
+- **Input validation**: All user inputs validated with Pydantic before processing
+- **Path sanitization**: Prevent directory traversal attacks
+- **Secret scanning**: Automated checks before commits
+- **Least privilege**: Minimal permissions required
+- **Audit logging**: All security-relevant operations logged
+- **Community safe**: Tool can be shared without exposing sensitive data
+
+### 2. **Autonomous Operation**
+System operates intelligently without constant human intervention:
+- **Intelligent stopping criteria**: Knows when research is complete
+- **Quality convergence detection**: Stops when no new high-quality papers found
+- **Incremental search**: Continues from last checkpoint
+- **Self-optimization**: Learns from past runs to improve filters
+
+### 3. **Separation of Concerns**
 Each layer and component has a single, well-defined responsibility.
 
-### 2. **Fail-Safe Operation**
+### 4. **Fail-Safe Operation**
 System degrades gracefully rather than failing completely:
 - No PDF? Use abstract only
 - LLM fails? Skip extraction, keep metadata
 - Partial failures don't abort entire pipeline
 
-### 3. **Type Safety**
+### 5. **Type Safety**
 All data structures use Pydantic models with runtime validation.
 
-### 4. **Async-First**
+### 6. **Async-First**
 I/O-bound operations use asyncio for maximum throughput.
 
-### 5. **Configurable by Default**
+### 7. **Configurable by Default**
 Every behavior is configurable via YAML/environment variables.
 
-### 6. **Observable**
+### 8. **Observable**
 Every operation emits structured logs and metrics.
 
-### 7. **Cost-Aware**
+### 9. **Cost-Aware**
 LLM usage is tracked, limited, and optimized.
 
-### 8. **Idempotent**
+### 10. **Idempotent**
 Pipeline can be safely re-run; checkpoints enable resume.
+
+### 11. **Test-Driven Development**
+No code pushed without complete verification (automated tests or manual validation).
 
 ---
 
@@ -284,6 +304,28 @@ class PaperFilter(BaseModel):
                 raise ValueError("max_year must be >= min_year")
         return v
 
+# ============= Autonomous Operation Models =============
+
+class StoppingCriteria(BaseModel):
+    """Criteria for autonomous stopping of research"""
+    max_papers: int = Field(50, ge=1, le=1000, description="Stop after N papers")
+    max_runs_without_new: int = Field(3, ge=1, le=10,
+                                      description="Stop after N runs with no new quality papers")
+    min_quality_score: float = Field(0.7, ge=0.0, le=1.0,
+                                     description="Minimum quality score to count as 'new quality paper'")
+    convergence_window: int = Field(7, ge=1, le=30,
+                                    description="Days to check for convergence")
+    enable_auto_stop: bool = Field(True, description="Enable autonomous stopping")
+
+class AutonomousSettings(BaseModel):
+    """Settings for autonomous operation"""
+    enabled: bool = Field(False, description="Enable autonomous mode")
+    stopping_criteria: StoppingCriteria = Field(default_factory=StoppingCriteria)
+    search_frequency_hours: int = Field(24, ge=1, le=168,
+                                        description="How often to search for new papers")
+    incremental_search: bool = Field(True,
+                                     description="Only search for papers newer than last run")
+
 # ============= Research Topic Model =============
 
 class ResearchTopic(BaseModel):
@@ -293,12 +335,18 @@ class ResearchTopic(BaseModel):
     max_papers: int = Field(50, ge=1, le=1000)
     extraction_targets: List[ExtractionTarget] = Field(default_factory=list)
     filters: PaperFilter = Field(default_factory=PaperFilter)
+    autonomous: AutonomousSettings = Field(default_factory=AutonomousSettings)
 
     @validator("query")
     def validate_query(cls, v):
         v = v.strip()
         if len(v) == 0:
             raise ValueError("Query cannot be empty")
+        # Security: Prevent command injection
+        dangerous_chars = [";", "|", "&", "`", "$", "$(", "&&", "||"]
+        for char in dangerous_chars:
+            if char in v:
+                raise ValueError(f"Query contains forbidden character sequence: {char}")
         return v
 
 # ============= Global Settings =============
@@ -1306,71 +1354,321 @@ llm_extraction_duration = Histogram(
 
 ## Security
 
-### 1. Credential Management
+**⚠️ SECURITY IS THE #1 PRIORITY ⚠️**
+
+This section defines mandatory security requirements that cannot be compromised. Every phase MUST implement these security controls before completion.
+
+### Security Principles
+
+1. **Defense in Depth**: Multiple layers of security controls
+2. **Least Privilege**: Minimal permissions required for each operation
+3. **Zero Trust**: Validate everything, trust nothing
+4. **Fail Secure**: Security failures result in denial of access
+5. **Audit Everything**: All security events logged
+6. **Community Safe**: Code can be shared without exposing secrets
+
+### 1. Credential Management ⚠️ CRITICAL
+
+**Requirements:**
+- **NEVER** hardcode credentials in source code
+- **NEVER** commit secrets to version control
+- **ALWAYS** use environment variables or secure vaults
+- **ALWAYS** validate credentials on startup
 
 ```python
-# Use environment variables, never hardcode
-API_KEY = os.environ["SEMANTIC_SCHOLAR_API_KEY"]
+# ✅ CORRECT: Use environment variables
+import os
+from pathlib import Path
 
-# Validate on startup
-if not API_KEY or len(API_KEY) < 10:
-    raise ConfigError("Invalid API key")
+def load_credentials() -> dict:
+    """Load credentials securely from environment"""
+    # Load from .env (never committed)
+    from dotenv import load_dotenv
+    load_dotenv()
 
-# Optional: Use keyring for additional security
-import keyring
-keyring.set_password("arisp", "llm_api_key", api_key)
+    # Validate required credentials exist
+    required = [
+        "SEMANTIC_SCHOLAR_API_KEY",
+        "LLM_API_KEY"
+    ]
+
+    credentials = {}
+    missing = []
+
+    for key in required:
+        value = os.environ.get(key)
+        if not value or len(value) < 10:
+            missing.append(key)
+        else:
+            credentials[key] = value
+
+    if missing:
+        raise SecurityError(
+            f"Missing required credentials: {', '.join(missing)}\n"
+            f"Please set them in .env file (see .env.template)"
+        )
+
+    # Log that credentials loaded (but NOT the values)
+    logger.info("credentials_loaded", keys=list(credentials.keys()))
+
+    return credentials
+
+# ❌ WRONG: Hardcoded credentials
+API_KEY = "sk-1234567890abcdef"  # NEVER DO THIS!
 ```
 
-### 2. Input Validation
+**Secret Scanning:**
+```yaml
+# .github/workflows/security.yml
+name: Secret Scanning
+on: [push, pull_request]
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Scan for secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: main
+          head: HEAD
+```
+
+**Credential Rotation:**
+- API keys should be rotatable without code changes
+- Support multiple key formats (for smooth rotation)
+- Log credential usage for audit trails
+
+### 2. Input Validation ⚠️ CRITICAL
+
+**Requirements:**
+- **ALWAYS** validate all user inputs before processing
+- **NEVER** trust user input
+- **ALWAYS** use Pydantic for runtime validation
+- **ALWAYS** sanitize inputs before using in shell/API calls
 
 ```python
-# Pydantic validates all inputs
-class ResearchTopic(BaseModel):
+from pydantic import BaseModel, Field, validator
+import re
+
+class SecureResearchTopic(BaseModel):
+    """Research topic with comprehensive security validation"""
     query: str = Field(..., min_length=1, max_length=500)
 
     @validator("query")
-    def validate_no_injection(cls, v):
+    def validate_query_security(cls, v):
         """Prevent injection attacks"""
-        dangerous_chars = [";", "|", "&", "`", "$"]
-        if any(char in v for char in dangerous_chars):
-            raise ValueError("Query contains forbidden characters")
+        v = v.strip()
+
+        # Check for command injection patterns
+        dangerous_patterns = [
+            r";\s*\w+",           # Command chaining
+            r"\|\s*\w+",          # Pipe to command
+            r"&&",                # AND operator
+            r"\|\|",              # OR operator
+            r"`[^`]+`",           # Backticks
+            r"\$\([^)]+\)",       # Command substitution
+            r">\s*\w+",           # Output redirection
+            r"<\s*\w+",           # Input redirection
+        ]
+
+        for pattern in dangerous_patterns:
+            if re.search(pattern, v):
+                logger.warning(
+                    "input_validation_failed",
+                    query=v,
+                    pattern=pattern,
+                    reason="Potential injection attack"
+                )
+                raise ValueError(
+                    f"Query contains forbidden pattern that could be used for injection"
+                )
+
+        # Check for SQL injection patterns (if using database)
+        sql_patterns = [
+            r"'\s*(OR|AND)\s*'",
+            r"--",
+            r"/\*",
+            r"xp_",
+            r"UNION\s+SELECT",
+        ]
+
+        for pattern in sql_patterns:
+            if re.search(pattern, v, re.IGNORECASE):
+                raise ValueError("Query contains SQL injection pattern")
+
+        # Enforce whitelist of allowed characters
+        allowed_chars = re.compile(r'^[a-zA-Z0-9\s\-_+.,"()]+$')
+        if not allowed_chars.match(v):
+            raise ValueError(
+                "Query contains characters outside allowed set: "
+                "alphanumeric, spaces, hyphens, underscores, +.,()\""
+            )
+
         return v
+
+# Example usage
+try:
+    topic = SecureResearchTopic(query="machine learning AND $(whoami)")
+except ValueError as e:
+    logger.error("malicious_input_blocked", error=str(e))
+    # Input blocked, attack prevented
 ```
 
-### 3. Path Sanitization
+### 3. Path Sanitization ⚠️ CRITICAL
+
+**Requirements:**
+- **ALWAYS** validate file paths before use
+- **NEVER** trust user-provided paths
+- **ALWAYS** check paths are within expected directories
+- **ALWAYS** prevent directory traversal attacks
 
 ```python
-def safe_file_path(base_dir: Path, user_input: str) -> Path:
-    """Prevent directory traversal"""
-    # Resolve to absolute path
-    requested = (base_dir / user_input).resolve()
+from pathlib import Path
+from typing import Union
 
-    # Ensure it's within base_dir
-    if not requested.is_relative_to(base_dir):
-        raise SecurityError("Path traversal attempt detected")
+class PathSanitizer:
+    """Secure path validation and sanitization"""
 
-    return requested
+    def __init__(self, allowed_bases: List[Path]):
+        """Initialize with allowed base directories"""
+        self.allowed_bases = [p.resolve() for p in allowed_bases]
+
+    def safe_path(
+        self,
+        base_dir: Path,
+        user_input: str,
+        must_exist: bool = False
+    ) -> Path:
+        """Get safe path within base directory
+
+        Prevents:
+        - Directory traversal (../)
+        - Absolute path injection
+        - Symlink attacks
+
+        Raises:
+            SecurityError: If path is outside base_dir
+            FileNotFoundError: If must_exist=True and path doesn't exist
+        """
+        # Normalize base directory
+        base_dir = base_dir.resolve()
+
+        # Check base directory is allowed
+        if base_dir not in self.allowed_bases:
+            if not any(base_dir.is_relative_to(b) for b in self.allowed_bases):
+                raise SecurityError(
+                    f"Base directory not in allowed list: {base_dir}"
+                )
+
+        # Remove dangerous characters
+        safe_input = user_input.replace('\0', '')  # Null byte
+
+        # Build requested path
+        requested = (base_dir / safe_input).resolve()
+
+        # Ensure it's within base directory
+        try:
+            requested.relative_to(base_dir)
+        except ValueError:
+            logger.warning(
+                "path_traversal_blocked",
+                base_dir=str(base_dir),
+                user_input=user_input,
+                resolved=str(requested)
+            )
+            raise SecurityError(
+                f"Path traversal attempt detected: {user_input}"
+            )
+
+        # Check if symlink points outside base (symlink attack)
+        if requested.is_symlink():
+            real_path = requested.resolve()
+            try:
+                real_path.relative_to(base_dir)
+            except ValueError:
+                raise SecurityError(
+                    f"Symlink points outside base directory: {requested}"
+                )
+
+        # Optionally check existence
+        if must_exist and not requested.exists():
+            raise FileNotFoundError(f"Path does not exist: {requested}")
+
+        return requested
+
+# Example usage
+sanitizer = PathSanitizer(
+    allowed_bases=[
+        Path("./output"),
+        Path("./cache"),
+        Path("./temp")
+    ]
+)
+
+# ✅ CORRECT: Validate all user paths
+user_folder = request.params.get("folder")
+safe_folder = sanitizer.safe_path(Path("./output"), user_folder)
+
+# ❌ WRONG: Use user input directly
+output_path = Path("./output") / user_folder  # UNSAFE!
 ```
 
-### 4. Rate Limiting
+### 4. Rate Limiting ⚠️ REQUIRED
+
+**Requirements:**
+- **ALWAYS** rate limit external API calls
+- **ALWAYS** rate limit user actions (if exposing API)
+- **ALWAYS** implement backoff on rate limit errors
 
 ```python
+import asyncio
+import time
+from collections import deque
+from datetime import datetime, timedelta
+
 class RateLimiter:
-    """Token bucket rate limiter"""
+    """Token bucket rate limiter with security logging"""
 
-    def __init__(self, requests_per_minute: int = 100):
+    def __init__(
+        self,
+        requests_per_minute: int = 100,
+        burst_size: int = None
+    ):
         self.rate = requests_per_minute / 60.0
-        self.bucket_size = requests_per_minute
-        self.tokens = requests_per_minute
+        self.burst_size = burst_size or requests_per_minute
+        self.tokens = self.burst_size
         self.last_update = time.time()
 
-    async def acquire(self):
-        """Wait until token available"""
+        # Track for abuse detection
+        self.request_times = deque(maxlen=1000)
+
+    async def acquire(self, requester_id: str = "system"):
+        """Acquire token with abuse detection"""
+        # Record request
+        self.request_times.append(datetime.utcnow())
+
+        # Check for abuse (>500 requests in 1 minute)
+        one_min_ago = datetime.utcnow() - timedelta(minutes=1)
+        recent = sum(1 for t in self.request_times if t > one_min_ago)
+
+        if recent > 500:
+            logger.warning(
+                "rate_limit_abuse_detected",
+                requester_id=requester_id,
+                requests_per_minute=recent
+            )
+            # Consider blocking or alerting
+
+        # Token bucket algorithm
         while True:
             now = time.time()
             elapsed = now - self.last_update
+
+            # Refill bucket
             self.tokens = min(
-                self.bucket_size,
+                self.burst_size,
                 self.tokens + elapsed * self.rate
             )
             self.last_update = now
@@ -1379,11 +1677,497 @@ class RateLimiter:
                 self.tokens -= 1
                 return
 
+            # Wait for next token
             wait_time = (1 - self.tokens) / self.rate
+            logger.debug(
+                "rate_limit_waiting",
+                requester_id=requester_id,
+                wait_seconds=wait_time
+            )
             await asyncio.sleep(wait_time)
 ```
 
+### 5. Secrets in Version Control ⚠️ CRITICAL
+
+**Requirements:**
+- **NEVER** commit .env files
+- **ALWAYS** use .env.template with placeholder values
+- **ALWAYS** add .env to .gitignore
+- **ALWAYS** scan for secrets before commits
+
+```bash
+# .gitignore (REQUIRED)
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.p12
+credentials.json
+secrets.yaml
+```
+
+```bash
+# .env.template (committed to repo)
+# Copy this to .env and fill in real values
+SEMANTIC_SCHOLAR_API_KEY=your_key_here
+LLM_API_KEY=your_key_here
+```
+
+**Pre-commit Hook:**
+```bash
+#!/bin/bash
+# .git/hooks/pre-commit
+
+# Check for secrets
+if git diff --cached --name-only | xargs grep -l "sk-" "api-key" "secret"; then
+    echo "ERROR: Potential secret found in staged files!"
+    echo "Please remove secrets before committing."
+    exit 1
+fi
+
+# Check for .env files
+if git diff --cached --name-only | grep -q "\.env$"; then
+    echo "ERROR: .env file should not be committed!"
+    exit 1
+fi
+```
+
+### 6. Dependency Security ⚠️ REQUIRED
+
+**Requirements:**
+- **ALWAYS** pin dependency versions
+- **ALWAYS** scan dependencies for vulnerabilities
+- **REGULARLY** update dependencies
+
+```bash
+# Check for vulnerabilities
+pip-audit
+
+# Update safely
+pip install --upgrade pip
+pip list --outdated
+```
+
+```yaml
+# .github/workflows/dependency-scan.yml
+name: Dependency Security Scan
+on:
+  schedule:
+    - cron: '0 0 * * 1'  # Weekly
+  push:
+    paths:
+      - 'requirements.txt'
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: pypa/gh-action-pip-audit@v1.0.0
+```
+
+### 7. Logging Security Events ⚠️ REQUIRED
+
+**Requirements:**
+- **ALWAYS** log security-relevant events
+- **NEVER** log secrets or credentials
+- **ALWAYS** include context for investigation
+
+```python
+# Security event logging
+logger.warning(
+    "authentication_failed",
+    requester_ip=request.ip,
+    attempted_user=username,  # Log attempt, not password!
+    timestamp=datetime.utcnow()
+)
+
+logger.error(
+    "authorization_denied",
+    user_id=user.id,
+    requested_resource=resource,
+    required_permission=permission
+)
+
+logger.info(
+    "sensitive_operation",
+    operation="credential_rotation",
+    user_id=user.id,
+    success=True
+)
+
+# ❌ WRONG: Logging secrets
+logger.info(f"API key loaded: {api_key}")  # NEVER DO THIS!
+
+# ✅ CORRECT: Log that operation happened
+logger.info("api_key_loaded", key_type="semantic_scholar")
+```
+
+### Security Checklist (Required for Every Phase)
+
+Before completing any phase, ALL items must be checked:
+
+#### Phase Completion Security Gate
+- [ ] No hardcoded credentials in source code
+- [ ] All secrets loaded from environment variables
+- [ ] .env file in .gitignore
+- [ ] .env.template provided with placeholders
+- [ ] All user inputs validated with Pydantic
+- [ ] No command injection vulnerabilities
+- [ ] No SQL injection vulnerabilities (if using DB)
+- [ ] All file paths sanitized
+- [ ] No directory traversal vulnerabilities
+- [ ] Rate limiting implemented for all external APIs
+- [ ] Rate limiting implemented for user actions (if applicable)
+- [ ] Dependencies scanned for vulnerabilities
+- [ ] No vulnerable dependencies (or documented exceptions)
+- [ ] Security events logged appropriately
+- [ ] No secrets in logs
+- [ ] Pre-commit hooks installed
+- [ ] Secret scanning configured
+- [ ] Security review completed
+- [ ] Penetration testing performed (Phases 3-4)
+
+### Security Incident Response
+
+If a security issue is discovered:
+
+1. **Immediately** stop the affected service
+2. **Rotate** all potentially compromised credentials
+3. **Investigate** the scope of the breach
+4. **Document** the incident
+5. **Fix** the vulnerability
+6. **Test** the fix
+7. **Deploy** the fix
+8. **Audit** for similar issues
+9. **Post-mortem** to prevent recurrence
+
+### Community Sharing Guidelines
+
+When sharing this tool publicly:
+
+1. **Remove** all .env files before sharing
+2. **Verify** .gitignore includes all secret paths
+3. **Scan** entire repository for secrets
+4. **Document** required credentials in README
+5. **Provide** .env.template with clear instructions
+6. **Test** setup process in clean environment
+7. **Review** logs to ensure no secrets leaked
+
 ---
+
+## Autonomous Operation Architecture
+
+### Intelligent Stopping Criteria
+
+The system autonomously determines when research for a topic is complete using multiple strategies:
+
+#### 1. Quantity-Based Stopping
+```python
+if papers_found >= stopping_criteria.max_papers:
+    logger.info(
+        "stopping_quantity_met",
+        papers_found=papers_found,
+        max_papers=stopping_criteria.max_papers
+    )
+    return StopReason.MAX_PAPERS_REACHED
+```
+
+#### 2. Convergence-Based Stopping
+```python
+class ConvergenceDetector:
+    """Detects when no new quality papers are being found"""
+
+    def should_stop(
+        self,
+        topic_catalog: TopicCatalogEntry,
+        stopping_criteria: StoppingCriteria
+    ) -> tuple[bool, str]:
+        """Check if research has converged
+
+        Convergence means: No new high-quality papers found
+        in the last N runs within the convergence window.
+
+        Returns:
+            (should_stop, reason)
+        """
+        # Get recent runs within convergence window
+        cutoff_date = datetime.utcnow() - timedelta(
+            days=stopping_criteria.convergence_window
+        )
+        recent_runs = [
+            r for r in topic_catalog.runs
+            if r.date >= cutoff_date
+        ]
+
+        if len(recent_runs) < stopping_criteria.max_runs_without_new:
+            return False, "Not enough recent runs to detect convergence"
+
+        # Check last N runs for new quality papers
+        runs_without_new = 0
+        for run in reversed(recent_runs):
+            new_quality_papers = self._count_new_quality_papers(
+                run,
+                topic_catalog,
+                stopping_criteria.min_quality_score
+            )
+
+            if new_quality_papers == 0:
+                runs_without_new += 1
+            else:
+                runs_without_new = 0  # Reset counter
+
+            if runs_without_new >= stopping_criteria.max_runs_without_new:
+                logger.info(
+                    "convergence_detected",
+                    topic=topic_catalog.topic_slug,
+                    runs_without_new=runs_without_new,
+                    window_days=stopping_criteria.convergence_window
+                )
+                return True, f"No new quality papers in {runs_without_new} runs"
+
+        return False, f"Still finding new quality papers"
+
+    def _count_new_quality_papers(
+        self,
+        run: CatalogRun,
+        topic_catalog: TopicCatalogEntry,
+        min_quality: float
+    ) -> int:
+        """Count new papers above quality threshold in this run"""
+        # Get papers from this run
+        run_papers = self._get_run_papers(run)
+
+        # Filter by quality score
+        quality_papers = [
+            p for p in run_papers
+            if p.relevance_score >= min_quality
+        ]
+
+        # Count how many are truly new (not seen in previous runs)
+        previous_papers = self._get_previous_papers(topic_catalog, run.date)
+        new_papers = [
+            p for p in quality_papers
+            if not self._is_duplicate(p, previous_papers)
+        ]
+
+        return len(new_papers)
+```
+
+#### 3. Incremental Search Strategy
+```python
+class IncrementalSearchService:
+    """Search only for papers newer than last run"""
+
+    async def incremental_search(
+        self,
+        topic: ResearchTopic,
+        catalog_entry: TopicCatalogEntry
+    ) -> List[PaperMetadata]:
+        """Search for papers published since last run
+
+        This prevents re-processing known papers and focuses
+        on discovering truly new research.
+        """
+        # Get last run date
+        if catalog_entry.runs:
+            last_run = max(catalog_entry.runs, key=lambda r: r.date)
+            since_date = last_run.date
+        else:
+            # First run - use topic's configured timeframe
+            since_date = self._calculate_initial_date(topic.timeframe)
+
+        # Build incremental query
+        params = {
+            "query": topic.query,
+            "publicationDate": f"{since_date.isoformat()}:",  # Open-ended
+            "limit": topic.max_papers
+        }
+
+        # Execute search
+        papers = await self.discovery_service.search(params)
+
+        logger.info(
+            "incremental_search_complete",
+            topic=topic.query,
+            since_date=since_date,
+            papers_found=len(papers)
+        )
+
+        return papers
+```
+
+### Autonomous Workflow
+
+```
+┌─────────────────────────────────────────────────┐
+│         Autonomous Research Loop                │
+└─────────────────────────────────────────────────┘
+                    │
+                    ▼
+        ┌──────────────────────┐
+        │ Load Configuration   │
+        │ Check Stopping       │
+        │ Criteria             │
+        └──────────┬───────────┘
+                   │
+                   ▼
+           ┌───────────────┐
+           │ Should Stop?  │
+           └───┬───────┬───┘
+               │       │
+           Yes │       │ No
+               │       │
+               ▼       ▼
+         ┌─────────┐  ┌──────────────────┐
+         │  Stop   │  │ Incremental      │
+         │ Archive │  │ Search for       │
+         │ Topic   │  │ New Papers       │
+         └─────────┘  └────────┬─────────┘
+                               │
+                               ▼
+                    ┌──────────────────┐
+                    │ Filter by        │
+                    │ Quality          │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                  ┌──────────────────────┐
+                  │ Check for            │
+                  │ Duplicates           │
+                  └────────┬─────────────┘
+                           │
+                           ▼
+                ┌──────────────────────────┐
+                │ Process New Papers       │
+                │ (PDF + LLM)              │
+                └────────┬─────────────────┘
+                         │
+                         ▼
+              ┌──────────────────────────┐
+              │ Update Catalog           │
+              │ Update Quality Metrics   │
+              └────────┬─────────────────┘
+                       │
+                       ▼
+            ┌──────────────────────────┐
+            │ Check Convergence        │
+            └────────┬─────────────────┘
+                     │
+                     ▼
+              ┌──────────────┐
+              │ Sleep Until  │
+              │ Next Run     │
+              └──────────────┘
+```
+
+### Quality Assessment
+
+```python
+class QualityAssessor:
+    """Assess research paper quality"""
+
+    def calculate_quality_score(
+        self,
+        paper: PaperMetadata,
+        topic: ResearchTopic
+    ) -> float:
+        """Calculate paper quality score (0.0 - 1.0)
+
+        Factors:
+        - Citation count (weighted by age)
+        - Venue prestige
+        - Relevance to query
+        - Author reputation (future)
+        - Recency
+        """
+        scores = []
+        weights = []
+
+        # Citation score (40% weight)
+        citation_score = self._citation_score(paper)
+        scores.append(citation_score)
+        weights.append(0.4)
+
+        # Venue score (20% weight)
+        venue_score = self._venue_score(paper)
+        scores.append(venue_score)
+        weights.append(0.2)
+
+        # Relevance score (30% weight)
+        relevance_score = self._relevance_score(paper, topic.query)
+        scores.append(relevance_score)
+        weights.append(0.3)
+
+        # Recency score (10% weight)
+        recency_score = self._recency_score(paper)
+        scores.append(recency_score)
+        weights.append(0.1)
+
+        # Weighted average
+        total_score = sum(s * w for s, w in zip(scores, weights))
+
+        logger.debug(
+            "quality_score_calculated",
+            paper_id=paper.paper_id,
+            citation_score=citation_score,
+            venue_score=venue_score,
+            relevance_score=relevance_score,
+            recency_score=recency_score,
+            total_score=total_score
+        )
+
+        return total_score
+
+    def _citation_score(self, paper: PaperMetadata) -> float:
+        """Score based on citations (age-adjusted)"""
+        import math
+
+        # Age adjustment
+        if paper.year:
+            age_years = datetime.now().year - paper.year
+            age_factor = math.sqrt(max(1, age_years))
+        else:
+            age_factor = 1.0
+
+        # Normalize citations
+        adjusted_citations = paper.citation_count / age_factor
+
+        # Logarithmic scale (diminishing returns)
+        score = min(1.0, math.log10(adjusted_citations + 1) / 3.0)
+
+        return score
+```
+
+### Autonomous Operation Configuration
+
+```yaml
+# config/research_config.yaml
+research_topics:
+  - query: "large language models AND reasoning"
+    timeframe:
+      type: "recent"
+      value: "7d"
+    max_papers: 50
+
+    # Autonomous operation settings
+    autonomous:
+      enabled: true
+      search_frequency_hours: 24  # Run daily
+
+      stopping_criteria:
+        max_papers: 50              # Stop after 50 quality papers
+        max_runs_without_new: 3     # Stop after 3 runs with no new papers
+        min_quality_score: 0.7      # Quality threshold for "new quality paper"
+        convergence_window: 14      # Check last 14 days for convergence
+        enable_auto_stop: true
+
+      incremental_search: true      # Only search for new papers
+
+    filters:
+      min_citation_count: 10
+      min_year: 2020
+```
 
 ## Deployment Architecture
 

@@ -90,16 +90,19 @@ python -m src.cli catalog show
 
 ## 📚 Documentation
 
-- [Architecture Review](docs/ARCHITECTURE_REVIEW.md) - Comprehensive architectural analysis
-- [Phased Delivery Plan](docs/PHASED_DELIVERY_PLAN.md) - 4-phase implementation roadmap
-- [CLAUDE.md](CLAUDE.md) - Development guide for Claude Code
+### Architecture
+- **[System Architecture](docs/SYSTEM_ARCHITECTURE.md)** - Complete architecture design (PRIMARY REFERENCE)
+- [Architecture Review](docs/ARCHITECTURE_REVIEW.md) - Gap analysis and architectural assessment
+- [Phased Delivery Plan](docs/PHASED_DELIVERY_PLAN.md) - 4-phase, 7-week implementation roadmap
 
 ### Phase Specifications
-
 - [Phase 1: Foundation](docs/specs/PHASE_1_SPEC.md) - Core pipeline (2 weeks)
 - [Phase 2: Extraction](docs/specs/PHASE_2_SPEC.md) - PDF & LLM integration (2 weeks)
 - [Phase 3: Optimization](docs/specs/PHASE_3_SPEC.md) - Performance & intelligence (2 weeks)
 - [Phase 4: Hardening](docs/specs/PHASE_4_SPEC.md) - Production readiness (1 week)
+
+### Development
+- [CLAUDE.md](CLAUDE.md) - Development guide for Claude Code integration
 
 ## 🏗️ Project Status
 

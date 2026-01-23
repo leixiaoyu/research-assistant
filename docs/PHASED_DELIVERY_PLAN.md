@@ -433,15 +433,44 @@ Standard DevOps practices, well-understood tooling.
 
 ---
 
+## Architecture Foundation
+
+All phases implement components defined in the **[System Architecture](./SYSTEM_ARCHITECTURE.md)** document, which provides:
+
+- Complete layered architecture design
+- Detailed data models (Pydantic)
+- Component interactions and data flows
+- Concurrency and resilience patterns
+- Storage and caching strategies
+- Observability architecture
+- Security implementation
+- Deployment architecture
+
+**Key Architecture Decisions:**
+1. **Separation of Concerns**: Layered architecture (CLI → Orchestration → Services → Infrastructure)
+2. **Type Safety**: All data structures use Pydantic models
+3. **Async-First**: I/O-bound operations use asyncio for performance
+4. **Fail-Safe**: Graceful degradation rather than complete failure
+5. **Observable**: Structured logging and Prometheus metrics throughout
+
+See [Gap Resolution Matrix](./SYSTEM_ARCHITECTURE.md#gap-resolution-matrix) for how each architectural gap is addressed.
+
 ## Appendix
 
 ### Related Documents
-- [Architecture Review](./ARCHITECTURE_REVIEW.md)
-- [Phase 1 Specification](./specs/PHASE_1_SPEC.md)
-- [Phase 2 Specification](./specs/PHASE_2_SPEC.md)
-- [Phase 3 Specification](./specs/PHASE_3_SPEC.md)
-- [Phase 4 Specification](./specs/PHASE_4_SPEC.md)
-- [CLAUDE.md](../CLAUDE.md) - Development guide
+
+**Architecture:**
+- [System Architecture](./SYSTEM_ARCHITECTURE.md) - **[Primary Reference]** Complete system architecture design
+- [Architecture Review](./ARCHITECTURE_REVIEW.md) - Gap analysis and recommendations
+
+**Phase Specifications:**
+- [Phase 1 Specification](./specs/PHASE_1_SPEC.md) - Foundation & Core Pipeline
+- [Phase 2 Specification](./specs/PHASE_2_SPEC.md) - PDF Processing & LLM Extraction
+- [Phase 3 Specification](./specs/PHASE_3_SPEC.md) - Intelligence & Optimization
+- [Phase 4 Specification](./specs/PHASE_4_SPEC.md) - Production Hardening
+
+**Development:**
+- [CLAUDE.md](../CLAUDE.md) - Development guide for Claude Code
 
 ### Contact
 - **Technical Lead:** [TBD]

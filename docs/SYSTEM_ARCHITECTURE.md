@@ -1,0 +1,1503 @@
+# ARISP System Architecture
+**Version:** 1.0
+**Status:** Approved
+**Last Updated:** 2025-01-23
+
+---
+
+## Table of Contents
+1. [Architecture Overview](#architecture-overview)
+2. [Design Principles](#design-principles)
+3. [System Architecture](#system-architecture)
+4. [Data Models](#data-models)
+5. [Core Components](#core-components)
+6. [Concurrency & Resilience](#concurrency--resilience)
+7. [Storage & Caching](#storage--caching)
+8. [Observability](#observability)
+9. [Security](#security)
+10. [Deployment Architecture](#deployment-architecture)
+11. [Gap Resolution Matrix](#gap-resolution-matrix)
+
+---
+
+## Architecture Overview
+
+### System Context
+
+ARISP (Automated Research Ingestion & Synthesis Pipeline) is a production-grade system for automated research paper discovery, processing, and synthesis using LLM-powered extraction.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         ARISP System                        │
+│                                                             │
+│  ┌────────────┐    ┌─────────────┐    ┌────────────────┐  │
+│  │   User     │───▶│   ARISP     │───▶│   Research     │  │
+│  │   Config   │    │   Pipeline  │    │   Briefs       │  │
+│  └────────────┘    └─────────────┘    └────────────────┘  │
+│                            │                                │
+│                            ▼                                │
+│         ┌──────────────────┴──────────────────┐           │
+│         │                                      │           │
+│    ┌────▼────┐  ┌────────┐  ┌─────────┐  ┌───▼────┐     │
+│    │Semantic │  │  PDFs  │  │   LLM   │  │ Catalog│     │
+│    │Scholar  │  │(marker)│  │(Claude/ │  │   DB   │     │
+│    │   API   │  │        │  │Gemini)  │  │        │     │
+│    └─────────┘  └────────┘  └─────────┘  └────────┘     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Capabilities
+- **Discovery**: Semantic Scholar API integration with flexible queries
+- **Processing**: PDF→Markdown conversion with code preservation
+- **Extraction**: LLM-powered content analysis with configurable targets
+- **Intelligence**: Deduplication, caching, quality filtering
+- **Observability**: Structured logging, metrics, monitoring
+
+---
+
+## Design Principles
+
+### 1. **Separation of Concerns**
+Each layer and component has a single, well-defined responsibility.
+
+### 2. **Fail-Safe Operation**
+System degrades gracefully rather than failing completely:
+- No PDF? Use abstract only
+- LLM fails? Skip extraction, keep metadata
+- Partial failures don't abort entire pipeline
+
+### 3. **Type Safety**
+All data structures use Pydantic models with runtime validation.
+
+### 4. **Async-First**
+I/O-bound operations use asyncio for maximum throughput.
+
+### 5. **Configurable by Default**
+Every behavior is configurable via YAML/environment variables.
+
+### 6. **Observable**
+Every operation emits structured logs and metrics.
+
+### 7. **Cost-Aware**
+LLM usage is tracked, limited, and optimized.
+
+### 8. **Idempotent**
+Pipeline can be safely re-run; checkpoints enable resume.
+
+---
+
+## System Architecture
+
+### Layered Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                    CLI / API Layer                             │
+│  - Command-line interface (typer)                              │
+│  - Future: REST API for programmatic access                    │
+└────────────────────────────────────────────────────────────────┘
+                              │
+┌────────────────────────────────────────────────────────────────┐
+│                 Orchestration Layer                            │
+│  ┌──────────────────┐  ┌─────────────────┐  ┌──────────────┐ │
+│  │ PipelineExecutor │  │ WorkflowEngine  │  │  Checkpoint  │ │
+│  │  - Coordinates   │  │ - State machine │  │   Manager    │ │
+│  │    services      │  │ - Error recovery│  │ - Resume cap │ │
+│  └──────────────────┘  └─────────────────┘  └──────────────┘ │
+└────────────────────────────────────────────────────────────────┘
+                              │
+┌────────────────────────────────────────────────────────────────┐
+│                    Service Layer                               │
+│  ┌─────────────┐ ┌──────────────┐ ┌────────────┐ ┌─────────┐ │
+│  │  Discovery  │ │ Acquisition  │ │Extraction  │ │ Storage │ │
+│  │   Service   │ │   Service    │ │  Service   │ │ Service │ │
+│  │             │ │              │ │            │ │         │ │
+│  │ - Search    │ │ - Download   │ │ - PDF→MD   │ │ - Files │ │
+│  │ - Filter    │ │ - Convert    │ │ - LLM      │ │ - Catalog│
+│  │ - Rank      │ │ - Validate   │ │ - Parse    │ │ - Cache │ │
+│  └─────────────┘ └──────────────┘ └────────────┘ └─────────┘ │
+└────────────────────────────────────────────────────────────────┘
+                              │
+┌────────────────────────────────────────────────────────────────┐
+│                Infrastructure Layer                            │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌─────────────────┐  │
+│  │  Config  │ │ Logging  │ │ Metrics  │ │   Resilience    │  │
+│  │ Manager  │ │(structlog│ │(Prom)    │ │  (tenacity)     │  │
+│  └──────────┘ └──────────┘ └──────────┘ └─────────────────┘  │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌─────────────────┐  │
+│  │  Cache   │ │  Error   │ │Security  │ │  Concurrency    │  │
+│  │(diskcache│ │ Handler  │ │          │ │   (asyncio)     │  │
+│  └──────────┘ └──────────┘ └──────────┘ └─────────────────┘  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### Data Flow Architecture
+
+```
+[User Config YAML]
+        │
+        ▼
+┌───────────────────┐
+│ ConfigManager     │ ◀─── Validates with Pydantic
+└────────┬──────────┘
+         │
+         ▼
+┌───────────────────┐
+│ DiscoveryService  │ ◀─── Semantic Scholar API
+│  - Search papers  │      + Rate limiting
+│  - Apply filters  │      + Caching
+└────────┬──────────┘
+         │
+         ▼
+┌───────────────────┐
+│ DeduplicationSvc  │ ◀─── Check catalog.json
+│  - DOI matching   │      + Title similarity
+│  - Title fuzzy    │      + Content fingerprint
+└────────┬──────────┘
+         │
+         ▼
+┌───────────────────┐
+│ FilterService     │ ◀─── Quality filters
+│  - Citations      │      + Venue ranking
+│  - Recency        │      + Relevance score
+└────────┬──────────┘
+         │
+         ▼
+┌───────────────────┐
+│ ConcurrentPool    │ ◀─── Worker pool (async)
+│  Workers:         │      + Semaphores
+│  ├─ Download PDF  │      + Backpressure
+│  ├─ Convert PDF   │      + Error handling
+│  ├─ Extract LLM   │
+│  └─ Save result   │
+└────────┬──────────┘
+         │
+         ▼
+┌───────────────────┐
+│ StorageService    │ ◀─── Atomic writes
+│  - Save markdown  │      + Directory structure
+│  - Update catalog │      + Compression
+│  - Archive PDFs   │      + Retention policy
+└────────┬──────────┘
+         │
+         ▼
+[Research Briefs + Catalog]
+```
+
+---
+
+## Data Models
+
+### Core Domain Models
+
+All models use **Pydantic** for validation, serialization, and type safety.
+
+#### Configuration Models
+
+```python
+from pydantic import BaseModel, Field, validator, HttpUrl
+from typing import Literal, Union, List, Optional
+from datetime import date, datetime
+from enum import Enum
+
+# ============= Timeframe Models =============
+
+class TimeframeType(str, Enum):
+    """Enumeration of supported timeframe types"""
+    RECENT = "recent"
+    SINCE_YEAR = "since_year"
+    DATE_RANGE = "date_range"
+
+class TimeframeRecent(BaseModel):
+    """Recent timeframe (e.g., last 48 hours)"""
+    type: Literal[TimeframeType.RECENT] = TimeframeType.RECENT
+    value: str = Field(..., pattern=r'^\d+[hd]$')
+
+    @validator("value")
+    def validate_recent_format(cls, v):
+        """Ensure format is like '48h' or '7d'"""
+        unit = v[-1]
+        amount = int(v[:-1])
+        if unit == 'h' and amount > 720:  # Max 30 days
+            raise ValueError("Hour-based timeframe cannot exceed 720h (30 days)")
+        if unit == 'd' and amount > 365:
+            raise ValueError("Day-based timeframe cannot exceed 365d (1 year)")
+        return v
+
+class TimeframeSinceYear(BaseModel):
+    """Papers since a specific year"""
+    type: Literal[TimeframeType.SINCE_YEAR] = TimeframeType.SINCE_YEAR
+    value: int = Field(..., ge=1900, le=2100)
+
+class TimeframeDateRange(BaseModel):
+    """Custom date range"""
+    type: Literal[TimeframeType.DATE_RANGE] = TimeframeType.DATE_RANGE
+    start_date: date
+    end_date: date
+
+    @validator("end_date")
+    def validate_date_range(cls, v, values):
+        if "start_date" in values and v < values["start_date"]:
+            raise ValueError("end_date must be after start_date")
+        return v
+
+Timeframe = Union[TimeframeRecent, TimeframeSinceYear, TimeframeDateRange]
+
+# ============= Extraction Models =============
+
+class ExtractionOutputFormat(str, Enum):
+    """Supported extraction output formats"""
+    TEXT = "text"
+    CODE = "code"
+    JSON = "json"
+    LIST = "list"
+
+class ExtractionTarget(BaseModel):
+    """Definition of what to extract from a paper"""
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(..., min_length=10, max_length=500)
+    output_format: ExtractionOutputFormat = ExtractionOutputFormat.TEXT
+    required: bool = Field(False, description="Fail pipeline if not found")
+    examples: Optional[List[str]] = Field(None, max_items=5)
+
+    @validator("name")
+    def validate_name(cls, v):
+        """Ensure name is slug-friendly"""
+        if not v.replace('_', '').isalnum():
+            raise ValueError("Name must be alphanumeric with underscores only")
+        return v
+
+# ============= Filter Models =============
+
+class PaperFilter(BaseModel):
+    """Paper quality and relevance filters"""
+    min_citation_count: int = Field(0, ge=0, le=10000)
+    min_year: Optional[int] = Field(None, ge=1900, le=2100)
+    max_year: Optional[int] = Field(None, ge=1900, le=2100)
+    allowed_venues: Optional[List[str]] = Field(None, max_items=50)
+    min_relevance_score: float = Field(0.0, ge=0.0, le=1.0)
+
+    @validator("max_year")
+    def validate_year_range(cls, v, values):
+        if v and "min_year" in values and values["min_year"]:
+            if v < values["min_year"]:
+                raise ValueError("max_year must be >= min_year")
+        return v
+
+# ============= Research Topic Model =============
+
+class ResearchTopic(BaseModel):
+    """Complete research topic configuration"""
+    query: str = Field(..., min_length=1, max_length=500)
+    timeframe: Timeframe
+    max_papers: int = Field(50, ge=1, le=1000)
+    extraction_targets: List[ExtractionTarget] = Field(default_factory=list)
+    filters: PaperFilter = Field(default_factory=PaperFilter)
+
+    @validator("query")
+    def validate_query(cls, v):
+        v = v.strip()
+        if len(v) == 0:
+            raise ValueError("Query cannot be empty")
+        return v
+
+# ============= Global Settings =============
+
+class PDFSettings(BaseModel):
+    """PDF processing configuration"""
+    temp_dir: str = "./temp"
+    keep_pdfs: bool = True
+    max_file_size_mb: int = Field(50, ge=1, le=500)
+    timeout_seconds: int = Field(300, ge=30, le=1800)
+    compression_enabled: bool = True
+
+class LLMProvider(str, Enum):
+    """Supported LLM providers"""
+    ANTHROPIC = "anthropic"
+    GOOGLE = "google"
+
+class LLMSettings(BaseModel):
+    """LLM API configuration"""
+    provider: LLMProvider = LLMProvider.ANTHROPIC
+    model: str = "claude-3-5-sonnet-20250122"
+    api_key: str = Field(..., min_length=10)
+    max_tokens: int = Field(100000, ge=1000, le=1000000)
+    temperature: float = Field(0.0, ge=0.0, le=1.0)
+    timeout: int = Field(300, ge=30, le=1800)
+
+class CostLimits(BaseModel):
+    """LLM cost control configuration"""
+    max_tokens_per_paper: int = Field(100000, ge=1000, le=1000000)
+    max_daily_spend_usd: float = Field(50.0, ge=0.01, le=10000.0)
+    max_total_spend_usd: float = Field(500.0, ge=0.01, le=100000.0)
+    alert_threshold_usd: float = Field(40.0, ge=0.01)
+
+class ConcurrencySettings(BaseModel):
+    """Concurrent processing configuration"""
+    max_concurrent_downloads: int = Field(5, ge=1, le=20)
+    max_concurrent_conversions: int = Field(3, ge=1, le=10)
+    max_concurrent_llm: int = Field(2, ge=1, le=5)
+    checkpoint_interval: int = Field(10, ge=1, le=100)
+
+class CacheSettings(BaseModel):
+    """Caching configuration"""
+    enabled: bool = True
+    cache_dir: str = "./cache"
+    ttl_api_hours: int = Field(1, ge=0, le=168)  # Max 1 week
+    ttl_pdf_days: int = Field(7, ge=0, le=365)
+    ttl_extraction_days: int = Field(30, ge=0, le=365)
+    max_size_gb: float = Field(10.0, ge=0.1, le=1000.0)
+
+class GlobalSettings(BaseModel):
+    """Global pipeline settings"""
+    output_base_dir: str = "./output"
+    enable_duplicate_detection: bool = True
+    semantic_scholar_api_key: str = Field(..., min_length=10)
+    pdf_settings: PDFSettings = Field(default_factory=PDFSettings)
+    llm_settings: LLMSettings
+    cost_limits: CostLimits = Field(default_factory=CostLimits)
+    concurrency: ConcurrencySettings = Field(default_factory=ConcurrencySettings)
+    cache: CacheSettings = Field(default_factory=CacheSettings)
+
+class ResearchConfig(BaseModel):
+    """Root configuration model"""
+    research_topics: List[ResearchTopic] = Field(..., min_items=1, max_items=100)
+    settings: GlobalSettings
+
+    class Config:
+        extra = "forbid"  # Reject unknown fields
+        use_enum_values = True
+```
+
+#### Paper Models
+
+```python
+from pydantic import BaseModel, Field, HttpUrl
+from typing import Optional, List, Any
+from datetime import datetime
+
+class Author(BaseModel):
+    """Paper author information"""
+    name: str
+    author_id: Optional[str] = None
+    affiliation: Optional[str] = None
+
+class PaperMetadata(BaseModel):
+    """Complete metadata for a research paper"""
+    # Identifiers
+    paper_id: str = Field(..., description="Semantic Scholar paper ID")
+    doi: Optional[str] = None
+    arxiv_id: Optional[str] = None
+
+    # Content
+    title: str = Field(..., min_length=1, max_length=1000)
+    abstract: Optional[str] = Field(None, max_length=10000)
+
+    # Links
+    url: HttpUrl
+    open_access_pdf: Optional[HttpUrl] = None
+
+    # Metadata
+    authors: List[Author] = Field(default_factory=list)
+    year: Optional[int] = Field(None, ge=1900, le=2100)
+    publication_date: Optional[datetime] = None
+    venue: Optional[str] = None
+
+    # Metrics
+    citation_count: int = Field(0, ge=0)
+    influential_citation_count: int = Field(0, ge=0)
+
+    # Computed fields
+    relevance_score: float = Field(0.0, ge=0.0, le=1.0)
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat(),
+            HttpUrl: lambda v: str(v)
+        }
+
+class ExtractionResult(BaseModel):
+    """Result of extracting a single target"""
+    target_name: str
+    success: bool
+    content: Any  # Type depends on output_format
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
+    error: Optional[str] = None
+    tokens_used: int = Field(0, ge=0)
+
+class PaperExtraction(BaseModel):
+    """Complete extraction for a single paper"""
+    paper_id: str
+    extraction_results: List[ExtractionResult]
+    total_tokens_used: int = Field(0, ge=0)
+    cost_usd: float = Field(0.0, ge=0.0)
+    extraction_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    extraction_duration_seconds: float = Field(0.0, ge=0.0)
+
+class ProcessingStatus(str, Enum):
+    """Paper processing status"""
+    PENDING = "pending"
+    DOWNLOADING = "downloading"
+    CONVERTING = "converting"
+    EXTRACTING = "extracting"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+class ExtractedPaper(BaseModel):
+    """Paper with complete processing results"""
+    metadata: PaperMetadata
+    status: ProcessingStatus = ProcessingStatus.PENDING
+
+    # Processing artifacts
+    pdf_available: bool = False
+    pdf_path: Optional[str] = None
+    markdown_path: Optional[str] = None
+
+    # Extraction results
+    extraction: Optional[PaperExtraction] = None
+
+    # Processing metadata
+    processing_started_at: Optional[datetime] = None
+    processing_completed_at: Optional[datetime] = None
+    processing_duration_seconds: Optional[float] = None
+
+    # Error tracking
+    error: Optional[str] = None
+    retry_count: int = Field(0, ge=0)
+```
+
+#### Catalog Models
+
+```python
+from pydantic import BaseModel, Field
+from typing import List, Dict, Optional
+from datetime import datetime
+
+class CatalogRun(BaseModel):
+    """A single pipeline run for a topic"""
+    run_id: str = Field(..., min_length=1)
+    date: datetime
+    papers_found: int = Field(0, ge=0)
+    papers_processed: int = Field(0, ge=0)
+    papers_failed: int = Field(0, ge=0)
+    papers_skipped: int = Field(0, ge=0)
+    timeframe: str
+    output_file: str
+    total_cost_usd: float = Field(0.0, ge=0.0)
+    total_duration_seconds: float = Field(0.0, ge=0.0)
+
+class ProcessedPaper(BaseModel):
+    """Reference to a processed paper"""
+    paper_id: str
+    doi: Optional[str] = None
+    title: str
+    processed_at: datetime
+    run_id: str
+
+class TopicCatalogEntry(BaseModel):
+    """Catalog entry for a research topic"""
+    topic_slug: str
+    query: str
+    folder: str
+    created_at: datetime
+    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    runs: List[CatalogRun] = Field(default_factory=list)
+    processed_papers: List[ProcessedPaper] = Field(default_factory=list)
+
+    def add_run(self, run: CatalogRun):
+        """Add a run and update timestamp"""
+        self.runs.append(run)
+        self.last_updated = datetime.utcnow()
+
+    def has_paper(self, paper_id: str, doi: Optional[str] = None) -> bool:
+        """Check if paper already processed"""
+        for p in self.processed_papers:
+            if p.paper_id == paper_id:
+                return True
+            if doi and p.doi and p.doi == doi:
+                return True
+        return False
+
+class Catalog(BaseModel):
+    """Master catalog of all research"""
+    version: str = "1.0"
+    topics: Dict[str, TopicCatalogEntry] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_updated: datetime = Field(default_factory=datetime.utcnow)
+
+    def get_or_create_topic(
+        self,
+        topic_slug: str,
+        query: str
+    ) -> TopicCatalogEntry:
+        """Get existing topic or create new entry"""
+        if topic_slug not in self.topics:
+            self.topics[topic_slug] = TopicCatalogEntry(
+                topic_slug=topic_slug,
+                query=query,
+                folder=topic_slug,
+                created_at=datetime.utcnow()
+            )
+        self.last_updated = datetime.utcnow()
+        return self.topics[topic_slug]
+```
+
+---
+
+## Core Components
+
+### 1. Configuration Manager
+
+**Responsibility**: Load, validate, and provide configuration
+
+```python
+class ConfigManager:
+    """Manages application configuration with validation"""
+
+    def __init__(self, config_path: str = "config/research_config.yaml"):
+        self.config_path = Path(config_path)
+        self.env_loaded = False
+
+    def load_config(self) -> ResearchConfig:
+        """Load and validate configuration
+
+        Process:
+        1. Load .env file
+        2. Read YAML
+        3. Substitute environment variables
+        4. Validate with Pydantic
+        5. Return ResearchConfig
+
+        Raises:
+            ConfigValidationError: If config is invalid
+            FileNotFoundError: If config file missing
+        """
+        # Load environment
+        if not self.env_loaded:
+            load_dotenv()
+            self.env_loaded = True
+
+        # Read YAML
+        with open(self.config_path) as f:
+            raw_config = yaml.safe_load(f)
+
+        # Substitute env vars
+        config_str = yaml.dump(raw_config)
+        config_str = Template(config_str).safe_substitute(os.environ)
+        config_data = yaml.safe_load(config_str)
+
+        # Validate
+        try:
+            config = ResearchConfig(**config_data)
+            logger.info("config_loaded", topics=len(config.research_topics))
+            return config
+        except ValidationError as e:
+            raise ConfigValidationError(f"Invalid config: {e}")
+
+    def generate_topic_slug(self, query: str) -> str:
+        """Convert query to filesystem-safe slug
+
+        Examples:
+            "Tree of Thoughts AND machine translation"
+            → "tree-of-thoughts-and-machine-translation"
+
+            "reinforcement learning robotics"
+            → "reinforcement-learning-robotics"
+        """
+        import re
+        slug = query.lower()
+        # Remove special characters
+        slug = re.sub(r'[^\w\s-]', '', slug)
+        # Replace spaces with hyphens
+        slug = re.sub(r'[\s_]+', '-', slug)
+        # Remove consecutive hyphens
+        slug = re.sub(r'-+', '-', slug)
+        # Trim hyphens
+        slug = slug.strip('-')
+        # Limit length
+        if len(slug) > 100:
+            slug = slug[:100].rstrip('-')
+        return slug
+```
+
+### 2. Discovery Service
+
+**Responsibility**: Search and filter papers from Semantic Scholar
+
+```python
+class DiscoveryService:
+    """Search for papers using Semantic Scholar API"""
+
+    def __init__(
+        self,
+        api_key: str,
+        cache_service: CacheService,
+        rate_limiter: RateLimiter
+    ):
+        self.api_key = api_key
+        self.cache = cache_service
+        self.rate_limiter = rate_limiter
+        self.session: Optional[aiohttp.ClientSession] = None
+
+    async def search(
+        self,
+        topic: ResearchTopic
+    ) -> List[PaperMetadata]:
+        """Search for papers matching topic
+
+        Process:
+        1. Check cache
+        2. Build API query
+        3. Execute with rate limiting
+        4. Parse response
+        5. Convert to PaperMetadata
+        6. Cache results
+
+        Returns:
+            List of paper metadata
+        """
+        # Check cache
+        query_hash = self._hash_query(topic)
+        cached = await self.cache.get_api_response(query_hash)
+        if cached:
+            logger.info("cache_hit", query=topic.query)
+            return [PaperMetadata(**p) for p in cached]
+
+        # Build query
+        params = self._build_query_params(topic)
+
+        # Execute with rate limiting
+        await self.rate_limiter.acquire()
+
+        async with self.get_session() as session:
+            async with session.get(
+                "https://api.semanticscholar.org/graph/v1/paper/search",
+                params=params,
+                headers={"x-api-key": self.api_key},
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as response:
+                response.raise_for_status()
+                data = await response.json()
+
+        # Parse response
+        papers = self._parse_response(data)
+
+        # Cache
+        await self.cache.set_api_response(
+            query_hash,
+            [p.dict() for p in papers]
+        )
+
+        logger.info(
+            "papers_discovered",
+            query=topic.query,
+            count=len(papers)
+        )
+
+        return papers
+
+    def _build_query_params(self, topic: ResearchTopic) -> dict:
+        """Convert topic to API parameters"""
+        params = {
+            "query": topic.query,
+            "limit": topic.max_papers,
+            "fields": "paperId,title,abstract,url,authors,year,"
+                     "publicationDate,citationCount,influentialCitationCount,"
+                     "venue,openAccessPdf"
+        }
+
+        # Add timeframe filter
+        if isinstance(topic.timeframe, TimeframeRecent):
+            date_filter = self._convert_recent_to_date(topic.timeframe.value)
+            params["publicationDateOrYear"] = f"{date_filter}:"
+        elif isinstance(topic.timeframe, TimeframeSinceYear):
+            params["year"] = f"{topic.timeframe.value}-"
+        elif isinstance(topic.timeframe, TimeframeDateRange):
+            start = topic.timeframe.start_date.isoformat()
+            end = topic.timeframe.end_date.isoformat()
+            params["publicationDate"] = f"{start}:{end}"
+
+        return params
+```
+
+### 3. Concurrent Processing Engine
+
+**Responsibility**: Process multiple papers concurrently with resource limits
+
+```python
+class ConcurrentPipeline:
+    """Concurrent paper processing with backpressure"""
+
+    def __init__(
+        self,
+        config: ConcurrencySettings,
+        pdf_service: PDFService,
+        llm_service: LLMService,
+        checkpoint_service: CheckpointService
+    ):
+        self.config = config
+        self.pdf_service = pdf_service
+        self.llm_service = llm_service
+        self.checkpoint = checkpoint_service
+
+        # Semaphores for resource limiting
+        self.download_sem = asyncio.Semaphore(config.max_concurrent_downloads)
+        self.conversion_sem = asyncio.Semaphore(config.max_concurrent_conversions)
+        self.llm_sem = asyncio.Semaphore(config.max_concurrent_llm)
+
+    async def process_papers(
+        self,
+        papers: List[PaperMetadata],
+        targets: List[ExtractionTarget],
+        run_id: str
+    ) -> AsyncIterator[ExtractedPaper]:
+        """Process papers concurrently
+
+        Architecture:
+        - Producer feeds papers to bounded queue
+        - N workers process from queue
+        - Results yielded as completed (unordered)
+        - Checkpoints saved periodically
+        - Errors don't stop pipeline
+
+        Yields:
+            ExtractedPaper as they complete
+        """
+        # Load checkpoint
+        processed_ids = await self.checkpoint.load_processed(run_id)
+        pending = [p for p in papers if p.paper_id not in processed_ids]
+
+        logger.info(
+            "concurrent_processing_started",
+            total=len(papers),
+            pending=len(pending),
+            from_checkpoint=len(processed_ids)
+        )
+
+        # Create bounded queue
+        queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+
+        # Start workers
+        num_workers = self.config.max_concurrent_downloads
+        workers = [
+            asyncio.create_task(
+                self._worker(queue, targets, run_id, i)
+            )
+            for i in range(num_workers)
+        ]
+
+        # Producer
+        async def produce():
+            for paper in pending:
+                await queue.put(paper)
+            # Send sentinel values
+            for _ in range(num_workers):
+                await queue.put(None)
+
+        producer = asyncio.create_task(produce())
+
+        # Collect results
+        completed = 0
+        async for result in self._collect_results(workers):
+            yield result
+            completed += 1
+
+            # Checkpoint periodically
+            if completed % self.config.checkpoint_interval == 0:
+                await self.checkpoint.save_progress(
+                    run_id,
+                    result.metadata.paper_id
+                )
+
+        await producer
+        await asyncio.gather(*workers)
+
+        logger.info(
+            "concurrent_processing_completed",
+            total=completed
+        )
+
+    async def _worker(
+        self,
+        queue: asyncio.Queue,
+        targets: List[ExtractionTarget],
+        run_id: str,
+        worker_id: int
+    ):
+        """Worker coroutine processes papers from queue"""
+        while True:
+            paper = await queue.get()
+            if paper is None:  # Sentinel
+                break
+
+            try:
+                result = await self._process_single(paper, targets)
+                yield result
+            except Exception as e:
+                logger.error(
+                    "worker_error",
+                    worker_id=worker_id,
+                    paper_id=paper.paper_id,
+                    error=str(e),
+                    exc_info=True
+                )
+                # Yield failed result
+                yield ExtractedPaper(
+                    metadata=paper,
+                    status=ProcessingStatus.FAILED,
+                    error=str(e)
+                )
+            finally:
+                queue.task_done()
+
+    async def _process_single(
+        self,
+        paper: PaperMetadata,
+        targets: List[ExtractionTarget]
+    ) -> ExtractedPaper:
+        """Process single paper with resource limits"""
+        result = ExtractedPaper(
+            metadata=paper,
+            processing_started_at=datetime.utcnow()
+        )
+
+        try:
+            # Download phase
+            if paper.open_access_pdf:
+                async with self.download_sem:
+                    result.status = ProcessingStatus.DOWNLOADING
+                    pdf_path = await self.pdf_service.download_pdf(
+                        str(paper.open_access_pdf),
+                        paper.paper_id
+                    )
+                    result.pdf_path = str(pdf_path)
+                    result.pdf_available = True
+
+            # Conversion phase
+            if result.pdf_available:
+                async with self.conversion_sem:
+                    result.status = ProcessingStatus.CONVERTING
+                    md_path = await self.pdf_service.convert_to_markdown(
+                        Path(result.pdf_path)
+                    )
+                    result.markdown_path = str(md_path)
+
+            # Extraction phase
+            async with self.llm_sem:
+                result.status = ProcessingStatus.EXTRACTING
+
+                # Get markdown content
+                if result.markdown_path:
+                    content = Path(result.markdown_path).read_text()
+                else:
+                    # Fallback to abstract
+                    content = self._format_abstract(paper)
+
+                # Extract with LLM
+                extraction = await self.llm_service.extract(
+                    content,
+                    targets,
+                    paper
+                )
+                result.extraction = extraction
+
+            result.status = ProcessingStatus.COMPLETED
+
+        except Exception as e:
+            result.status = ProcessingStatus.FAILED
+            result.error = str(e)
+            raise
+
+        finally:
+            result.processing_completed_at = datetime.utcnow()
+            result.processing_duration_seconds = (
+                result.processing_completed_at -
+                result.processing_started_at
+            ).total_seconds()
+
+        return result
+```
+
+---
+
+## Concurrency & Resilience
+
+### Concurrency Model
+
+**Pattern**: Async producer-consumer with bounded queues and semaphores
+
+```
+┌─────────────────────────────────────────────────┐
+│           Bounded Queue (100 items)             │
+│  ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐           │
+│  │ P1 │ │ P2 │ │ P3 │ │... │ │ PN │           │
+│  └────┘ └────┘ └────┘ └────┘ └────┘           │
+└────────────────┬────────────────────────────────┘
+                 │
+    ┌────────────┼────────────┬────────────┐
+    │            │            │            │
+┌───▼───┐   ┌───▼───┐   ┌───▼───┐   ┌───▼───┐
+│Worker1│   │Worker2│   │Worker3│   │WorkerN│
+│       │   │       │   │       │   │       │
+│ ┌──┐  │   │ ┌──┐  │   │ ┌──┐  │   │ ┌──┐  │
+│ │DL│  │   │ │DL│  │   │ │DL│  │   │ │DL│  │
+│ └┬─┘  │   │ └┬─┘  │   │ └┬─┘  │   │ └┬─┘  │
+│  │    │   │  │    │   │  │    │   │  │    │
+│ ┌▼──┐ │   │ ┌▼──┐ │   │ ┌▼──┐ │   │ ┌▼──┐ │
+│ │CV │ │   │ │CV │ │   │ │CV │ │   │ │CV │ │
+│ └┬──┘ │   │ └┬──┘ │   │ └┬──┘ │   │ └┬──┘ │
+│  │    │   │  │    │   │  │    │   │  │    │
+│ ┌▼──┐ │   │ ┌▼──┐ │   │ ┌▼──┐ │   │ ┌▼──┐ │
+│ │LLM│ │   │ │LLM│ │   │ │LLM│ │   │ │LLM│ │
+│ └───┘ │   │ └───┘ │   │ └───┘ │   │ └───┘ │
+└───┬───┘   └───┬───┘   └───┬───┘   └───┬───┘
+    │           │           │           │
+    └───────────┴───────────┴───────────┘
+                 │
+            [Results Queue]
+
+DL = Download (Semaphore: 5)
+CV = Convert  (Semaphore: 3)
+LLM = Extract (Semaphore: 2)
+```
+
+### Resilience Patterns
+
+#### 1. Retry with Exponential Backoff
+
+```python
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type
+)
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    retry=retry_if_exception_type(TransientError)
+)
+async def fetch_with_retry(url: str) -> bytes:
+    """Fetch with automatic retry on transient failures"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=30) as response:
+                if response.status == 429:  # Rate limit
+                    raise TransientError("Rate limited")
+                if 500 <= response.status < 600:  # Server error
+                    raise TransientError(f"Server error: {response.status}")
+                response.raise_for_status()
+                return await response.read()
+    except asyncio.TimeoutError:
+        raise TransientError("Timeout")
+    except aiohttp.ClientError as e:
+        raise TransientError(str(e))
+```
+
+#### 2. Circuit Breaker
+
+```python
+class CircuitBreaker:
+    """Circuit breaker pattern for external APIs"""
+
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        timeout_seconds: int = 60
+    ):
+        self.failure_threshold = failure_threshold
+        self.timeout = timeout_seconds
+        self.failures = 0
+        self.last_failure_time: Optional[datetime] = None
+        self.state: Literal["closed", "open", "half_open"] = "closed"
+
+    async def call(self, func, *args, **kwargs):
+        """Execute function through circuit breaker"""
+        if self.state == "open":
+            if self._should_attempt_reset():
+                self.state = "half_open"
+            else:
+                raise CircuitBreakerOpenError(
+                    "Circuit breaker is open, skipping call"
+                )
+
+        try:
+            result = await func(*args, **kwargs)
+            self._on_success()
+            return result
+        except Exception as e:
+            self._on_failure()
+            raise
+
+    def _on_success(self):
+        """Reset circuit breaker on success"""
+        self.failures = 0
+        self.state = "closed"
+
+    def _on_failure(self):
+        """Increment failures and maybe open circuit"""
+        self.failures += 1
+        self.last_failure_time = datetime.utcnow()
+
+        if self.failures >= self.failure_threshold:
+            self.state = "open"
+            logger.warning(
+                "circuit_breaker_opened",
+                failures=self.failures
+            )
+```
+
+#### 3. Checkpoint/Resume
+
+```python
+class CheckpointService:
+    """Enable resume from interruption"""
+
+    async def save_progress(self, run_id: str, paper_id: str):
+        """Atomically save checkpoint"""
+        checkpoint_file = self.checkpoint_dir / f"{run_id}.json"
+
+        # Load existing
+        if checkpoint_file.exists():
+            data = json.loads(checkpoint_file.read_text())
+        else:
+            data = {
+                "run_id": run_id,
+                "started_at": datetime.utcnow().isoformat(),
+                "processed_ids": []
+            }
+
+        # Update
+        if paper_id not in data["processed_ids"]:
+            data["processed_ids"].append(paper_id)
+        data["last_updated"] = datetime.utcnow().isoformat()
+
+        # Atomic write
+        temp_file = checkpoint_file.with_suffix(".tmp")
+        temp_file.write_text(json.dumps(data, indent=2))
+        temp_file.rename(checkpoint_file)
+```
+
+---
+
+## Storage & Caching
+
+### Storage Architecture
+
+```
+output/
+├── catalog.json                    # Master catalog (atomic writes)
+├── topic-a/
+│   ├── 2025-01-23_Run.md          # Daily research briefs
+│   ├── 2025-01-24_Run.md
+│   ├── papers/                     # Archived PDFs (compressed)
+│   │   ├── paper1.pdf.gz
+│   │   └── paper2.pdf.gz
+│   └── extractions/                # Cached extraction results
+│       ├── paper1.json
+│       └── paper2.json
+└── topic-b/
+    └── ...
+
+cache/                              # Multi-level cache
+├── api/                            # Semantic Scholar responses (1h TTL)
+├── pdfs/                           # Downloaded PDFs (7d TTL)
+└── extractions/                    # LLM results (30d TTL)
+
+temp/                               # Temporary processing
+├── pdfs/                           # Pending conversion
+└── markdown/                       # Converted markdown
+
+checkpoints/                        # Resume state
+└── run_20250123_143052.json       # Processed paper IDs
+```
+
+### Caching Strategy
+
+**Multi-Level Cache** with different TTLs:
+
+```python
+class CacheService:
+    """Multi-tier caching with automatic expiration"""
+
+    def __init__(self, cache_dir: Path, settings: CacheSettings):
+        self.settings = settings
+
+        # Separate caches with different TTLs
+        self.api_cache = diskcache.Cache(
+            cache_dir / "api",
+            timeout=settings.ttl_api_hours * 3600
+        )
+        self.pdf_cache = diskcache.Cache(
+            cache_dir / "pdfs",
+            timeout=settings.ttl_pdf_days * 86400
+        )
+        self.extraction_cache = diskcache.Cache(
+            cache_dir / "extractions",
+            timeout=settings.ttl_extraction_days * 86400
+        )
+
+    async def get_extraction(
+        self,
+        paper_id: str,
+        targets_hash: str
+    ) -> Optional[PaperExtraction]:
+        """Get cached extraction
+
+        Key includes targets_hash so changing extraction
+        targets invalidates cache
+        """
+        key = f"{paper_id}:{targets_hash}"
+        data = self.extraction_cache.get(key)
+        if data:
+            metrics.cache_hits.labels(cache_type="extraction").inc()
+            return PaperExtraction.parse_obj(data)
+        metrics.cache_misses.labels(cache_type="extraction").inc()
+        return None
+```
+
+### Retention Policy
+
+```python
+class StorageManager:
+    """Manage storage with retention policies"""
+
+    async def apply_retention_policy(self):
+        """Clean up old files based on policy"""
+        # Compress PDFs older than 30 days
+        for pdf_path in self.find_pdfs_older_than(days=30):
+            if not pdf_path.name.endswith('.gz'):
+                await self.compress_pdf(pdf_path)
+
+        # Delete PDFs older than 365 days
+        for pdf_path in self.find_pdfs_older_than(days=365):
+            pdf_path.unlink()
+            logger.info("pdf_deleted", path=str(pdf_path))
+
+        # Check disk usage
+        total_size = self.calculate_total_size()
+        if total_size > self.max_size_bytes:
+            await self.evict_oldest_until_under_limit()
+```
+
+---
+
+## Observability
+
+### Structured Logging
+
+**Format**: JSON with correlation IDs
+
+```python
+# Setup
+import structlog
+
+structlog.configure(
+    processors=[
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        add_correlation_id,
+        add_service_context,
+        structlog.processors.JSONRenderer()
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+    context_class=dict,
+    logger_factory=structlog.PrintLoggerFactory(),
+    cache_logger_on_first_use=True
+)
+
+# Usage
+logger = structlog.get_logger()
+
+# Set correlation ID for request
+run_id = set_correlation_id()
+
+logger.info(
+    "pipeline_started",
+    run_id=run_id,
+    topic=topic.query,
+    max_papers=topic.max_papers
+)
+
+# All subsequent logs include run_id automatically
+logger.info("paper_processed", paper_id="abc123", duration_ms=4500)
+
+# Output:
+# {
+#   "event": "paper_processed",
+#   "level": "info",
+#   "timestamp": "2025-01-23T14:30:52.123Z",
+#   "correlation_id": "a1b2c3d4-...",
+#   "service": "arisp",
+#   "version": "1.0.0",
+#   "paper_id": "abc123",
+#   "duration_ms": 4500
+# }
+```
+
+### Metrics
+
+**Prometheus metrics** for monitoring:
+
+```python
+from prometheus_client import Counter, Gauge, Histogram
+
+# Counters
+papers_processed = Counter(
+    'arisp_papers_processed_total',
+    'Total papers processed',
+    ['status']  # success, failed, skipped
+)
+
+llm_tokens = Counter(
+    'arisp_llm_tokens_total',
+    'LLM tokens consumed',
+    ['provider', 'type']  # anthropic/google, input/output
+)
+
+llm_cost = Counter(
+    'arisp_llm_cost_usd_total',
+    'LLM costs in USD',
+    ['provider']
+)
+
+# Gauges
+active_workers = Gauge(
+    'arisp_active_workers',
+    'Active worker coroutines',
+    ['type']  # download, conversion, llm
+)
+
+cache_size_bytes = Gauge(
+    'arisp_cache_size_bytes',
+    'Cache size',
+    ['cache_type']
+)
+
+# Histograms
+paper_processing_duration = Histogram(
+    'arisp_paper_processing_duration_seconds',
+    'Paper processing time',
+    buckets=[10, 30, 60, 120, 300, 600]
+)
+
+llm_extraction_duration = Histogram(
+    'arisp_llm_extraction_duration_seconds',
+    'LLM extraction time',
+    buckets=[10, 30, 60, 120, 300]
+)
+```
+
+### Monitoring Dashboards
+
+**Grafana panels**:
+1. Papers processed rate (success/fail)
+2. LLM costs (daily trend)
+3. Processing duration (p50, p95, p99)
+4. Cache hit rate
+5. Error rate by type
+6. Active workers
+7. Queue depth
+
+---
+
+## Security
+
+### 1. Credential Management
+
+```python
+# Use environment variables, never hardcode
+API_KEY = os.environ["SEMANTIC_SCHOLAR_API_KEY"]
+
+# Validate on startup
+if not API_KEY or len(API_KEY) < 10:
+    raise ConfigError("Invalid API key")
+
+# Optional: Use keyring for additional security
+import keyring
+keyring.set_password("arisp", "llm_api_key", api_key)
+```
+
+### 2. Input Validation
+
+```python
+# Pydantic validates all inputs
+class ResearchTopic(BaseModel):
+    query: str = Field(..., min_length=1, max_length=500)
+
+    @validator("query")
+    def validate_no_injection(cls, v):
+        """Prevent injection attacks"""
+        dangerous_chars = [";", "|", "&", "`", "$"]
+        if any(char in v for char in dangerous_chars):
+            raise ValueError("Query contains forbidden characters")
+        return v
+```
+
+### 3. Path Sanitization
+
+```python
+def safe_file_path(base_dir: Path, user_input: str) -> Path:
+    """Prevent directory traversal"""
+    # Resolve to absolute path
+    requested = (base_dir / user_input).resolve()
+
+    # Ensure it's within base_dir
+    if not requested.is_relative_to(base_dir):
+        raise SecurityError("Path traversal attempt detected")
+
+    return requested
+```
+
+### 4. Rate Limiting
+
+```python
+class RateLimiter:
+    """Token bucket rate limiter"""
+
+    def __init__(self, requests_per_minute: int = 100):
+        self.rate = requests_per_minute / 60.0
+        self.bucket_size = requests_per_minute
+        self.tokens = requests_per_minute
+        self.last_update = time.time()
+
+    async def acquire(self):
+        """Wait until token available"""
+        while True:
+            now = time.time()
+            elapsed = now - self.last_update
+            self.tokens = min(
+                self.bucket_size,
+                self.tokens + elapsed * self.rate
+            )
+            self.last_update = now
+
+            if self.tokens >= 1:
+                self.tokens -= 1
+                return
+
+            wait_time = (1 - self.tokens) / self.rate
+            await asyncio.sleep(wait_time)
+```
+
+---
+
+## Deployment Architecture
+
+### Standalone Deployment
+
+```
+┌──────────────────────────────────────────────┐
+│           Single Host (VM/Container)         │
+│                                              │
+│  ┌────────────────────────────────────────┐ │
+│  │         ARISP Application              │ │
+│  │  - Python process                      │ │
+│  │  - APScheduler (cron jobs)             │ │
+│  │  - Local disk storage                  │ │
+│  └────────────────────────────────────────┘ │
+│                                              │
+│  ┌────────────────────────────────────────┐ │
+│  │    Prometheus + Grafana (optional)     │ │
+│  │  - Metrics collection                  │ │
+│  │  - Dashboards                          │ │
+│  └────────────────────────────────────────┘ │
+│                                              │
+│  Disk:                                       │
+│  - /opt/arisp/output/                        │
+│  - /opt/arisp/cache/                         │
+│  - /opt/arisp/checkpoints/                   │
+└──────────────────────────────────────────────┘
+        │
+        ▼
+   Internet
+   (APIs)
+```
+
+### Cloud Deployment (Future)
+
+```
+┌─────────────────────────────────────────────────┐
+│              AWS/GCP/Azure                      │
+│                                                 │
+│  ┌───────────────────────────────────────────┐ │
+│  │        Container (ECS/Cloud Run/AKS)      │ │
+│  │  - ARISP application                      │ │
+│  │  - Health check endpoint                  │ │
+│  └───────────────────────────────────────────┘ │
+│                                                 │
+│  ┌───────────────────────────────────────────┐ │
+│  │     Managed Storage (S3/GCS/Blob)         │ │
+│  │  - Research outputs                       │ │
+│  │  - PDF archives                           │ │
+│  └───────────────────────────────────────────┘ │
+│                                                 │
+│  ┌───────────────────────────────────────────┐ │
+│  │    Scheduler (EventBridge/Cloud Scheduler)│ │
+│  │  - Daily cron triggers                    │ │
+│  └───────────────────────────────────────────┘ │
+│                                                 │
+│  ┌───────────────────────────────────────────┐ │
+│  │    Monitoring (CloudWatch/Stackdriver)    │ │
+│  │  - Logs aggregation                       │ │
+│  │  - Metrics collection                     │ │
+│  │  - Alerting                               │ │
+│  └───────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────┘
+```
+
+---
+
+## Gap Resolution Matrix
+
+This table shows how each identified architectural gap is addressed:
+
+| Gap ID | Gap Description | Resolution | Phase | Component |
+|--------|----------------|------------|-------|-----------|
+| **1** | Data Models & Type Safety | Pydantic models for all data structures | Phase 1 | `src/models/` |
+| **2** | No Concurrency Model | AsyncIO producer-consumer with semaphores | Phase 3 | `ConcurrentPipeline` |
+| **3** | No Resilience Strategy | Retry (tenacity), circuit breaker, checkpoints | Phase 2-3 | `infrastructure/` |
+| **4** | Hardcoded Extraction Targets | Configurable `ExtractionTarget` per topic | Phase 2 | `ExtractionTarget` model |
+| **5** | No Observability | Structlog + Prometheus + correlation IDs | Phase 4 | `observability/` |
+| **6** | Missing Storage Strategy | Retention policy, compression, quotas | Phase 3 | `StorageManager` |
+| **7** | No Cost Controls | `CostLimits` model + tracking + alerts | Phase 2 | `LLMService` |
+| **8** | Insufficient Error Handling | Error taxonomy, custom exceptions | Phase 1-2 | `exceptions.py` |
+| **9** | No Incremental Processing | Checkpoint service + catalog tracking | Phase 3 | `CheckpointService` |
+| **10** | Missing Paper Quality Filters | `PaperFilter` model + filter service | Phase 3 | `FilterService` |
+| **11** | No Scheduling System | APScheduler integration | Phase 4 | `scheduler.py` |
+| **12** | Missing CLI Framework | Typer with type safety | Phase 1 | `cli.py` |
+| **13** | No Testing Strategy | Pytest + coverage target 80%+ | All Phases | `tests/` |
+| **14** | Security Considerations | Input validation, path sanitization, rate limiting | Phase 1-4 | Multiple |
+| **15** | No Semantic Search | (Future) Vector embeddings | Post-Phase 4 | N/A |
+| **16** | Missing Metadata Enrichment | (Future) Extended metadata capture | Post-Phase 4 | N/A |
+
+---
+
+## References
+
+### External Documentation
+- [Pydantic Documentation](https://docs.pydantic.dev/)
+- [Semantic Scholar API](https://api.semanticscholar.org/)
+- [marker-pdf Documentation](https://github.com/VikParuchuri/marker)
+- [Anthropic API](https://docs.anthropic.com/)
+- [Google AI API](https://ai.google.dev/)
+
+### Internal Documentation
+- [Architecture Review](./ARCHITECTURE_REVIEW.md) - Gap analysis
+- [Phased Delivery Plan](./PHASED_DELIVERY_PLAN.md) - Implementation roadmap
+- [Phase 1 Specification](./specs/PHASE_1_SPEC.md)
+- [Phase 2 Specification](./specs/PHASE_2_SPEC.md)
+- [Phase 3 Specification](./specs/PHASE_3_SPEC.md)
+- [Phase 4 Specification](./specs/PHASE_4_SPEC.md)
+
+---
+
+**Document Control**
+
+| Version | Date | Author | Changes |
+|---------|------|--------|---------|
+| 1.0 | 2025-01-23 | Principal Engineering Team | Initial architecture design |
+

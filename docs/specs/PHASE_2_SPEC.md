@@ -4,6 +4,25 @@
 **Timeline:** 2 weeks
 **Dependencies:** Phase 1 Complete
 
+## Architecture Reference
+
+This phase extends the architecture with PDF processing and LLM capabilities as defined in [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md).
+
+**Architectural Gaps Addressed:**
+- ✅ Gap #3: Resilience Strategy (retry logic, circuit breakers)
+- ✅ Gap #4: Configurable Extraction Targets
+- ✅ Gap #7: Cost Controls (budget limits, tracking)
+
+**Components Implemented:**
+- Service Layer: PDF Service, LLM Service, Extraction Service
+- Infrastructure Layer: Resilience patterns (tenacity), cost tracking
+- Data Models: Extraction models, LLM configuration (see [Architecture §4](../SYSTEM_ARCHITECTURE.md#data-models))
+
+**Resilience Patterns Applied:**
+- Retry with exponential backoff (see [Architecture §6](../SYSTEM_ARCHITECTURE.md#concurrency--resilience))
+- Circuit breaker for API calls
+- Graceful degradation (abstract-only fallback)
+
 ## Overview
 
 Extend the pipeline to download PDFs, convert them to markdown using marker-pdf, and extract structured information using LLM (Claude or Gemini). This phase adds the core value proposition of the system: intelligent extraction of prompts, code, and insights from research papers.

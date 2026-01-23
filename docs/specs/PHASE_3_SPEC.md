@@ -4,6 +4,31 @@
 **Timeline:** 2 weeks
 **Dependencies:** Phase 1 & 2 Complete
 
+## Architecture Reference
+
+This phase implements production-grade concurrency and intelligence features as defined in [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md).
+
+**Architectural Gaps Addressed:**
+- ✅ Gap #2: Concurrency Model (async producer-consumer)
+- ✅ Gap #6: Storage Strategy (retention, compression)
+- ✅ Gap #9: Incremental Processing (checkpointing)
+- ✅ Gap #10: Paper Quality Filters
+
+**Components Implemented:**
+- Orchestration Layer: Concurrent Pipeline (see [Architecture §5](../SYSTEM_ARCHITECTURE.md#core-components))
+- Service Layer: Cache Service, Deduplication Service, Filter Service, Checkpoint Service
+- Infrastructure Layer: Multi-level caching (see [Architecture §7](../SYSTEM_ARCHITECTURE.md#storage--caching))
+
+**Concurrency Architecture:**
+- Bounded queue with backpressure
+- Semaphores for resource limiting
+- Worker pool pattern (see [Architecture §6.1](../SYSTEM_ARCHITECTURE.md#concurrency-model))
+
+**Performance Targets:**
+- 50 papers in <30 minutes (vs 2+ hours sequential)
+- Cache hit rate >60%
+- Cost reduction >40%
+
 ## Overview
 
 Transform the pipeline from sequential processing to intelligent, concurrent operations with sophisticated deduplication, caching, and optimization strategies. This phase focuses on performance, efficiency, and intelligent paper filtering to reduce costs and improve output quality.

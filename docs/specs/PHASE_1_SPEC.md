@@ -4,6 +4,26 @@
 **Timeline:** 2 weeks
 **Dependencies:** None
 
+## Architecture Reference
+
+This phase implements the foundational components defined in [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md).
+
+**Architectural Gaps Addressed:**
+- ✅ Gap #1: Data Models & Type Safety (Pydantic models)
+- ✅ Gap #8: Error Handling (error taxonomy)
+- ✅ Gap #12: CLI Framework (typer)
+
+**Components Implemented:**
+- Infrastructure Layer: Config Manager, basic logging
+- Service Layer: Discovery Service, Catalog Service
+- CLI Layer: Command-line interface
+- Data Models: Configuration, Paper, Catalog models (see [Architecture §4](../SYSTEM_ARCHITECTURE.md#data-models))
+
+**Deferred to Later Phases:**
+- Concurrency (Phase 3)
+- LLM extraction (Phase 2)
+- Advanced observability (Phase 4)
+
 ## Overview
 
 Establish the foundational architecture for ARISP with a working end-to-end pipeline for a single research topic. This phase focuses on core infrastructure, data models, configuration management, and basic research discovery without PDF processing.

@@ -1,0 +1,100 @@
+# ARISP Research Configuration
+# Edit this file to configure your research topics and settings
+
+research_topics:
+  # Example 1: Recent papers on Tree of Thoughts in Machine Translation
+  - query: "Tree of Thoughts AND machine translation"
+    timeframe:
+      type: "recent"  # Options: recent, since_year, date_range
+      value: "48h"    # For recent: 48h, 7d, 30d, etc.
+    max_papers: 50
+
+    # Define what to extract from each paper
+    extraction_targets:
+      - name: "system_prompts"
+        description: "Extract all LLM system prompts used in the paper"
+        output_format: "list"
+        required: false
+
+      - name: "user_prompts"
+        description: "Extract example user prompts or prompt templates"
+        output_format: "list"
+        required: false
+
+      - name: "code_snippets"
+        description: "Extract Python code implementing the methodology"
+        output_format: "code"
+        required: false
+
+      - name: "evaluation_metrics"
+        description: "Extract benchmark results and performance metrics"
+        output_format: "json"
+        required: false
+
+      - name: "engineering_summary"
+        description: "Write a 2-paragraph summary for engineering teams"
+        output_format: "text"
+        required: true
+
+    # Optional: Filter papers by quality
+    filters:
+      min_citation_count: 5
+      min_year: 2020
+
+  # Example 2: Historical papers on Reinforcement Learning in Robotics
+  - query: "reinforcement learning AND robotics"
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 30
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Summarize key findings and engineering insights"
+        output_format: "text"
+        required: true
+
+# Global Settings
+settings:
+  # Output configuration
+  output_base_dir: "./output"
+  enable_duplicate_detection: true
+
+  # API Keys (loaded from .env)
+  semantic_scholar_api_key: "${SEMANTIC_SCHOLAR_API_KEY}"
+
+  # PDF Processing (Phase 2)
+  pdf_settings:
+    temp_dir: "./temp"
+    keep_pdfs: true
+    max_file_size_mb: 50
+    timeout_seconds: 300
+
+  # LLM Configuration (Phase 2)
+  llm_settings:
+    provider: "${LLM_PROVIDER:-anthropic}"  # anthropic or google
+    model: "${LLM_MODEL:-claude-3-5-sonnet-20250122}"
+    api_key: "${LLM_API_KEY}"
+    max_tokens: 100000
+    temperature: 0.0
+    timeout: 300
+
+  # Cost Controls (Phase 2)
+  cost_limits:
+    max_tokens_per_paper: 100000
+    max_daily_spend_usd: 50.0
+    max_total_spend_usd: 500.0
+
+  # Concurrency Settings (Phase 3)
+  concurrency:
+    max_concurrent_downloads: 5
+    max_concurrent_conversions: 3
+    max_concurrent_llm: 2
+    checkpoint_interval: 10
+
+  # Cache Settings (Phase 3)
+  cache:
+    enabled: true
+    cache_dir: "./cache"
+    ttl_api_hours: 1
+    ttl_pdf_days: 7
+    ttl_extraction_days: 30

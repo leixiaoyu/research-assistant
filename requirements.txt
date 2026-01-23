@@ -1,0 +1,49 @@
+# Core dependencies
+pydantic>=2.0.0
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# CLI
+typer>=0.9.0
+rich>=13.0.0
+
+# HTTP & Async
+aiohttp>=3.9.0
+httpx>=0.25.0
+
+# LLM APIs
+anthropic>=0.18.0
+google-generativeai>=0.3.0
+
+# PDF Processing
+# marker-pdf  # Install separately: pip install marker-pdf
+
+# Retry & Error Handling
+tenacity>=8.2.0
+
+# Caching
+diskcache>=5.6.0
+
+# Logging & Observability
+structlog>=23.1.0
+python-json-logger>=2.0.0
+
+# Metrics (optional for Phase 4)
+prometheus-client>=0.19.0
+
+# Scheduling (optional for Phase 4)
+APScheduler>=3.10.0
+
+# Development & Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+pytest-mock>=3.12.0
+black>=23.0.0
+mypy>=1.5.0
+flake8>=6.1.0
+isort>=5.12.0
+
+# Type stubs
+types-pyyaml>=6.0.0
+types-requests>=2.31.0

@@ -96,8 +96,12 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
         # 3. Pipeline Summary
         md_lines.append("## Pipeline Summary\n")
         md_lines.append(f"- **Papers Processed:** {total_papers}")
-        md_lines.append(f"- **With Full PDF:** {papers_with_pdf} ({papers_with_pdf/total_papers*100:.1f}%)")
-        md_lines.append(f"- **With Extractions:** {papers_with_extraction} ({papers_with_extraction/total_papers*100:.1f}%)")
+        if total_papers > 0:
+            md_lines.append(f"- **With Full PDF:** {papers_with_pdf} ({papers_with_pdf/total_papers*100:.1f}%)")
+            md_lines.append(f"- **With Extractions:** {papers_with_extraction} ({papers_with_extraction/total_papers*100:.1f}%)")
+        else:
+            md_lines.append(f"- **With Full PDF:** 0")
+            md_lines.append(f"- **With Extractions:** 0")
         md_lines.append(f"- **Total Tokens Used:** {total_tokens:,}")
         md_lines.append(f"- **Total Cost:** ${total_cost:.2f}\n")
 

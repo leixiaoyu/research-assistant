@@ -13,7 +13,7 @@ from datetime import datetime
 import json
 
 from src.output.enhanced_generator import EnhancedMarkdownGenerator
-from src.models.config import ResearchTopic, TimeframeType, Timeframe
+from src.models.config import ResearchTopic, TimeframeRecent
 from src.models.paper import PaperMetadata, Author
 from src.models.extraction import (
     ExtractionTarget,
@@ -34,7 +34,7 @@ def research_topic():
     """Create research topic"""
     return ResearchTopic(
         query="Tree of Thoughts AND machine translation",
-        timeframe=Timeframe(type=TimeframeType.RECENT, value="48h"),
+        timeframe=TimeframeRecent(value="48h"),
         max_papers=50
     )
 

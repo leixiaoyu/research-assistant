@@ -128,6 +128,10 @@ class ExtractionService:
                     error_type=type(e).__name__,
                     error=str(e)
                 )
+                # Reset PDF status on failure
+                extracted.pdf_available = False
+                extracted.pdf_path = None
+                extracted.markdown_path = None
                 markdown_content = self._format_abstract(paper)
 
             except Exception as e:
@@ -137,6 +141,10 @@ class ExtractionService:
                     paper_id=paper.paper_id,
                     error=str(e)
                 )
+                # Reset PDF status on failure
+                extracted.pdf_available = False
+                extracted.pdf_path = None
+                extracted.markdown_path = None
                 markdown_content = self._format_abstract(paper)
 
         else:

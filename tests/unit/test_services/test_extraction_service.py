@@ -128,7 +128,9 @@ async def test_process_paper_full_pipeline_success(
 ):
     """Test successful processing with full PDF pipeline"""
     # Mock PDF download
-    pdf_path = Path("/temp/pdfs/2301.12345.pdf")
+    pdf_path = MagicMock(spec=Path)
+    pdf_path.__str__ = Mock(return_value="/temp/pdfs/2301.12345.pdf")
+    pdf_path.stat.return_value = Mock(st_size=1024000)  # 1MB file
     mock_pdf_service.download_pdf.return_value = pdf_path
 
     # Mock PDF conversion
@@ -430,7 +432,9 @@ async def test_process_papers_batch_processing(
     papers = [paper_with_pdf, paper_without_pdf]
 
     # Mock PDF pipeline for first paper
-    pdf_path = Path("/temp/pdfs/2301.12345.pdf")
+    pdf_path = MagicMock(spec=Path)
+    pdf_path.__str__ = Mock(return_value="/temp/pdfs/2301.12345.pdf")
+    pdf_path.stat.return_value = Mock(st_size=1024000)  # 1MB file
     md_path = MagicMock(spec=Path)
     md_path.read_text.return_value = "# Paper 1"
     mock_pdf_service.download_pdf.return_value = pdf_path
@@ -519,8 +523,8 @@ def test_format_abstract_minimal_metadata(extraction_service):
     """Test _format_abstract with minimal metadata"""
     paper = PaperMetadata(
         paper_id="test",
-        title=None,
-        abstract=None,
+        title="Minimal Paper",  # Valid title (Pydantic requires non-empty)
+        abstract=None,  # Optional field
         url="https://example.com",
         authors=[],
         citation_count=0,
@@ -530,9 +534,9 @@ def test_format_abstract_minimal_metadata(extraction_service):
 
     markdown = extraction_service._format_abstract(paper)
 
-    # Check defaults are used
-    assert "Untitled Paper" in markdown
-    assert "Unknown" in markdown
+    # Check defaults are used for missing/None values
+    assert "Minimal Paper" in markdown
+    assert "Unknown" in markdown  # For year and venue
     assert "No abstract available" in markdown
 
 

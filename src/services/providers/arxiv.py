@@ -17,7 +17,7 @@ logger = structlog.get_logger()
 class ArxivProvider(DiscoveryProvider):
     """Search for papers using ArXiv API"""
 
-    BASE_URL = "http://export.arxiv.org/api/query"
+    BASE_URL = "https://export.arxiv.org/api/query"
 
     def __init__(self, rate_limiter: Optional[RateLimiter] = None):
         # ArXiv requires 3 seconds between requests

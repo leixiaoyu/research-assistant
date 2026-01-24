@@ -1,7 +1,7 @@
 # ARISP System Architecture
-**Version:** 1.0
-**Status:** Approved
-**Last Updated:** 2025-01-23
+**Version:** 1.1
+**Status:** Phase 1.5 Complete
+**Last Updated:** 2026-01-24
 
 ---
 
@@ -39,15 +39,21 @@ ARISP (Automated Research Ingestion & Synthesis Pipeline) is a production-grade 
 │         ┌──────────────────┴──────────────────┐           │
 │         │                                      │           │
 │    ┌────▼────┐  ┌────────┐  ┌─────────┐  ┌───▼────┐     │
-│    │Semantic │  │  PDFs  │  │   LLM   │  │ Catalog│     │
-│    │Scholar  │  │(marker)│  │(Claude/ │  │   DB   │     │
-│    │   API   │  │        │  │Gemini)  │  │        │     │
-│    └─────────┘  └────────┘  └─────────┘  └────────┘     │
+│    │ ArXiv   │  │  PDFs  │  │   LLM   │  │ Catalog│     │
+│    │   API   │  │(marker)│  │(Claude/ │  │   DB   │     │
+│    │(Default)│  │        │  │Gemini)  │  │        │     │
+│    └────┬────┘  └────────┘  └─────────┘  └────────┘     │
+│         │                                                  │
+│    ┌────▼────┐                                            │
+│    │Semantic │                                            │
+│    │Scholar  │                                            │
+│    │(Optional)                                            │
+│    └─────────┘                                            │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Capabilities
-- **Discovery**: Semantic Scholar API integration with flexible queries
+- **Discovery**: Multi-provider support (ArXiv default, Semantic Scholar optional) with flexible queries
 - **Processing**: PDF→Markdown conversion with code preservation
 - **Extraction**: LLM-powered content analysis with configurable targets
 - **Intelligence**: Deduplication, caching, quality filtering

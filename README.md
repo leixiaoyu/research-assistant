@@ -5,7 +5,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Security: High](https://img.shields.io/badge/security-high-green.svg)](docs/security/)
-[![Test Coverage: 95%](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](tests/)
+[![Test Coverage: 97%](https://img.shields.io/badge/coverage-97%25-brightgreen.svg)](tests/)
 
 ## 🎯 Overview
 
@@ -201,7 +201,7 @@ output/
 ```
 ┌──────────┬──────────┬──────────┬──────────┬──────────┐
 │ Phase 1  │Phase 1.5 │ Phase 2  │ Phase 3  │ Phase 4  │
-│ ✅ Done  │⏳ 3-5d   │📋 2wks   │📋 2wks   │📋 1wk    │
+│ ✅ Done  │ ✅ Done  │📋 2wks   │📋 2wks   │📋 1wk    │
 │          │          │          │          │          │
 │Foundation│ Provider │Extraction│Optimize  │ Harden   │
 └──────────┴──────────┴──────────┴──────────┴──────────┘
@@ -209,23 +209,23 @@ output/
 
 **Completed**:
 - ✅ Architecture design and comprehensive specifications
-- ✅ Phase 1: Foundation & Core Pipeline
+- ✅ **Phase 1: Foundation & Core Pipeline** (Jan 2026)
   - Configuration management with YAML validation
   - Semantic Scholar API integration (ready when keys arrive)
   - Intelligent catalog with deduplication
   - Obsidian-compatible markdown output
   - 95% test coverage, all security requirements met
-- ✅ Phase 1.5: Discovery Provider Abstraction (Approved)
+- ✅ **Phase 1.5: Discovery Provider Abstraction** (Jan 2026)
   - ArXiv integration (no API key required!)
   - Provider Pattern (Strategy Pattern) implementation
-  - 100% PDF access guarantee
-  - Real testing enabled
-
-**In Progress**:
-- ⏳ Phase 1.5 Implementation (3-5 days)
+  - 100% PDF access guarantee for all papers
+  - Comprehensive test coverage: **97% overall, 98% for SemanticScholar**
+  - 72 automated tests (100% pass rate)
+  - Runtime rate limiting verification
+  - All 5 Phase 1.5 security requirements verified
 
 **Next**:
-- 📋 Phase 2: PDF Processing & LLM Extraction (2 weeks)
+- 📋 **Phase 2: PDF Processing & LLM Extraction** (2 weeks)
 - 📋 Phase 3: Intelligence & Optimization (2 weeks)
 - 📋 Phase 4: Production Hardening (1 week)
 
@@ -256,12 +256,14 @@ output/
 
 ## 📊 Performance & Quality
 
-### Current Metrics (Phase 1)
-- ✅ **Test Coverage**: 95% (exceeds 80% requirement)
-- ✅ **Security Compliance**: 12/12 requirements met
+### Current Metrics (Phase 1 + 1.5)
+- ✅ **Test Coverage**: **97%** (exceeds ≥95% requirement)
+- ✅ **Security Compliance**: **17/17 requirements met** (12 Phase 1 + 5 Phase 1.5)
+- ✅ **Test Suite**: 72 automated tests (100% pass rate)
 - ✅ **Configuration Validation**: <1s
 - ✅ **Catalog Operations**: <100ms
 - ✅ **Memory Usage**: <100MB idle
+- ✅ **Rate Limiting**: 3-second delay verified (ArXiv compliance)
 
 ### Target Metrics (Phase 3)
 - 🎯 **Processing Speed**: 50 papers in <30 minutes
@@ -287,11 +289,12 @@ output/
 - ✅ **SR-11**: API security (HTTPS only, SSL validation)
 - ✅ **SR-12**: Security testing (4/4 tests passing)
 
-**Phase 1.5 Security:**
-- ✅ **SR-1.5-1**: ArXiv rate limiting (3s minimum, IP ban prevention)
-- ✅ **SR-1.5-2**: Provider input validation
-- ✅ **SR-1.5-3**: PDF URL validation (pattern matching)
-- ✅ **SR-1.5-4**: Provider selection validation (enum enforced)
+**Phase 1.5 Security (5 Additional Requirements):**
+- ✅ **SR-1.5-1**: ArXiv rate limiting (3s minimum, IP ban prevention, runtime verified)
+- ✅ **SR-1.5-2**: Provider input validation (query sanitization)
+- ✅ **SR-1.5-3**: PDF URL validation (HTTPS enforcement, pattern matching)
+- ✅ **SR-1.5-4**: Provider selection validation (enum enforced, whitelist only)
+- ✅ **SR-1.5-5**: API response validation (status codes, malformed data handling)
 
 See [Security Audit](docs/security/DEPENDENCY_SECURITY_AUDIT.md) for vulnerability scan results.
 

@@ -1,639 +1,178 @@
 # Phase 1: Foundation & Core Pipeline (MVP)
-**Version:** 1.0
-**Status:** Draft
+**Version:** 2.2
+**Status:** Approved - OpenSpec Compliant
 **Timeline:** 2 weeks
-**Dependencies:** None
 
-## Architecture Reference
+---
 
-This phase implements the foundational components defined in [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md).
+## 1. Executive Summary
 
-**Architectural Gaps Addressed:**
-- ✅ Gap #1: Data Models & Type Safety (Pydantic models)
-- ✅ Gap #8: Error Handling (error taxonomy)
-- ✅ Gap #12: CLI Framework (typer)
+Phase 1 establishes the secure, production-grade foundation for the **Automated Research Ingestion & Synthesis Pipeline (ARISP)**. This phase delivers a working end-to-end pipeline capable of discovering research papers from Semantic Scholar, organizing them intelligently, and generating structured markdown output—all with security as the #1 priority.
 
-**Components Implemented:**
-- Infrastructure Layer: Config Manager, basic logging
-- Service Layer: Discovery Service, Catalog Service
-- CLI Layer: Command-line interface
-- Data Models: Configuration, Paper, Catalog models (see [Architecture §4](../SYSTEM_ARCHITECTURE.md#data-models))
+---
 
-**Deferred to Later Phases:**
-- Concurrency (Phase 3)
-- LLM extraction (Phase 2)
-- Advanced observability (Phase 4)
+## 2. Requirements
 
-## Overview
+### Requirement: Configurable Research Topics
+The system SHALL allow users to define multiple research topics via a YAML configuration file to enable flexible research queries without code changes.
 
-Establish the foundational architecture for ARISP with a working end-to-end pipeline for a single research topic. This phase focuses on core infrastructure, data models, configuration management, and basic research discovery without PDF processing.
+#### Scenario: Load Valid Configuration
+**Given** a `research_config.yaml` file with a valid list of topics
+**When** the pipeline is initialized
+**Then** the system SHALL parse all topics, including query strings, timeframes, and max paper limits.
 
-## Objectives
+#### Scenario: Reject Invalid Configuration
+**Given** a `research_config.yaml` file with missing required fields (e.g., empty query)
+**When** the pipeline attempts to load the config
+**Then** the system SHALL raise a validation error and terminate with a descriptive message.
 
-### Primary Objectives
-1. ✅ Establish type-safe data models using Pydantic
-2. ✅ Implement configuration management with validation
-3. ✅ Integrate Semantic Scholar API for paper discovery
-4. ✅ Build intelligent catalog system with topic deduplication
-5. ✅ Generate Obsidian-compatible markdown output
-6. ✅ Create modern CLI using typer
+### Requirement: Flexible Time Horizons
+The system SHALL support filtering research papers by various time horizons to allow both current awareness and historical analysis.
 
-### Success Criteria
-- [ ] Can search Semantic Scholar for papers matching a query
-- [ ] Can handle all three timeframe types (recent, since_year, date_range)
-- [ ] Can detect duplicate topics and append to existing folders
-- [ ] Can generate valid Obsidian markdown with metadata
-- [ ] Can run via CLI: `python main.py`
-- [ ] All data structures have type hints and Pydantic validation
+#### Scenario: Recent Timeframe
+**Given** a topic configured with `timeframe: type: recent, value: 48h`
+**When** the discovery service queries the API
+**Then** it SHALL request papers published within the last 48 hours.
 
-## Architecture
+#### Scenario: Since Year Timeframe
+**Given** a topic configured with `timeframe: type: since_year, value: 2023`
+**When** the discovery service queries the API
+**Then** it SHALL request papers published in or after 2023.
 
-### Module Structure
+#### Scenario: Date Range Timeframe
+**Given** a topic configured with a specific start and end date
+**When** the discovery service queries the API
+**Then** it SHALL request papers published strictly within that range.
+
+### Requirement: Intelligent Topic Organization
+The system SHALL organize research outputs by topic and detect duplicate queries to prevent redundant work.
+
+#### Scenario: Detect Duplicate Topic
+**Given** a new topic query that matches an existing topic (case-insensitive, normalized)
+**When** the catalog service processes the topic
+**Then** it SHALL identify the existing topic folder and reuse it instead of creating a new one.
+
+#### Scenario: Create New Topic Folder
+**Given** a unique topic query "Deep Learning"
+**When** the catalog service processes the topic
+**Then** it SHALL generate a filesystem-safe slug (e.g., `deep-learning`) and create a corresponding output directory.
+
+### Requirement: Secure Credential Management
+The system SHALL manage sensitive credentials securely, preventing any exposure in source code or logs.
+
+#### Scenario: Load API Key from Env
+**Given** a `.env` file containing `SEMANTIC_SCHOLAR_API_KEY`
+**When** the configuration manager loads
+**Then** it SHALL read the key into memory.
+
+#### Scenario: Missing API Key
+**Given** no API key is present in environment variables
+**When** the system starts
+**Then** it SHALL terminate immediately with a security error message.
+
+---
+
+## 3. Technical Specifications
+
+### 3.1 Directory Structure
 ```
-research-assist/
-├── src/
-│   ├── __init__.py
-│   ├── models/               # Data models
-│   │   ├── __init__.py
-│   │   ├── config.py         # Config models
-│   │   ├── paper.py          # Paper metadata
-│   │   └── catalog.py        # Catalog models
-│   ├── services/             # Business logic
-│   │   ├── __init__.py
-│   │   ├── config_manager.py
-│   │   ├── search_service.py
-│   │   └── catalog_service.py
-│   ├── output/               # Output generation
-│   │   ├── __init__.py
-│   │   └── markdown_generator.py
-│   ├── utils/                # Utilities
-│   │   ├── __init__.py
-│   │   ├── logging.py
-│   │   └── slug.py
-│   └── cli.py                # CLI entry point
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   └── fixtures/
+src/
+├── __init__.py
+├── cli.py                     # CLI Entry point
 ├── config/
-│   ├── research_config.yaml
-│   └── .env.template
-├── output/                   # Generated output
-├── requirements.txt
-├── setup.py
-└── pytest.ini
+│   ├── __init__.py
+│   └── settings.py            # Global constant settings
+├── models/                    # Pydantic Data Models
+│   ├── __init__.py
+│   ├── config.py              # ResearchConfig, Timeframe
+│   ├── paper.py               # PaperMetadata, Author
+│   └── catalog.py             # Catalog, TopicCatalogEntry
+├── services/                  # Business Logic Services
+│   ├── __init__.py
+│   ├── config_manager.py      # Infrastructure: Config loading
+│   ├── discovery_service.py   # Service: Semantic Scholar API
+│   └── catalog_service.py     # Service: Deduplication & Org
+├── output/
+│   ├── __init__.py
+│   └── markdown_generator.py  # Presentation logic
+└── utils/
+    ├── __init__.py
+    ├── logging.py             # Structlog setup
+    ├── security.py            # PathSanitizer, InputValidation
+    └── validators.py
 ```
 
-## Technical Specifications
+### 3.2 Data Models
 
-### 1. Data Models (`src/models/`)
-
-#### 1.1 Configuration Models (`config.py`)
+#### Configuration (`models/config.py`)
 ```python
+from enum import Enum
 from pydantic import BaseModel, Field, validator
 from typing import Literal, Union, List
 from datetime import date
 
-class TimeframeRecent(BaseModel):
-    """Recent timeframe (e.g., last 48 hours)"""
-    type: Literal["recent"] = "recent"
-    value: str  # e.g., "48h", "7d", "30d"
+class TimeframeType(str, Enum):
+    RECENT = "recent"
+    SINCE_YEAR = "since_year"
+    DATE_RANGE = "date_range"
 
-    @validator("value")
-    def validate_recent_format(cls, v):
-        import re
-        if not re.match(r'^\d+[hd]$', v):
-            raise ValueError("Recent format must be like '48h' or '7d'")
-        return v
+class TimeframeRecent(BaseModel):
+    type: Literal[TimeframeType.RECENT] = TimeframeType.RECENT
+    value: str = Field(..., pattern=r'^\d+[hd])
 
 class TimeframeSinceYear(BaseModel):
-    """Papers since a specific year"""
-    type: Literal["since_year"] = "since_year"
-    value: int  # e.g., 2008
-
-    @validator("value")
-    def validate_year(cls, v):
-        if v < 1900 or v > 2100:
-            raise ValueError("Year must be between 1900 and 2100")
-        return v
+    type: Literal[TimeframeType.SINCE_YEAR] = TimeframeType.SINCE_YEAR
+    value: int = Field(..., ge=1900, le=2100)
 
 class TimeframeDateRange(BaseModel):
-    """Custom date range"""
-    type: Literal["date_range"] = "date_range"
+    type: Literal[TimeframeType.DATE_RANGE] = TimeframeType.DATE_RANGE
     start_date: date
     end_date: date
-
-    @validator("end_date")
-    def validate_date_range(cls, v, values):
-        if "start_date" in values and v < values["start_date"]:
-            raise ValueError("end_date must be after start_date")
-        return v
 
 Timeframe = Union[TimeframeRecent, TimeframeSinceYear, TimeframeDateRange]
 
 class ResearchTopic(BaseModel):
-    """A single research topic configuration"""
-    query: str = Field(..., min_length=1, description="Search query string")
+    query: str = Field(..., min_length=1)
     timeframe: Timeframe
-    max_papers: int = Field(50, ge=1, le=500, description="Max papers to fetch")
-
-    @validator("query")
-    def validate_query(cls, v):
-        if len(v.strip()) == 0:
-            raise ValueError("Query cannot be empty")
-        return v.strip()
-
-class GlobalSettings(BaseModel):
-    """Global pipeline settings"""
-    output_base_dir: str = Field("./output", description="Base output directory")
-    enable_duplicate_detection: bool = Field(True, description="Enable topic deduplication")
-    semantic_scholar_api_key: str = Field(..., min_length=1, description="Semantic Scholar API key")
-
-class ResearchConfig(BaseModel):
-    """Root configuration model"""
-    research_topics: List[ResearchTopic] = Field(..., min_items=1)
-    settings: GlobalSettings
-
-    class Config:
-        extra = "forbid"  # Reject unknown fields
+    max_papers: int = Field(50, ge=1)
 ```
 
-#### 1.2 Paper Models (`paper.py`)
+#### Paper Metadata (`models/paper.py`)
 ```python
 from pydantic import BaseModel, Field, HttpUrl
 from typing import Optional, List
 from datetime import datetime
 
 class Author(BaseModel):
-    """Paper author information"""
     name: str
     author_id: Optional[str] = None
 
 class PaperMetadata(BaseModel):
-    """Metadata for a single research paper"""
-    paper_id: str = Field(..., description="Semantic Scholar paper ID")
+    paper_id: str
     title: str
-    abstract: Optional[str] = None
+    abstract: Optional[str]
     url: HttpUrl
-    doi: Optional[str] = None
-    publication_date: Optional[datetime] = None
-    year: Optional[int] = None
-    authors: List[Author] = Field(default_factory=list)
-    citation_count: int = 0
-    open_access_pdf: Optional[HttpUrl] = None
-
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat(),
-            HttpUrl: lambda v: str(v)
-        }
-
-class SearchResult(BaseModel):
-    """Result from a search query"""
-    query: str
-    timeframe: str
-    total_found: int
-    papers: List[PaperMetadata]
-    search_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    publication_date: Optional[datetime]
+    authors: List[Author] = []
+    open_access_pdf: Optional[HttpUrl]
+    relevance_score: float = 0.0
 ```
 
-#### 1.3 Catalog Models (`catalog.py`)
-```python
-from pydantic import BaseModel, Field
-from typing import List, Dict
-from datetime import datetime
-
-class CatalogRun(BaseModel):
-    """A single pipeline run for a topic"""
-    run_id: str
-    date: datetime
-    papers_found: int
-    timeframe: str
-    output_file: str
-
-class TopicCatalogEntry(BaseModel):
-    """Catalog entry for a research topic"""
-    topic_slug: str
-    query: str
-    folder: str
-    created_at: datetime
-    runs: List[CatalogRun] = Field(default_factory=list)
-
-class Catalog(BaseModel):
-    """Master catalog of all research"""
-    version: str = "1.0"
-    topics: Dict[str, TopicCatalogEntry] = Field(default_factory=dict)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
-
-    def get_or_create_topic(self, topic_slug: str, query: str) -> TopicCatalogEntry:
-        """Get existing topic or create new entry"""
-        if topic_slug not in self.topics:
-            self.topics[topic_slug] = TopicCatalogEntry(
-                topic_slug=topic_slug,
-                query=query,
-                folder=topic_slug,
-                created_at=datetime.utcnow()
-            )
-        return self.topics[topic_slug]
-```
-
-### 2. Configuration Manager (`src/services/config_manager.py`)
-
-**Responsibilities:**
-- Load and validate `research_config.yaml`
-- Merge with environment variables from `.env`
-- Generate topic slugs
-- Manage catalog.json
-- Determine output paths
-
-**Key Functions:**
-```python
-class ConfigManager:
-    def __init__(self, config_path: str = "config/research_config.yaml"):
-        """Initialize config manager"""
-
-    def load_config(self) -> ResearchConfig:
-        """Load and validate configuration"""
-
-    def generate_topic_slug(self, query: str) -> str:
-        """Convert query to filesystem-safe slug
-
-        Example: "Tree of Thoughts AND machine translation"
-                 → "tree-of-thoughts-and-machine-translation"
-        """
-
-    def load_catalog(self) -> Catalog:
-        """Load existing catalog or create new"""
-
-    def save_catalog(self, catalog: Catalog) -> None:
-        """Save catalog to disk atomically"""
-
-    def get_output_path(self, topic_slug: str, catalog: Catalog) -> Path:
-        """Determine output directory for topic
-
-        If topic exists in catalog, return existing folder
-        Otherwise, create new folder
-        """
-```
-
-**Implementation Details:**
-- Use `pyyaml` for YAML parsing
-- Use `python-dotenv` for .env loading
-- Atomic writes for catalog.json (write to temp, then rename)
-- File locking to prevent concurrent catalog corruption
-- Validation errors should be user-friendly
-
-### 3. Search Service (`src/services/search_service.py`)
-
-**Responsibilities:**
-- Query Semantic Scholar API
-- Handle timeframe conversion
-- Parse API responses into PaperMetadata
-- Handle API errors and rate limits
-
-**Key Functions:**
-```python
-class SearchService:
-    def __init__(self, api_key: str):
-        """Initialize with API key"""
-
-    async def search(self, topic: ResearchTopic) -> SearchResult:
-        """Search for papers matching topic
-
-        Args:
-            topic: ResearchTopic with query and timeframe
-
-        Returns:
-            SearchResult with list of papers
-
-        Raises:
-            APIError: If API call fails after retries
-            RateLimitError: If rate limit exceeded
-        """
-
-    def _convert_timeframe(self, timeframe: Timeframe) -> dict:
-        """Convert timeframe to API parameters
-
-        Examples:
-            TimeframeRecent("48h") → {"publicationDate": "2025-01-21:"}
-            TimeframeSinceYear(2008) → {"year": "2008-"}
-            TimeframeDateRange(...) → {"publicationDate": "2020-01-01:2020-12-31"}
-        """
-
-    def _parse_response(self, response: dict) -> List[PaperMetadata]:
-        """Parse API response into PaperMetadata models"""
-```
-
-**API Integration:**
-- Endpoint: `https://api.semanticscholar.org/graph/v1/paper/search`
-- Fields to request: `paperId,title,abstract,url,authors,year,publicationDate,citationCount,openAccessPdf`
-- Rate limit: 100 requests/5 minutes (use exponential backoff)
-- Timeout: 30 seconds per request
-
-### 4. Catalog Service (`src/services/catalog_service.py`)
-
-**Responsibilities:**
-- Topic normalization and deduplication
-- Catalog CRUD operations
-- Run tracking
-
-**Key Functions:**
-```python
-class CatalogService:
-    def __init__(self, catalog_path: Path):
-        """Initialize catalog service"""
-
-    def find_existing_topic(self, query: str, catalog: Catalog) -> Optional[str]:
-        """Find existing topic by normalized query
-
-        Uses fuzzy matching and normalization to detect duplicates:
-        - Case insensitive
-        - Ignore punctuation
-        - Normalize whitespace
-        - Remove common words (AND, OR)
-        """
-
-    def add_run(
-        self,
-        catalog: Catalog,
-        topic_slug: str,
-        query: str,
-        papers_found: int,
-        timeframe: str,
-        output_file: str
-    ) -> Catalog:
-        """Add a run to the catalog"""
-
-    def get_topic_history(self, catalog: Catalog, topic_slug: str) -> List[CatalogRun]:
-        """Get all runs for a topic"""
-```
-
-### 5. Markdown Generator (`src/output/markdown_generator.py`)
-
-**Responsibilities:**
-- Generate Obsidian-compatible markdown
-- Format paper metadata
-- Add YAML frontmatter
-
-**Output Format:**
-```markdown
----
-topic: "Tree of Thoughts AND machine translation"
-date: 2025-01-23
-papers_processed: 15
-timeframe: "recent:48h"
-run_id: "20250123-143052"
----
-
-# Research Brief: Tree of Thoughts AND Machine Translation
-
-**Generated:** 2025-01-23 14:30:52 UTC
-**Papers Found:** 15
-**Timeframe:** Last 48 hours
-
-## Papers
-
-### 1. [Paper Title](https://doi.org/...)
-**Authors:** John Doe, Jane Smith
-**Published:** 2025-01-22
-**Citations:** 5
-
-**Abstract:**
-Lorem ipsum dolor sit amet...
+### 3.3 Security Mandates
+- **Credential Management:** `DiscoveryService` SHALL load API keys strictly from environment variables.
+- **Input Validation:** All Pydantic models SHALL use strict validators.
+- **Path Sanitization:** `ConfigManager` and `CatalogService` SHALL use `PathSanitizer` to prevent directory traversal.
 
 ---
 
-### 2. [Another Paper](https://doi.org/...)
-...
+## 4. Verification Plan
 
-## Summary Statistics
+1.  **Automated Tests:**
+    - Unit tests for all Models (validation logic).
+    - Unit tests for `DiscoveryService` (mocked API).
+    - Unit tests for `CatalogService` (deduplication logic).
+    - **Coverage:** Must exceed 80%.
 
-- Total papers: 15
-- Average citations: 12.3
-- Date range: 2025-01-20 to 2025-01-22
-```
-
-**Key Functions:**
-```python
-class MarkdownGenerator:
-    def generate(
-        self,
-        search_result: SearchResult,
-        topic: ResearchTopic,
-        run_id: str
-    ) -> str:
-        """Generate markdown content"""
-
-    def _format_frontmatter(self, metadata: dict) -> str:
-        """Generate YAML frontmatter"""
-
-    def _format_paper(self, paper: PaperMetadata, index: int) -> str:
-        """Format a single paper entry"""
-
-    def _format_statistics(self, papers: List[PaperMetadata]) -> str:
-        """Generate summary statistics"""
-```
-
-### 6. CLI (`src/cli.py`)
-
-**Commands:**
-```bash
-# Run pipeline with default config
-python -m src.cli run
-
-# Run with custom config
-python -m src.cli run --config custom.yaml
-
-# Validate config without running
-python -m src.cli validate --config research_config.yaml
-
-# Show catalog
-python -m src.cli catalog show
-
-# Show history for a topic
-python -m src.cli catalog history "tree-of-thoughts-and-machine-translation"
-
-# Version info
-python -m src.cli version
-```
-
-**Implementation:**
-```python
-import typer
-from pathlib import Path
-from typing import Optional
-
-app = typer.Typer()
-
-@app.command()
-def run(
-    config: Path = typer.Option(
-        "config/research_config.yaml",
-        "--config", "-c",
-        help="Path to research config YAML"
-    ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        help="Validate and plan without executing"
-    )
-):
-    """Run the research pipeline"""
-
-@app.command()
-def validate(
-    config: Path = typer.Argument(..., help="Config file to validate")
-):
-    """Validate configuration file"""
-
-@app.command()
-def catalog(subcommand: str, topic: Optional[str] = None):
-    """Manage catalog (show, history)"""
-
-if __name__ == "__main__":
-    app()
-```
-
-## Implementation Requirements
-
-### Dependencies
-```txt
-# requirements.txt
-pydantic>=2.0.0
-pyyaml>=6.0
-python-dotenv>=1.0.0
-typer>=0.9.0
-aiohttp>=3.9.0
-structlog>=23.1.0
-pytest>=7.4.0
-pytest-asyncio>=0.21.0
-black>=23.0.0
-mypy>=1.5.0
-```
-
-### Environment Variables
-```bash
-# .env.template
-SEMANTIC_SCHOLAR_API_KEY=your_api_key_here
-```
-
-### Configuration Template
-```yaml
-# config/research_config.yaml
-research_topics:
-  - query: "Tree of Thoughts AND machine translation"
-    timeframe:
-      type: "recent"
-      value: "48h"
-    max_papers: 50
-
-settings:
-  output_base_dir: "./output"
-  enable_duplicate_detection: true
-  semantic_scholar_api_key: "${SEMANTIC_SCHOLAR_API_KEY}"
-```
-
-## Testing Requirements
-
-### Unit Tests (80% coverage target)
-```python
-# tests/unit/test_models.py
-def test_timeframe_recent_validation():
-    """Test recent timeframe validation"""
-
-def test_config_loading():
-    """Test config loading and validation"""
-
-def test_topic_slug_generation():
-    """Test slug generation from queries"""
-
-# tests/unit/test_search_service.py
-def test_timeframe_conversion():
-    """Test timeframe to API parameter conversion"""
-
-# tests/unit/test_catalog_service.py
-def test_duplicate_detection():
-    """Test topic deduplication logic"""
-```
-
-### Integration Tests
-```python
-# tests/integration/test_end_to_end.py
-async def test_full_pipeline():
-    """Test complete pipeline flow"""
-    # 1. Load config
-    # 2. Search Semantic Scholar (mocked)
-    # 3. Update catalog
-    # 4. Generate markdown
-    # 5. Verify output
-```
-
-### Test Fixtures
-```python
-# tests/fixtures/sample_config.yaml
-# tests/fixtures/sample_api_response.json
-# tests/fixtures/sample_catalog.json
-```
-
-## Acceptance Criteria
-
-### Functional Requirements
-- [ ] Load and validate research_config.yaml
-- [ ] Query Semantic Scholar API successfully
-- [ ] Handle all three timeframe types correctly
-- [ ] Generate topic slugs consistently
-- [ ] Detect duplicate topics (>90% accuracy)
-- [ ] Create output directories automatically
-- [ ] Generate valid Obsidian markdown
-- [ ] Update catalog.json atomically
-- [ ] CLI works for all commands
-- [ ] Error messages are user-friendly
-
-### Non-Functional Requirements
-- [ ] All data models use Pydantic
-- [ ] 100% type hint coverage
-- [ ] 80%+ test coverage
-- [ ] Code formatted with black
-- [ ] Type checking passes (mypy)
-- [ ] All tests pass
-- [ ] Documentation complete (docstrings)
-- [ ] README.md updated
-
-### Performance Requirements
-- [ ] Config validation < 1s
-- [ ] Single topic search < 10s
-- [ ] Catalog operations < 100ms
-- [ ] Markdown generation < 1s
-
-## Deliverables
-
-1. ✅ Source code for all modules
-2. ✅ Unit and integration tests
-3. ✅ Configuration templates (.env.template, research_config.yaml)
-4. ✅ Updated requirements.txt
-5. ✅ CLI documentation
-6. ✅ Developer setup guide
-
-## Risks & Mitigations
-
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Semantic Scholar API changes | HIGH | Pin API version, abstract API client |
-| API rate limits | MEDIUM | Implement backoff, cache responses |
-| Config validation too strict | LOW | Provide helpful error messages |
-| Slug collision | LOW | Add hash suffix if needed |
-
-## Future Considerations (Not in Phase 1)
-
-- PDF processing (Phase 2)
-- LLM extraction (Phase 2)
-- Concurrent processing (Phase 3)
-- Caching (Phase 3)
-- Metrics/monitoring (Phase 4)
-
-## Sign-off
-
-- [ ] Product Owner Approval
-- [ ] Technical Lead Approval
-- [ ] Security Review Complete
-- [ ] Ready for Development
+2.  **Manual Verification:**
+    - Verify "Happy Path": Config load -> Search -> Catalog Update -> Markdown Gen.
+    - Verify "Security Path": Injection attempts in config, missing API keys.

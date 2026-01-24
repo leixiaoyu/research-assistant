@@ -14,8 +14,22 @@ The following requirements are **absolute** and **block all commits and pushes**
 2. **🧪 Test Coverage:** ≥95% coverage for all modules (target 100%)
 3. **✅ Tests Passing:** 100% pass rate (0 failures)
 4. **📋 Completeness:** All feature requirements fully implemented
+5. **🔏 Branch Protection:** No direct pushes to `main`. All changes via PR only.
 
 **If ANY of these fail, you MUST stop and fix before committing or pushing. No exceptions.**
+
+---
+
+## Workflow & Branch Protection (Strict)
+
+**Direct pushes to `main` are disabled and strictly forbidden.**
+
+### PR Requirements (Non-Negotiable)
+Before a Pull Request can be merged into `main`:
+1. **CI Status:** The "test (3.10)" workflow must pass with **100% success rate**.
+2. **Coverage:** The "test (3.10)" workflow must verify **≥95% test coverage**.
+3. **Approval:** At least **one approving review** from a human teammate is required.
+4. **Admin Enforcement:** These rules apply to **all users**, including administrators. No bypasses.
 
 ---
 
@@ -77,6 +91,7 @@ Every feature must have:
    - Integration tests for service interactions
    - End-to-end tests for critical workflows
    - **Test coverage ≥95% (see Test Coverage section above)**
+   - **100% pass rate required for all CI pipelines**
 
 2. **Manual Verification** (when automated tests insufficient):
    - Step-by-step manual testing by Gemini CLI

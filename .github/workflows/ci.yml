@@ -38,4 +38,4 @@ jobs:
         SEMANTIC_SCHOLAR_API_KEY: "dummy_key_for_ci" # Mock key for tests
       run: |
         # Use python -m pytest to ensure src is in sys.path
-        python -m pytest --cov=src --cov-report=term-missing --cov-fail-under=80 tests/
+        python -m pytest --cov=src --cov-report=term-missing --cov-fail-under=95 tests/

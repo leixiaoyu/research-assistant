@@ -53,7 +53,7 @@ async def test_search_rate_limit(provider, topic):
             await provider.search(topic)
 
 def test_build_query_params(provider, topic):
-    params = provider._build_query_params(topic)
+    params = provider._build_query_params(topic, topic.query)
     assert params["query"] == "test query"
     assert "publicationDateOrYear" in params
     assert ":" in params["publicationDateOrYear"]

@@ -333,7 +333,7 @@ def test_parse_response_open_access_pdf_with_url(provider):
 
     papers = provider._parse_response(response)
     assert len(papers) == 1
-    assert papers[0].open_access_pdf == "https://example.com/paper.pdf"
+    assert str(papers[0].open_access_pdf) == "https://example.com/paper.pdf"
 
 
 def test_parse_response_invalid_publication_date(provider):
@@ -388,8 +388,8 @@ def test_parse_response_paper_parsing_exception(provider):
     response = {
         "data": [
             {
-                "paperId": "123",
-                # Missing required 'title' field - will cause exception
+                # Missing required 'paperId' field - will cause KeyError
+                "title": "Broken Paper"
             },
             {
                 "paperId": "456",
@@ -435,7 +435,7 @@ def test_parse_response_missing_url_uses_default(provider):
 
     papers = provider._parse_response(response)
     assert len(papers) == 1
-    assert papers[0].url == "https://semanticscholar.org/paper/abc123"
+    assert str(papers[0].url) == "https://semanticscholar.org/paper/abc123"
 
 
 def test_parse_response_complete_paper(provider):
@@ -466,11 +466,11 @@ def test_parse_response_complete_paper(provider):
     assert paper.paper_id == "123"
     assert paper.title == "Complete Paper"
     assert paper.abstract == "This is the abstract"
-    assert paper.url == "https://example.com/paper"
+    assert str(paper.url) == "https://example.com/paper"
     assert paper.year == 2023
     assert paper.publication_date.year == 2023
     assert len(paper.authors) == 2
     assert paper.citation_count == 42
     assert paper.influential_citation_count == 5
     assert paper.venue == "ICML 2023"
-    assert paper.open_access_pdf == "https://example.com/paper.pdf"
+    assert str(paper.open_access_pdf) == "https://example.com/paper.pdf"

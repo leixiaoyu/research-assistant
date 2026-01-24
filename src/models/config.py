@@ -49,9 +49,14 @@ class TimeframeDateRange(BaseModel):
 
 Timeframe = Union[TimeframeRecent, TimeframeSinceYear, TimeframeDateRange]
 
+class ProviderType(str, Enum):
+    ARXIV = "arxiv"
+    SEMANTIC_SCHOLAR = "semantic_scholar"
+
 class ResearchTopic(BaseModel):
     """A single research topic configuration"""
     query: str = Field(..., min_length=1, max_length=500)
+    provider: ProviderType = Field(ProviderType.ARXIV, description="Discovery provider")
     timeframe: Timeframe
     max_papers: int = Field(50, ge=1, le=1000)
 

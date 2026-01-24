@@ -21,6 +21,33 @@ class SemanticScholarProvider(DiscoveryProvider):
         self.api_key = api_key
         self.rate_limiter = rate_limiter or RateLimiter(requests_per_minute=100)
 
+    @property
+    def name(self) -> str:
+        """Provider name"""
+        return "semantic_scholar"
+
+    @property
+    def requires_api_key(self) -> bool:
+        """Semantic Scholar requires an API key"""
+        return True
+
+    def validate_query(self, query: str) -> str:
+        """Validate Semantic Scholar query syntax"""
+        # Semantic Scholar accepts natural language queries and boolean operators
+        # Basic validation: non-empty and reasonable length
+        if not query or not query.strip():
+            raise ValueError("Query cannot be empty")
+
+        if len(query) > 500:
+            raise ValueError("Query too long (max 500 characters)")
+
+        # Semantic Scholar is more permissive than ArXiv
+        # Just ensure no control characters
+        if any(ord(c) < 32 for c in query if c not in '\t\n\r'):
+            raise ValueError("Query contains invalid control characters")
+
+        return query.strip()
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -28,8 +55,16 @@ class SemanticScholarProvider(DiscoveryProvider):
     )
     async def search(self, topic: ResearchTopic) -> List[PaperMetadata]:
         """Search for papers matching topic"""
-        
-        params = self._build_query_params(topic)
+
+        # 1. Validate Query
+        try:
+            safe_query = self.validate_query(topic.query)
+        except ValueError as e:
+            logger.error("invalid_semantic_scholar_query", query=topic.query, error=str(e))
+            return []
+
+        # 2. Build Params
+        params = self._build_query_params(topic, safe_query)
         
         await self.rate_limiter.acquire()
         
@@ -70,10 +105,10 @@ class SemanticScholarProvider(DiscoveryProvider):
         
         return papers
 
-    def _build_query_params(self, topic: ResearchTopic) -> dict:
+    def _build_query_params(self, topic: ResearchTopic, query: str) -> dict:
         """Convert topic to API parameters"""
         params = {
-            "query": topic.query,
+            "query": query,
             "limit": topic.max_papers,
             "fields": "paperId,title,abstract,url,authors,year,publicationDate,citationCount,influentialCitationCount,venue,openAccessPdf"
         }

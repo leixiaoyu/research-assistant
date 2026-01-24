@@ -70,7 +70,7 @@ class GlobalSettings(BaseModel):
     """Global pipeline settings"""
     output_base_dir: str = Field("./output", description="Base output directory")
     enable_duplicate_detection: bool = Field(True, description="Enable topic deduplication")
-    semantic_scholar_api_key: str = Field(..., min_length=10, description="Semantic Scholar API key")
+    semantic_scholar_api_key: Optional[str] = Field(None, min_length=10, description="Semantic Scholar API key (optional, only required for Semantic Scholar provider)")
 
 class ResearchConfig(BaseModel):
     """Root configuration model"""

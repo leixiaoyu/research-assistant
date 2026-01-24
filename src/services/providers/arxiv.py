@@ -26,6 +26,16 @@ class ArxivProvider(DiscoveryProvider):
             burst_size=1
         )
 
+    @property
+    def name(self) -> str:
+        """Provider name"""
+        return "arxiv"
+
+    @property
+    def requires_api_key(self) -> bool:
+        """ArXiv does not require an API key"""
+        return False
+
     def validate_query(self, query: str) -> str:
         """Validate ArXiv query syntax"""
         # Allow alphanumeric, spaces, and basic boolean operators/syntax chars
@@ -90,25 +100,10 @@ class ArxivProvider(DiscoveryProvider):
 
     def _build_query_params(self, topic: ResearchTopic, query: str) -> str:
         """Build ArXiv query string"""
-        # ArXiv query format: search_query=all:electron&start=0&max_results=10
-        # We need to map timeframes to query if possible, or filter post-fetch.
-        # ArXiv API search_query doesn't support date ranges well in the main query param easily 
-        # without using internal fields like 'submittedDate'.
-        # For simplicity in MVP, we might fetch and then filter if the API doesn't allow easy date range.
-        # OR we construct complex query: `all:query AND submittedDate:[202301010000 TO 202301022359]`
-        # Let's try to include it in the query string.
-        
         # Base query
-        # Note: 'all' searches all fields.
         q_part = f"all:{query}"
         
         # Timeframe
-        # ArXiv date format: YYYYMMDDHHMM
-        # We will append date logic if possible, or leave it for post-filtering if query complexity is high.
-        # Given ArXiv API limits, post-filtering is safer for ensuring we get the right papers, 
-        # BUT we might miss papers if they are outside the max_results window.
-        # Let's try to add date range to query.
-        
         tf = topic.timeframe
         date_query = ""
         
@@ -122,8 +117,6 @@ class ArxivProvider(DiscoveryProvider):
              
              start_dt = datetime.utcnow() - timedelta(hours=delta_hours)
              start_str = start_dt.strftime("%Y%m%d%H%M")
-             # Open ended end date? 
-             # query: submittedDate:[202301010000 TO 209912312359]
              date_query = f"submittedDate:[{start_str} TO 300001010000]"
 
         elif isinstance(tf, TimeframeSinceYear):
@@ -138,8 +131,6 @@ class ArxivProvider(DiscoveryProvider):
         if date_query:
             q_part = f"{q_part} AND {date_query}"
 
-        # URL encode? feedparser handles some, but we build the string.
-        # We should encode the query value.
         import urllib.parse
         encoded_q = urllib.parse.quote(q_part)
         
@@ -162,8 +153,6 @@ class ArxivProvider(DiscoveryProvider):
                 authors = [Author(name=a.name) for a in entry.authors]
                 
                 # Date
-                # published: '2023-01-23T14:00:00Z'
-                # published_parsed: time.struct_time(...)
                 pub_date = None
                 year = None
                 if hasattr(entry, 'published_parsed'):
@@ -174,13 +163,10 @@ class ArxivProvider(DiscoveryProvider):
                 pdf_link = None
                 for link in entry.links:
                     if link.type == 'application/pdf':
-                        pdf_link = link.href
+                        raw_link = link.href
                         # Validate PDF URL for security
-                        self._validate_pdf_url(pdf_link)
+                        pdf_link = self._validate_pdf_url(raw_link)
                         break
-                
-                # If no direct PDF link found, try to construct from ID?
-                # ArXiv usually has it in links.
                 
                 paper = PaperMetadata(
                     paper_id=paper_id,
@@ -203,7 +189,7 @@ class ArxivProvider(DiscoveryProvider):
                 
         return papers
 
-    def _validate_pdf_url(self, url: str) -> None:
+    def _validate_pdf_url(self, url: str) -> str:
         """Security check for PDF URLs"""
         # ArXiv PDF pattern: https://arxiv.org/pdf/2301.12345.pdf or ...v1.pdf
         # Also allow http for now? No, strict HTTPS preferred, but feed might return http.
@@ -217,3 +203,5 @@ class ArxivProvider(DiscoveryProvider):
              # Spec said "Validate ArXiv PDF URLs match expected pattern".
              # Strict mode: raise error.
              raise SecurityError(f"Invalid ArXiv PDF URL: {url}")
+        
+        return url

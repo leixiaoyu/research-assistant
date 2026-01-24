@@ -6,6 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Philosophy
 
+**⚠️ NON-NEGOTIABLE BLOCKING REQUIREMENTS**
+
+The following requirements are **absolute** and **block all commits and pushes** without exception:
+
+1. **🔒 Security:** All security checklist items must pass
+2. **🧪 Test Coverage:** ≥95% coverage for all modules (target 100%)
+3. **✅ Tests Passing:** 100% pass rate (0 failures)
+4. **📋 Completeness:** All feature requirements fully implemented
+
+**If ANY of these fail, you MUST stop and fix before committing or pushing. No exceptions.**
+
+---
+
 ### 🔒 Security First (Non-Negotiable)
 
 **Security is the #1 priority and cannot be compromised under any circumstances.**
@@ -30,16 +43,40 @@ Before writing ANY code, you must:
 
 See [SYSTEM_ARCHITECTURE.md §9 Security](docs/SYSTEM_ARCHITECTURE.md#security) for complete security requirements.
 
+### 🧪 Test Coverage (Non-Negotiable)
+
+**Test coverage is a BLOCKING requirement for all commits and pushes to remote.**
+
+**Coverage Requirements:**
+- **Target:** 100% test coverage for all new code
+- **Minimum Acceptable:** 95% coverage per module
+- **Overall Project:** Must maintain ≥95% coverage at all times
+
+**If coverage falls below 95%, you MUST NOT commit or push. No exceptions.**
+
+**Pragmatic Approach:**
+- Aim for 100%, accept 95%+ with clear justification
+- Every uncovered line must be documented with reason (e.g., "unreachable defensive code", "external library limitation")
+- Coverage gaps must be tracked as technical debt and resolved within 1 sprint
+
+**Coverage Verification Checklist:**
+- [ ] Unit tests cover 100% of new functions/methods
+- [ ] Integration tests cover all service interactions
+- [ ] Edge cases have dedicated tests
+- [ ] Error paths are fully tested
+- [ ] `pytest --cov=src --cov-report=term-missing` shows ≥95%
+- [ ] Any uncovered lines documented in verification report
+
 ### 🧪 Test-Driven Development (Required)
 
 **No code should be pushed to remote without complete verification.**
 
 Every feature must have:
-1. **Automated Tests** (preferred):
+1. **Automated Tests** (required):
    - Unit tests for all functions
    - Integration tests for service interactions
    - End-to-end tests for critical workflows
-   - Test coverage >80%
+   - **Test coverage ≥95% (see Test Coverage section above)**
 
 2. **Manual Verification** (when automated tests insufficient):
    - Step-by-step manual testing by Claude Code
@@ -70,9 +107,16 @@ Every feature must have:
    - Status: PASS ✅
 
 ### Coverage
+- **Overall Coverage:** X% (MUST be ≥95%)
 - Unit Tests: X%
 - Integration Tests: Y%
 - Manual Tests: Z test cases
+
+### Uncovered Lines (if any)
+- `file.py:123` - Reason: [Defensive code for impossible state]
+- `file.py:456` - Reason: [External library error handling]
+
+**Coverage Status:** [PASS ✅ if ≥95%, FAIL ❌ if <95%]
 
 ### Security Verification
 - [ ] All security checklist items verified
@@ -93,9 +137,10 @@ Every feature must function **100% of the time** according to its specification 
 - All error cases handled gracefully
 - All inputs validated
 - All security requirements met
-- All tests passing
+- **All tests passing (100% pass rate)**
+- **Test coverage ≥95% for all modified modules**
 - All documentation updated
-- Verification report generated
+- Verification report generated with coverage proof
 
 **If ANY requirement is not met, the feature is INCOMPLETE and must not be pushed.**
 
@@ -242,21 +287,34 @@ The pipeline consists of five main modules:
 
 ### Before Committing
 1. Run all tests: `pytest tests/`
-2. Check test coverage: `pytest --cov=src --cov-report=term`
+2. **Check test coverage:** `pytest --cov=src --cov-report=term-missing`
+   - **MUST show ≥95% coverage for all modified modules**
+   - Document any uncovered lines with justification
 3. Format code: `black .`
 4. Type check: `mypy src/`
 5. Security scan: Check for hardcoded secrets
 6. Review security checklist
-7. Generate verification report
+7. Generate verification report with coverage proof
 
-### Before Pushing
-1. **All tests must pass** (100%)
-2. **Coverage must be >80%**
-3. **Security checklist complete**
-4. **Verification report generated**
-5. **Feature specification 100% met**
+### Before Pushing to Remote
 
-**If ANY requirement fails, do NOT push. Fix issues first.**
+**⚠️ BLOCKING REQUIREMENTS - ALL must pass:**
+
+1. **All tests must pass** (100% pass rate, 0 failures)
+2. **Coverage must be ≥95%** for all modified modules
+   - Run: `pytest --cov=src --cov-report=term-missing`
+   - Any module below 95% BLOCKS the push
+   - Overall project coverage must remain ≥95%
+3. **Security checklist complete** (all items checked)
+4. **Verification report generated** (includes coverage analysis)
+5. **Feature specification 100% met** (all requirements implemented)
+
+**If ANY requirement fails, you MUST NOT push. Fix issues first. No exceptions.**
+
+**Coverage Enforcement:**
+- If coverage < 95%: Add tests until ≥95%
+- If legitimately uncoverable: Document in verification report
+- If uncertain: Ask for clarification, do NOT push
 
 ---
 
@@ -277,13 +335,33 @@ The pipeline consists of five main modules:
 * **Documentation:** All public functions must have docstrings with type annotations
 
 ### Testing Standards
-* **Coverage Target:** >80% for all modules
+* **Coverage Requirements (BLOCKING):**
+  - **Minimum:** ≥95% for all modules (hard requirement)
+  - **Target:** 100% for all new code
+  - **Project-wide:** Must maintain ≥95% at all times
+  - **Verification:** Use `pytest --cov=src --cov-report=term-missing`
+  - **Documentation:** Any line below 100% must be justified in verification report
+
 * **Test Types:**
-  - Unit tests: All functions and methods
+  - Unit tests: All functions and methods (100% coverage)
   - Integration tests: Service interactions
   - End-to-end tests: Full pipeline workflows
-* **Security Tests:** Validate input validation, path sanitization, etc.
+  - Edge case tests: Boundary conditions, error paths
+  - Security tests: Input validation, path sanitization, injection attacks
+
+* **Test Quality:**
+  - Test both happy path and error paths
+  - Test edge cases and boundary conditions
+  - Test concurrent/async behavior where applicable
+  - Use mocking for external dependencies
+  - Assert on all return values and side effects
+
 * **Test Naming:** `test_<function>_<scenario>` (e.g., `test_validate_query_rejects_injection`)
+
+* **Coverage Enforcement:**
+  - Pre-commit hook should reject commits with coverage <95%
+  - CI/CD pipeline must fail on coverage <95%
+  - Pull requests require coverage proof in description
 
 ## Key Implementation Details
 

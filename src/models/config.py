@@ -5,6 +5,7 @@ from datetime import date
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 from src.utils.security import InputValidation
+from src.models.extraction import ExtractionTarget
 
 class TimeframeType(str, Enum):
     RECENT = "recent"
@@ -59,6 +60,11 @@ class ResearchTopic(BaseModel):
     provider: ProviderType = Field(ProviderType.ARXIV, description="Discovery provider")
     timeframe: Timeframe
     max_papers: int = Field(50, ge=1, le=1000)
+    # Phase 2: Extraction targets (optional for backward compatibility)
+    extraction_targets: Optional[List[ExtractionTarget]] = Field(
+        default=None,
+        description="List of extraction targets for this topic (Phase 2)"
+    )
 
     @field_validator("query")
     @classmethod
@@ -66,11 +72,37 @@ class ResearchTopic(BaseModel):
         # Delegate to centralized security utility
         return InputValidation.validate_query(v)
 
+class PDFSettings(BaseModel):
+    """PDF processing settings (Phase 2)"""
+    temp_dir: str = Field("./temp", description="Temporary directory for PDFs and markdown")
+    keep_pdfs: bool = Field(True, description="Keep PDFs after processing")
+    max_file_size_mb: int = Field(50, ge=1, le=500, description="Maximum PDF size in MB")
+    timeout_seconds: int = Field(300, ge=60, le=600, description="Timeout for download/conversion")
+
+class LLMSettings(BaseModel):
+    """LLM configuration (Phase 2)"""
+    provider: Literal["anthropic", "google"] = Field("anthropic", description="LLM provider")
+    model: str = Field("claude-3-5-sonnet-20250122", description="Model identifier")
+    api_key: Optional[str] = Field(None, min_length=10, description="LLM API key (from environment)")
+    max_tokens: int = Field(100000, gt=0, le=200000, description="Max tokens per request")
+    temperature: float = Field(0.0, ge=0.0, le=1.0, description="Sampling temperature")
+    timeout: int = Field(300, gt=0, le=600, description="Request timeout in seconds")
+
+class CostLimitSettings(BaseModel):
+    """Cost control settings (Phase 2)"""
+    max_tokens_per_paper: int = Field(100000, gt=0, le=200000, description="Max tokens per paper")
+    max_daily_spend_usd: float = Field(50.0, gt=0.0, le=1000.0, description="Max daily spending")
+    max_total_spend_usd: float = Field(500.0, gt=0.0, le=10000.0, description="Max total spending")
+
 class GlobalSettings(BaseModel):
     """Global pipeline settings"""
     output_base_dir: str = Field("./output", description="Base output directory")
     enable_duplicate_detection: bool = Field(True, description="Enable topic deduplication")
     semantic_scholar_api_key: Optional[str] = Field(None, min_length=10, description="Semantic Scholar API key (optional, only required for Semantic Scholar provider)")
+    # Phase 2: PDF and LLM settings (optional for backward compatibility)
+    pdf_settings: Optional[PDFSettings] = Field(default=None, description="PDF processing settings (Phase 2)")
+    llm_settings: Optional[LLMSettings] = Field(default=None, description="LLM configuration (Phase 2)")
+    cost_limits: Optional[CostLimitSettings] = Field(default=None, description="Cost control settings (Phase 2)")
 
 class ResearchConfig(BaseModel):
     """Root configuration model"""

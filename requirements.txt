@@ -15,8 +15,10 @@ httpx>=0.25.0
 anthropic>=0.18.0
 google-generativeai>=0.3.0
 
-# PDF Processing
+# PDF Processing (Phase 2)
 # marker-pdf  # Install separately: pip install marker-pdf
+# Note: marker-pdf requires additional system dependencies
+# See: https://github.com/VikParuchuri/marker
 
 # Retry & Error Handling
 tenacity>=8.2.0

@@ -671,30 +671,113 @@ class ConfigManager:
 
 ### 2. Discovery Service
 
-**Responsibility**: Search and filter papers from Semantic Scholar
+**Responsibility**: Abstract paper discovery across multiple research paper APIs
+
+**Architecture**: Provider Pattern (Strategy Pattern) implemented in Phase 1.5
+
+**Supported Providers:**
+- **ArXiv** (default): Open access AI/CS pre-prints, no API key required
+- **Semantic Scholar** (optional): Comprehensive research database, requires API key
+- **Future**: OpenAlex, PubMed, CORE, etc.
+
+#### Provider Interface
 
 ```python
-class DiscoveryService:
-    """Search for papers using Semantic Scholar API"""
+from abc import ABC, abstractmethod
 
-    def __init__(
-        self,
-        api_key: str,
-        cache_service: CacheService,
-        rate_limiter: RateLimiter
-    ):
-        self.api_key = api_key
-        self.cache = cache_service
-        self.rate_limiter = rate_limiter
-        self.session: Optional[aiohttp.ClientSession] = None
+class DiscoveryProvider(ABC):
+    """Abstract interface for research paper discovery"""
 
-    async def search(
-        self,
-        topic: ResearchTopic
-    ) -> List[PaperMetadata]:
-        """Search for papers matching topic
+    @abstractmethod
+    async def search(self, topic: ResearchTopic) -> List[PaperMetadata]:
+        """Search for papers matching topic"""
+        pass
+
+    @abstractmethod
+    def validate_query(self, query: str) -> str:
+        """Validate query syntax"""
+        pass
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Provider name"""
+        pass
+
+    @property
+    @abstractmethod
+    def requires_api_key(self) -> bool:
+        """Whether API key is required"""
+        pass
+```
+
+#### Concrete Providers
+
+**ArXiv Provider** (Phase 1.5):
+```python
+class ArxivProvider(DiscoveryProvider):
+    """ArXiv API provider - no API key required"""
+
+    ARXIV_API_URL = "http://export.arxiv.org/api/query"
+    ARXIV_RATE_LIMIT_SECONDS = 3.0  # Per ArXiv ToS
+
+    def __init__(self):
+        self.rate_limiter = RateLimiter(
+            max_requests=1,
+            time_window=3.0,
+            min_delay=3.0
+        )
+
+    @property
+    def name(self) -> str:
+        return "arxiv"
+
+    @property
+    def requires_api_key(self) -> bool:
+        return False
+
+    async def search(self, topic: ResearchTopic) -> List[PaperMetadata]:
+        """Search ArXiv for papers
 
         Process:
+        1. Enforce rate limiting (3s minimum)
+        2. Build ArXiv query from topic
+        3. Parse timeframe into date range
+        4. Fetch from ArXiv API (feedparser)
+        5. Filter by publication date
+        6. Validate PDF URLs
+        7. Map to PaperMetadata model
+        8. Return papers with guaranteed PDF access
+        """
+        await self.rate_limiter.acquire()
+        # Implementation details in Phase 1.5 spec
+```
+
+**Semantic Scholar Provider** (Phase 1, refactored in Phase 1.5):
+```python
+class SemanticScholarProvider(DiscoveryProvider):
+    """Semantic Scholar API provider - requires API key"""
+
+    def __init__(self, api_key: str, cache_service: CacheService):
+        self.api_key = api_key
+        self.cache = cache_service
+        self.rate_limiter = RateLimiter(
+            max_requests=100,
+            time_window=300
+        )
+
+    @property
+    def name(self) -> str:
+        return "semantic_scholar"
+
+    @property
+    def requires_api_key(self) -> bool:
+        return True
+
+    async def search(self, topic: ResearchTopic) -> List[PaperMetadata]:
+        """Search Semantic Scholar for papers
+
+        Process (unchanged from Phase 1):
         1. Check cache
         2. Build API query
         3. Execute with rate limiting
@@ -768,6 +851,74 @@ class DiscoveryService:
 
         return params
 ```
+
+#### Discovery Service Orchestrator
+
+**Discovery Service** (Phase 1.5+):
+```python
+class DiscoveryService:
+    """Paper discovery service with provider abstraction"""
+
+    def __init__(self, provider: DiscoveryProvider = None):
+        """Initialize with provider instance (for testing)"""
+        self.provider = provider
+
+    @classmethod
+    def from_config(
+        cls,
+        topic: ResearchTopic,
+        api_keys: dict
+    ) -> "DiscoveryService":
+        """Factory method to create service with provider from config
+
+        Args:
+            topic: Research topic with provider specification
+            api_keys: Dictionary of API keys by provider name
+
+        Returns:
+            DiscoveryService with appropriate provider
+
+        Example:
+            api_keys = {
+                "semantic_scholar": os.getenv("SEMANTIC_SCHOLAR_API_KEY"),
+                "openalex": os.getenv("OPENALEX_API_KEY")
+            }
+            service = DiscoveryService.from_config(topic, api_keys)
+        """
+        if topic.provider == ProviderType.ARXIV:
+            provider = ArxivProvider()
+        elif topic.provider == ProviderType.SEMANTIC_SCHOLAR:
+            api_key = api_keys.get("semantic_scholar")
+            if not api_key:
+                raise ValueError(
+                    "Semantic Scholar provider requires API key. "
+                    "Set SEMANTIC_SCHOLAR_API_KEY environment variable."
+                )
+            provider = SemanticScholarProvider(
+                api_key=api_key,
+                cache_service=cache_service
+            )
+        else:
+            raise ValueError(f"Unknown provider: {topic.provider}")
+
+        return cls(provider=provider)
+
+    async def search(self, topic: ResearchTopic) -> List[PaperMetadata]:
+        """Search for papers using configured provider
+
+        Delegates to provider-specific implementation
+        """
+        return await self.provider.search(topic)
+```
+
+**Provider Selection Matrix:**
+
+| Provider | API Key? | Cost | Coverage | PDF Access | Best For |
+|----------|----------|------|----------|------------|----------|
+| **ArXiv** (default) | ❌ No | Free | AI/CS/Physics pre-prints | 100% | Cutting-edge AI research |
+| **Semantic Scholar** | ✅ Yes | Free | 200M+ papers, all fields | Varies | Comprehensive research |
+| **OpenAlex** (future) | Optional | Free | 250M+ works | Varies | Multi-disciplinary |
+| **PubMed** (future) | ❌ No | Free | Medical/life sciences | Varies | Biomedical research |
 
 ### 3. Concurrent Processing Engine
 

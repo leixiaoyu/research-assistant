@@ -13,15 +13,15 @@ This document outlines a 4-phase, 7-week delivery plan to build the Automated Re
 
 ### Timeline Overview
 ```
-┌─────────────┬─────────────┬─────────────┬──────────┐
-│  Phase 1    │  Phase 2    │  Phase 3    │ Phase 4  │
-│  (Complete) │  (2 weeks)  │  (2 weeks)  │ (1 week) │
-│             │             │             │          │
-│  Foundation │ Extraction  │ Optimization│ Hardening│
-└─────────────┴─────────────┴─────────────┴──────────┘
-     MVP          Full         Production    Ops Ready
-  Working End    Features      Grade         Deployment
-   to End                     Performance
+┌──────────┬──────────┬──────────┬──────────┬──────────┐
+│ Phase 1  │Phase 1.5 │ Phase 2  │ Phase 3  │ Phase 4  │
+│(Complete)│(3-5 days)│(2 weeks) │(2 weeks) │ (1 week) │
+│          │          │          │          │          │
+│Foundation│ Provider │Extraction│Optimize  │ Harden   │
+└──────────┴──────────┴──────────┴──────────┴──────────┘
+    MVP       Unblock    Full      Production  Ops Ready
+  Working     Phase 2   Features     Grade     Deployment
+  End-to-End  ArXiv                Performance
 ```
 
 ### Investment & Returns
@@ -86,9 +86,73 @@ All technologies are proven and well-documented.
 
 ---
 
+### Phase 1.5: Discovery Provider Abstraction
+**Duration:** 3-5 days
+**Status:** ✅ **APPROVED** (Proposal 001 - Jan 23, 2026)
+**Dependencies:** Phase 1 Complete
+**Goal:** Unblock Phase 2 by implementing ArXiv as default discovery provider
+
+#### Problem Statement
+- Semantic Scholar API key is pending approval (timeline unknown)
+- Cannot proceed with Phase 2 PDF processing without discovering real papers
+- Phase 1 was verified with mocked data only
+
+#### Solution: Provider Pattern
+- Implement Discovery Provider abstraction (Strategy Pattern)
+- Add ArXiv as default provider (no API key required)
+- Preserve Semantic Scholar as optional provider
+- Enable real testing with 100% PDF-accessible papers
+
+#### Key Deliverables
+✅ `DiscoveryProvider` abstract interface
+✅ `ArxivProvider` with rate limiting (3s minimum delay)
+✅ `SemanticScholarProvider` refactored to provider pattern
+✅ Provider selection from config (`provider: "arxiv"` or `"semantic_scholar"`)
+✅ Backward compatibility (existing configs default to ArXiv)
+✅ Security requirements (SR-1.5-1 through SR-1.5-5)
+
+#### Success Metrics
+- ArXiv provider successfully searches and returns papers
+- All ArXiv papers have accessible PDF links
+- 3-second rate limiting enforced
+- Test coverage >85% for provider code
+- All Phase 1 tests still pass
+
+#### Security Requirements (MANDATORY) 🔒
+- [x] SR-1.5-1: ArXiv rate limiting (3s minimum) ⚠️ **CRITICAL**
+- [x] SR-1.5-2: Provider-specific input validation
+- [x] SR-1.5-3: PDF URL validation (ArXiv pattern matching)
+- [x] SR-1.5-4: Provider selection validation (enum enforced)
+- [x] SR-1.5-5: All Phase 1 security requirements maintained
+
+#### Verification Requirements (MANDATORY) ✅
+- [ ] Unit test coverage >85% (provider code)
+- [ ] All Phase 1 tests still pass (backward compatibility)
+- [ ] Real ArXiv search successful (manual verification)
+- [ ] PDF links accessible (manual verification)
+- [ ] Rate limiting verified (log analysis)
+- [ ] Security requirements tested
+- [ ] Verification report generated
+
+**Phase 1.5 cannot proceed to Phase 2 until ALL security and verification requirements are met.**
+
+#### What Phase 1.5 Unblocks
+✅ **Phase 2 PDF Processing:** Real papers with guaranteed PDF access
+✅ **Real Testing:** No longer dependent on mocked data
+✅ **Immediate Progress:** No waiting for Semantic Scholar API key
+✅ **User Onboarding:** No API key required for users
+
+#### Risk Level: **LOW**
+- ArXiv API is stable and well-documented
+- No API key dependency
+- Backward compatible with Phase 1 configs
+- Clear implementation path
+
+---
+
 ### Phase 2: PDF Processing & LLM Extraction
 **Duration:** 2 weeks
-**Dependencies:** Phase 1 (with security gate passed)
+**Dependencies:** Phase 1.5 Complete (Discovery Provider Abstraction)
 **Goal:** Full extraction pipeline with intelligent content analysis
 
 #### Key Deliverables

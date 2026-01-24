@@ -1,8 +1,8 @@
 # Phase 2: PDF Processing & LLM Extraction
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Draft
 **Timeline:** 2 weeks
-**Dependencies:** Phase 1 Complete
+**Dependencies:** Phase 1 Complete + Phase 1.5 Complete (Discovery Provider Abstraction)
 
 ## Architecture Reference
 
@@ -26,6 +26,12 @@ This phase extends the architecture with PDF processing and LLM capabilities as 
 ## Overview
 
 Extend the pipeline to download PDFs, convert them to markdown using marker-pdf, and extract structured information using LLM (Claude or Gemini). This phase adds the core value proposition of the system: intelligent extraction of prompts, code, and insights from research papers.
+
+**Phase 1.5 Dependency:** Phase 2 depends on Phase 1.5 (Discovery Provider Abstraction) being complete. Phase 1.5 provides:
+- ✅ ArXiv provider with 100% PDF access (critical for PDF processing)
+- ✅ Real paper discovery (no longer dependent on mocked data)
+- ✅ `PaperMetadata.open_access_pdf` field populated for all ArXiv papers
+- ✅ Ability to test end-to-end pipeline with real papers
 
 ## Objectives
 

@@ -113,6 +113,7 @@ Every feature must function **100% of the time** according to its specification 
 
 ## Tech Stack
 * **Language:** Python 3.10+
+* **Data Models:** Pydantic V2 (Strict)
 * **PDF Parser:** `marker-pdf` (preserves code syntax during PDF-to-MD conversion)
 * **APIs:** Semantic Scholar API (discovery), Gemini 1.5 Pro or Claude 3.5 Sonnet (extraction)
 * **Environment:** `pip` + `venv` / `dotenv` for secrets
@@ -167,64 +168,61 @@ enable_duplicate_detection: true
 
 ```bash
 # Run the full pipeline (reads from research_config.yaml)
-python main.py
+python -m src.cli run
 
 # Run with custom config file
-python main.py --config custom_research.yaml
+python -m src.cli run --config custom_research.yaml
 
 # Test configuration loading
-python config_manager.py --validate research_config.yaml
-
-# Run individual modules (for testing/debugging)
-python search.py --topic "reinforcement learning" --timeframe since_year:2020
-python pdf_processor.py --pdf-url "https://example.com/paper.pdf"
-python llm_extractor.py --markdown-file "./temp_md/paper.md"
+python -m src.cli validate config/research_config.yaml
 
 # View catalog
-python config_manager.py --show-catalog
+python -m src.cli catalog show
 
-# Run tests (when implemented)
+# Run tests
 pytest tests/
 
-# Format code
-black .
+# Check coverage
+pytest --cov=src tests/ --cov-report=term-missing
 
 # Type checking
-mypy .
+mypy src/
 ```
 
 ## Architecture
 
 The pipeline consists of five main modules:
 
-1. **`config_manager.py`** - Configuration and catalog management
-   - Reads and validates `research_config.yaml`
+1. **`src/services/config_manager.py`** - Configuration and catalog management
+   - Reads and validates `research_config.yaml` using Pydantic V2
    - Manages output directory structure: `./output/{topic_slug}/`
    - Detects duplicate/overlapping topics using topic normalization and hashing
    - Determines whether to create new folder or append to existing
    - Maintains a catalog index (e.g., `catalog.json`) tracking all research runs
 
-2. **`search.py`** - Semantic Scholar integration
+2. **`src/services/discovery_service.py`** - Semantic Scholar integration
    - Reads topics from config manager
    - Builds queries with configurable timeframes
-   - Returns list with `title`, `abstract`, `url`, `openAccessPdf`, `publicationDate`
+   - Returns list of `PaperMetadata` objects with `title`, `abstract`, `url`, `openAccessPdf`, `publicationDate`
+   - Handles API rate limiting and retries
 
-3. **`pdf_processor.py`** - PDF download and conversion
-   - Downloads PDFs from `openAccessPdf` links
-   - Runs `marker_single {pdf_path} --output_dir ./temp_md/`
-   - Extracts resulting markdown
+3. **`src/services/catalog_service.py`** - Catalog Logic
+   - Handles deduplication logic and run tracking
+   - Updates `catalog.json` atomically
 
-4. **`llm_extractor.py`** - Code and prompt extraction
-   - Feeds markdown to LLM (1M+ token context)
-   - Extracts: `tot_system_prompt`, `tot_user_prompt_template`, `python_code_snippet`, `engineering_summary`
-   - Returns valid JSON
-
-5. **`main.py`** - Pipeline orchestration
+4. **`src/cli.py`** - Pipeline orchestration (Typer CLI)
    - Loads config via `config_manager`
    - Processes each topic in `research_config.yaml`
    - For each topic, determines output location (new or existing)
    - Generates markdown: `./output/{topic_slug}/YYYY-MM-DD_Research.md`
    - Updates catalog index
+
+5. **`src/output/markdown_generator.py`** - Output Generation
+   - Formats `PaperMetadata` into Obsidian-compatible markdown with YAML frontmatter
+
+**Phase 2 Modules (To Be Implemented):**
+- **`src/services/pdf_processor.py`**: PDF download and conversion
+- **`src/services/llm_extractor.py`**: Code and prompt extraction using LLM
 
 ## Development Workflow
 

@@ -106,26 +106,26 @@ python -m src.cli catalog show
 
 ## 🏗️ Project Status
 
-**Current Phase**: Documentation & Planning Complete
+**Current Phase**: Phase 1 Complete / Phase 2 Started
 
 **Roadmap**:
 - [x] Architecture design
 - [x] Phased delivery plan
 - [x] Comprehensive specifications
-- [ ] Phase 1: Foundation (Planned)
-- [ ] Phase 2: Extraction (Planned)
+- [x] Phase 1: Foundation (Complete)
+- [ ] Phase 2: Extraction (In Progress)
 - [ ] Phase 3: Optimization (Planned)
 - [ ] Phase 4: Production (Planned)
 
 ## 🛠️ Tech Stack
 
 - **Language**: Python 3.10+
-- **Data Models**: Pydantic
+- **Data Models**: Pydantic V2 (Strict Mode)
 - **APIs**: Semantic Scholar, Claude/Gemini
 - **PDF Processing**: marker-pdf
 - **Async**: asyncio + aiohttp
 - **CLI**: typer
-- **Testing**: pytest
+- **Testing**: pytest (>95% coverage)
 - **Observability**: structlog + Prometheus + Grafana
 
 ## 📊 Expected Performance

@@ -71,8 +71,8 @@ settings:
 
   # LLM Configuration (Phase 2)
   llm_settings:
-    provider: "${LLM_PROVIDER:-anthropic}"  # anthropic or google
-    model: "${LLM_MODEL:-claude-3-5-sonnet-20250122}"
+    provider: "${LLM_PROVIDER}"  # anthropic or google (set in .env)
+    model: "${LLM_MODEL}"  # Model identifier (set in .env)
     api_key: "${LLM_API_KEY}"
     max_tokens: 100000
     temperature: 0.0

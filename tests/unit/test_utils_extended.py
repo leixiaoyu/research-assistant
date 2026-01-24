@@ -58,7 +58,37 @@ def test_security_must_exist(tmp_path):
         sanitizer.safe_path(tmp_path, "missing.txt", must_exist=True)
 
 def test_logging_configure():
+
     configure_logging()
+
     import structlog
+
     logger = structlog.get_logger()
+
     logger.info("test")
+
+
+
+@pytest.mark.asyncio
+
+async def test_rate_limiter_precise_wait():
+
+    """Cover line 39 in rate_limiter.py precisely"""
+
+    limiter = RateLimiter(requests_per_minute=60, burst_size=1)
+
+    limiter.tokens = 0
+
+    # ensure tokens stay below 1
+
+    import time
+
+    limiter.last_update = time.time()
+
+    
+
+    with patch("asyncio.sleep", return_value=None) as mock_sleep:
+
+        await limiter.acquire()
+
+        mock_sleep.assert_called()

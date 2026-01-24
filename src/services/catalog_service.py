@@ -1,82 +1,75 @@
-import structlog
 from typing import Optional
-from datetime import datetime
-
-from src.models.catalog import Catalog, TopicCatalogEntry, CatalogRun
-from src.services.config_manager import ConfigManager
+import structlog
+from src.models.catalog import CatalogRun, TopicCatalogEntry
 
 logger = structlog.get_logger()
 
+
 class CatalogService:
-    """Manages research catalog and topic deduplication"""
+    """Service for managing the research catalog and deduplication"""
 
-    def __init__(self, config_manager: ConfigManager):
+    def __init__(self, config_manager):
         self.config_manager = config_manager
-        self.catalog: Optional[Catalog] = None
+        self.catalog = None
 
-    def load(self):
-        """Load catalog from disk"""
+    def load(self) -> None:
+        """Load catalog from storage"""
         self.catalog = self.config_manager.load_catalog()
 
-    def save(self):
-        """Save catalog to disk"""
+    def save(self) -> None:
+        """Save catalog to storage"""
         if self.catalog:
             self.config_manager.save_catalog(self.catalog)
 
     def get_or_create_topic(self, query: str) -> TopicCatalogEntry:
-        """Get existing topic or create new one with deduplication"""
-        if not self.catalog:
+        """Find existing topic or create new with slug collision handling"""
+        if self.catalog is None:
             self.load()
-            
-        assert self.catalog is not None
-        
-        # 1. Normalize query for deduplication checking
-        # Simple normalization: lowercase, remove punctuation, strict whitespace
-        normalized_query = self._normalize_query_for_matching(query)
-        
-        # 2. Check existing topics
-        for topic in self.catalog.topics.values():
-            if self._normalize_query_for_matching(topic.query) == normalized_query:
-                logger.info("duplicate_topic_detected", query=query, existing=topic.topic_slug)
-                return topic
-                
-        # 3. Create new
-        slug = self.config_manager.generate_topic_slug(query)
-        
-        # Handle collision by appending hash if needed? 
-        # For MVP, if slug exists but query is different, we might have an issue.
-        # But generate_topic_slug is deterministic.
-        if slug in self.catalog.topics:
-            existing = self.catalog.topics[slug]
-            if existing.query != query:
-                # Collision! Append short hash
-                import hashlib
-                hash_suffix = hashlib.md5(query.encode()).hexdigest()[:4]
-                slug = f"{slug}-{hash_suffix}"
-        
-        return self.catalog.get_or_create_topic(slug, query)
 
-    def add_run(self, topic_slug: str, run: CatalogRun):
-        """Record a research run"""
-        if not self.catalog:
-            self.load()
-            
         assert self.catalog is not None
-            
+        base_slug = self.config_manager.generate_topic_slug(query)
+
+        # 1. Check if topic already exists with this EXACT query (normalized)
+        # Normalize: strip spaces, lowercase
+        norm_query = " ".join(query.lower().split())
+        for topic in self.catalog.topics.values():
+            existing_norm = " ".join(topic.query.lower().split())
+            if existing_norm == norm_query:
+                logger.info("existing_topic_found", query=query, slug=topic.topic_slug)
+                return topic
+
+        # 2. Check for slug collision
+        topic_slug = base_slug
+        counter = 1
+        while topic_slug in self.catalog.topics:
+            topic_slug = f"{base_slug}-{counter}"
+            counter += 1
+
+        logger.info("creating_new_topic", query=query, slug=topic_slug)
+        return self.catalog.get_or_create_topic(topic_slug, query)
+
+    def add_run(self, topic_slug: str, run: CatalogRun) -> None:
+        """Add a run to a topic and save"""
+        if self.catalog is None:
+            self.load()
+
+        assert self.catalog is not None
         if topic_slug not in self.catalog.topics:
             raise ValueError(f"Topic not found: {topic_slug}")
-            
+
         topic = self.catalog.topics[topic_slug]
         topic.add_run(run)
         self.save()
 
-    def _normalize_query_for_matching(self, query: str) -> str:
-        """Normalize query for fuzzy matching"""
-        import re
-        # Lowercase
-        q = query.lower()
-        # Remove common booleans to match intent (optional, maybe too aggressive for MVP?)
-        # Let's just normalize whitespace and punctuation for now
-        q = re.sub(r'[^\w\s]', '', q)
-        q = re.sub(r'\s+', ' ', q).strip()
-        return q
+    def is_paper_processed(
+        self, topic_slug: str, paper_id: str, doi: Optional[str] = None
+    ) -> bool:
+        """Check if a paper has already been processed for this topic"""
+        if self.catalog is None:
+            self.load()
+
+        assert self.catalog is not None
+        if topic_slug not in self.catalog.topics:
+            return False
+
+        return self.catalog.topics[topic_slug].has_paper(paper_id, doi)

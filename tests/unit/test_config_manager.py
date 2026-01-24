@@ -1,6 +1,7 @@
 import pytest
 import os
 import yaml
+from unittest.mock import MagicMock, patch
 from src.services.config_manager import ConfigManager, ConfigValidationError
 from src.models.catalog import Catalog
 
@@ -70,3 +71,85 @@ def test_catalog_operations(valid_config_file, tmp_path):
     # Reload
     catalog_reloaded = manager.load_catalog()
     assert "test-slug" in catalog_reloaded.topics
+
+def test_load_config_read_error(tmp_path):
+    """Cover lines 51-52: Failed to read config file"""
+    config_file = tmp_path / "broken.yaml"
+    config_file.touch()
+    manager = ConfigManager(config_path=str(config_file))
+    from unittest.mock import patch
+    with patch("builtins.open", side_effect=Exception("Read error")):
+        with pytest.raises(ConfigValidationError, match="Failed to read config file"):
+            manager.load_config()
+
+def test_load_config_validation_error(tmp_path):
+    """Cover lines 69-70: Invalid configuration (ValidationError)"""
+    config_file = tmp_path / "invalid.yaml"
+    with open(config_file, "w") as f:
+        f.write("invalid: data")
+    manager = ConfigManager(config_path=str(config_file))
+    with pytest.raises(ConfigValidationError, match="Invalid configuration"):
+        manager.load_config()
+
+def test_generate_topic_slug_long():
+    """Cover line 86: if len(slug) > 100"""
+    long_query = "a" * 120
+    manager = ConfigManager()
+    slug = manager.generate_topic_slug(long_query)
+    assert len(slug) == 100
+
+def test_get_catalog_path_security_error():
+    """Cover lines 106-108: SecurityError in get_catalog_path"""
+    manager = ConfigManager()
+    manager._config = MagicMock()
+    manager._config.settings.output_base_dir = "/tmp/mock_output"
+    from src.utils.security import SecurityError
+    with patch("src.services.config_manager.Path.mkdir"):
+        with patch("src.services.config_manager.PathSanitizer.safe_path", side_effect=SecurityError("Mock security error")):
+            with pytest.raises(SecurityError, match="Security violation accessing catalog"):
+                manager.get_catalog_path()
+
+def test_load_catalog_corrupted(tmp_path):
+    """Cover lines 123-128: catalog_load_failed"""
+    catalog_file = tmp_path / "catalog.json"
+    with open(catalog_file, "w") as f:
+        f.write("not json")
+    manager = ConfigManager()
+    from unittest.mock import patch
+    with patch.object(manager, "get_catalog_path", return_value=catalog_file):
+        catalog = manager.load_catalog()
+        assert isinstance(catalog, Catalog)
+        assert len(catalog.topics) == 0
+
+def test_save_catalog_error(tmp_path):
+    """Cover lines 143-147, 152: catalog_save_failed and cleanup"""
+    catalog_file = tmp_path / "catalog.json"
+    manager = ConfigManager()
+    catalog = Catalog()
+    # Ensure we use a path that actually exists so open() works but rename() fails
+    with patch.object(manager, "get_catalog_path", return_value=catalog_file):
+        with patch("src.services.config_manager.Path.rename", side_effect=Exception("Rename failed")):
+            # Create the temp file manually to ensure it exists for unlink
+            temp_path = catalog_file.with_suffix('.tmp')
+            temp_path.touch()
+            with pytest.raises(Exception, match="Rename failed"):
+                manager.save_catalog(catalog)
+            assert not temp_path.exists()
+
+def test_get_output_path_security_error():
+    """Cover lines 164-167: SecurityError in get_output_path"""
+    manager = ConfigManager()
+    manager._config = MagicMock()
+    manager._config.settings.output_base_dir = "./output"
+    from src.utils.security import SecurityError
+    # Use real sanitizer but with a bad slug
+    with pytest.raises(SecurityError, match="Invalid topic slug"):
+        manager.get_output_path("../outside")
+
+def test_config_manager_project_root():
+    """Cover line 36: self.project_root = Path.cwd()"""
+    from pathlib import Path
+    with patch("src.services.config_manager.Path.cwd") as mock_cwd:
+        mock_cwd.return_value = Path("/mock/project/root")
+        manager = ConfigManager()
+        assert manager.project_root == Path("/mock/project/root")

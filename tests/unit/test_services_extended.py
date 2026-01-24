@@ -5,7 +5,8 @@ from unittest.mock import MagicMock, patch, AsyncMock
 from datetime import datetime, date
 from pathlib import Path
 
-from src.services.discovery_service import DiscoveryService, APIError, RateLimitError
+from src.services.discovery_service import DiscoveryService, APIError
+from src.services.providers.base import RateLimitError
 from src.services.catalog_service import CatalogService
 from src.services.config_manager import ConfigManager, ConfigValidationError
 from src.models.config import ResearchTopic, TimeframeRecent, TimeframeSinceYear, TimeframeDateRange, ProviderType

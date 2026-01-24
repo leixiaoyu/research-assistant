@@ -2,14 +2,18 @@ from pydantic import BaseModel, Field, HttpUrl, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
+
 class Author(BaseModel):
     """Paper author information"""
+
     name: str
     author_id: Optional[str] = None
     affiliation: Optional[str] = None
 
+
 class PaperMetadata(BaseModel):
     """Complete metadata for a research paper"""
+
     # Identifiers
     paper_id: str = Field(..., description="Semantic Scholar paper ID")
     doi: Optional[str] = None
@@ -36,15 +40,12 @@ class PaperMetadata(BaseModel):
     # Computed fields
     relevance_score: float = Field(0.0, ge=0.0, le=1.0)
 
-    model_config = ConfigDict(
-        json_encoders={
-            datetime: lambda v: v.isoformat(),
-            HttpUrl: lambda v: str(v)
-        }
-    )
+    model_config = ConfigDict(populate_by_name=True)
+
 
 class SearchResult(BaseModel):
     """Result from a search query"""
+
     query: str
     timeframe: str
     total_found: int

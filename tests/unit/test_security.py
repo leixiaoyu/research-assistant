@@ -49,3 +49,15 @@ def test_input_validation_query():
 
     with pytest.raises(ValueError):
         InputValidation.validate_query("$(whoami)")
+
+def test_input_validation_invalid_char_logging():
+    from unittest.mock import patch
+    with patch("src.utils.security.logger") as mock_logger:
+        # String with invalid char that is NOT a dangerous pattern
+        # whitelist: [a-zA-Z0-9\s\-_+.,"():]
+        # char '#' is not allowed but not in dangerous_patterns list
+        with pytest.raises(ValueError, match="Query contains characters outside allowed set"):
+            InputValidation.validate_query("valid query with # hash")
+        
+        # Check if logger was called for the invalid char '#'
+        mock_logger.warning.assert_any_call("invalid_char_detected", char="#", query="valid query with # hash")

@@ -4,6 +4,7 @@ from src.services.providers.arxiv import ArxivProvider, APIError, RateLimitError
 from src.models.config import ResearchTopic, TimeframeRecent, TimeframeSinceYear, TimeframeDateRange
 from src.models.paper import PaperMetadata
 from datetime import date
+from tenacity import RetryError
 
 @pytest.fixture
 def provider():
@@ -99,6 +100,19 @@ async def test_detects_301_error_response(provider, topic_arxiv):
         assert "sortOrder must be in" in str(exc_info.value)
 
 @pytest.mark.asyncio
+async def test_detects_301_generic_error(provider, topic_arxiv):
+    """ArXiv returns 301 without entries or recognized error"""
+    mock_feed = MagicMock()
+    mock_feed.status = 301
+    mock_feed.entries = []
+
+    with patch("src.services.providers.arxiv.feedparser.parse", return_value=mock_feed):
+        with pytest.raises(RetryError) as exc_info:
+            await provider.search(topic_arxiv)
+        # Check the underlying exception
+        assert "returned status 301" in str(exc_info.value.__cause__)
+
+@pytest.mark.asyncio
 async def test_search_success(provider, topic_arxiv):
     # Mock feedparser
     mock_feed = MagicMock()
@@ -155,3 +169,22 @@ def test_validate_pdf_url(provider):
         
     with pytest.raises(SecurityError):
         provider._validate_pdf_url("https://arxiv.org/pdf/../hack.pdf")
+
+def test_arxiv_properties(provider):
+    """Cover name and requires_api_key properties"""
+    assert provider.name == "arxiv"
+    assert provider.requires_api_key is False
+
+@pytest.mark.asyncio
+async def test_arxiv_search_bozo_warning(provider, topic_arxiv):
+    """Cover bozo warning in search"""
+    mock_feed = MagicMock()
+    mock_feed.status = 200
+    mock_feed.bozo = True
+    mock_feed.bozo_exception = Exception("Mock bozo")
+    mock_feed.entries = []
+    
+    with patch("src.services.providers.arxiv.feedparser.parse", return_value=mock_feed):
+        with patch("src.services.providers.arxiv.logger") as mock_logger:
+            await provider.search(topic_arxiv)
+            mock_logger.warning.assert_any_call("arxiv_feed_parse_warning", error="Mock bozo")

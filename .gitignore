@@ -57,10 +57,10 @@ dmypy.json
 .env.*.local
 
 # ARISP specific
-output/
-cache/
-temp/
-checkpoints/
+/output/
+/cache/
+/temp/
+/checkpoints/
 *.pdf
 *.log
 

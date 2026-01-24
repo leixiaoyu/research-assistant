@@ -28,7 +28,7 @@ def test_get_or_create_topic_duplicate(mock_config):
         topic_slug="existing-topic",
         query="Machine Learning",
         folder="existing-topic",
-        created_at=datetime.utcnow()
+        created_at=datetime.utcnow(),
     )
     catalog = Catalog(topics={"existing-topic": existing})
 
@@ -51,7 +51,7 @@ def test_get_or_create_topic_slug_collision(mock_config):
         topic_slug="machine-learning",
         query="Machine Learning",
         folder="machine-learning",
-        created_at=datetime.utcnow()
+        created_at=datetime.utcnow(),
     )
     catalog = Catalog(topics={"machine-learning": existing})
 
@@ -70,13 +70,16 @@ def test_get_or_create_topic_slug_collision(mock_config):
 def test_is_paper_processed(mock_config):
     # Setup catalog with processed paper
     from src.models.catalog import ProcessedPaper
+
     paper = ProcessedPaper(
-        paper_id="p1", doi="d1", title="T",
-        processed_at=datetime.utcnow(), run_id="r1"
+        paper_id="p1", doi="d1", title="T", processed_at=datetime.utcnow(), run_id="r1"
     )
     topic = TopicCatalogEntry(
-        topic_slug="t1", query="Q", folder="t1", created_at=datetime.utcnow(),
-        processed_papers=[paper]
+        topic_slug="t1",
+        query="Q",
+        folder="t1",
+        created_at=datetime.utcnow(),
+        processed_papers=[paper],
     )
     catalog = Catalog(topics={"t1": topic})
     mock_config.load_catalog.return_value = catalog

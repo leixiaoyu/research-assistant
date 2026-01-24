@@ -49,7 +49,10 @@ class MarkdownGenerator:
         if papers:
             avg_citations = sum(p.citation_count for p in papers) / len(papers)
             years = [p.year for p in papers if p.year]
-            date_range = f"{min(years)}-{max(years)}" if years else "Unknown"  # pragma: no cover
+            if years:
+                date_range = f"{min(years)}-{max(years)}"
+            else:  # pragma: no cover
+                date_range = "Unknown"
 
             md_lines.append("## Summary Statistics")
             md_lines.append(f"- **Total Papers:** {len(papers)}")

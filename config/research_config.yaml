@@ -73,8 +73,8 @@ settings:
 
   # LLM Configuration (Phase 2)
   llm_settings:
-    provider: "${LLM_PROVIDER}"  # google (Gemini Flash) or anthropic
-    model: "${LLM_MODEL}"  # gemini-1.5-flash or claude-3-5-sonnet-20250122
+    provider: "${LLM_PROVIDER}"  # google (Gemini) or anthropic
+    model: "${LLM_MODEL}"  # gemini-3-flash-preview (latest) or claude-3-5-sonnet-20250122
     api_key: "${LLM_API_KEY}"  # Google AI API key
     max_tokens: 100000
     temperature: 0.0

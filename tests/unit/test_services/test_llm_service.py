@@ -51,7 +51,7 @@ def cost_limits():
 @pytest.fixture
 def llm_service(llm_config, cost_limits):
     """Create LLM service instance"""
-    with patch('src.services.llm_service.AsyncAnthropic'):
+    with patch('anthropic.AsyncAnthropic'):
         service = LLMService(
             config=llm_config,
             cost_limits=cost_limits
@@ -98,7 +98,7 @@ def extraction_targets():
 
 def test_llm_service_initialization_anthropic(llm_config, cost_limits):
     """Test LLM service initializes with Anthropic"""
-    with patch('src.services.llm_service.AsyncAnthropic') as mock_anthropic:
+    with patch('anthropic.AsyncAnthropic') as mock_anthropic:
         service = LLMService(llm_config, cost_limits)
 
         assert service.config.provider == "anthropic"
@@ -115,14 +115,15 @@ def test_llm_service_initialization_google():
     )
     limits = CostLimits()
 
-    with patch('src.services.llm_service.genai') as mock_genai:
-        mock_model = Mock()
-        mock_genai.GenerativeModel.return_value = mock_model
+    with patch('google.generativeai.configure') as mock_configure:
+        with patch('google.generativeai.GenerativeModel') as mock_model_class:
+            mock_model = Mock()
+            mock_model_class.return_value = mock_model
 
-        service = LLMService(config, limits)
+            service = LLMService(config, limits)
 
-        assert service.config.provider == "google"
-        mock_genai.configure.assert_called_once_with(api_key=config.api_key)
+            assert service.config.provider == "google"
+            mock_configure.assert_called_once_with(api_key=config.api_key)
 
 
 def test_build_extraction_prompt(llm_service, paper_metadata, extraction_targets):

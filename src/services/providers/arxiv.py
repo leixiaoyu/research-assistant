@@ -134,7 +134,7 @@ class ArxivProvider(DiscoveryProvider):
         import urllib.parse
         encoded_q = urllib.parse.quote(q_part)
         
-        return f"search_query={encoded_q}&start=0&max_results={topic.max_papers}&sortBy=submittedDate&sortOrder=desc"
+        return f"search_query={encoded_q}&start=0&max_results={topic.max_papers}&sortBy=submittedDate&sortOrder=descending"
 
     def _parse_feed(self, feed) -> List[PaperMetadata]:
         papers = []

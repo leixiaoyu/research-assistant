@@ -4,6 +4,7 @@
 research_topics:
   # Example 1: Recent papers on Tree of Thoughts in Machine Translation
   - query: "Tree of Thoughts AND machine translation"
+    provider: "arxiv"  # Using ArXiv (Semantic Scholar API key pending)
     timeframe:
       type: "recent"  # Options: recent, since_year, date_range
       value: "48h"    # For recent: 48h, 7d, 30d, etc.
@@ -43,6 +44,7 @@ research_topics:
 
   # Example 2: Historical papers on Reinforcement Learning in Robotics
   - query: "reinforcement learning AND robotics"
+    provider: "arxiv"  # Using ArXiv (Semantic Scholar API key pending)
     timeframe:
       type: "since_year"
       value: 2020
@@ -71,9 +73,9 @@ settings:
 
   # LLM Configuration (Phase 2)
   llm_settings:
-    provider: "${LLM_PROVIDER}"  # anthropic or google (set in .env)
-    model: "${LLM_MODEL}"  # Model identifier (set in .env)
-    api_key: "${LLM_API_KEY}"
+    provider: "${LLM_PROVIDER}"  # google (Gemini Flash) or anthropic
+    model: "${LLM_MODEL}"  # gemini-1.5-flash or claude-3-5-sonnet-20250122
+    api_key: "${LLM_API_KEY}"  # Google AI API key
     max_tokens: 100000
     temperature: 0.0
     timeout: 300

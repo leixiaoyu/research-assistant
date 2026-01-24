@@ -4,9 +4,9 @@ import re
 from typing import List, Optional
 from datetime import datetime, timedelta
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_not_exception_type
 
-from src.services.providers.base import DiscoveryProvider, APIError, RateLimitError
+from src.services.providers.base import DiscoveryProvider, APIError, RateLimitError, APIParameterError
 from src.models.config import ResearchTopic, TimeframeRecent, TimeframeSinceYear, TimeframeDateRange
 from src.models.paper import PaperMetadata, Author
 from src.utils.rate_limiter import RateLimiter
@@ -50,7 +50,10 @@ class ArxivProvider(DiscoveryProvider):
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=3, max=10),
-        retry=retry_if_exception_type((APIError, RateLimitError))
+        retry=(
+            retry_if_exception_type((APIError, RateLimitError)) &
+            retry_if_not_exception_type(APIParameterError)
+        )
     )
     async def search(self, topic: ResearchTopic) -> List[PaperMetadata]:
         """Search for papers matching topic"""
@@ -80,7 +83,21 @@ class ArxivProvider(DiscoveryProvider):
         if hasattr(feed, 'status') and feed.status != 200:
              if feed.status == 403: # Forbidden (often rate limit)
                  raise RateLimitError("ArXiv rate limit exceeded (403)")
-             raise APIError(f"ArXiv API returned status {feed.status}")
+             # ArXiv returns 301 for redirects but may still have valid data
+             # Check if this is an error response by examining entries
+             elif feed.status == 301 and len(feed.entries) > 0:
+                 first_entry = feed.entries[0]
+                 # Error responses have IDs pointing to help/api docs
+                 entry_id = getattr(first_entry, 'id', '')
+                 if 'help/api' in entry_id:
+                     error_msg = getattr(first_entry, 'summary', 'Unknown ArXiv API error')
+                     raise APIParameterError(f"ArXiv API error: {error_msg}")
+                 # Otherwise, it's a valid 301 with data, continue
+             elif feed.status == 301:
+                 raise APIError(f"ArXiv API returned status {feed.status}")
+             else:
+                 # All other non-200 statuses are errors
+                 raise APIError(f"ArXiv API returned status {feed.status}")
 
         if hasattr(feed, 'bozo') and feed.bozo:
              logger.warning("arxiv_feed_parse_warning", error=str(feed.bozo_exception))
@@ -134,7 +151,7 @@ class ArxivProvider(DiscoveryProvider):
         import urllib.parse
         encoded_q = urllib.parse.quote(q_part)
         
-        return f"search_query={encoded_q}&start=0&max_results={topic.max_papers}&sortBy=submittedDate&sortOrder=desc"
+        return f"search_query={encoded_q}&start=0&max_results={topic.max_papers}&sortBy=submittedDate&sortOrder=descending"
 
     def _parse_feed(self, feed) -> List[PaperMetadata]:
         papers = []

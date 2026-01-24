@@ -11,6 +11,10 @@ class RateLimitError(APIError):
     """Rate limit exceeded"""
     pass
 
+class APIParameterError(APIError):
+    """API parameter validation error (non-retryable)"""
+    pass
+
 class DiscoveryProvider(ABC):
     """Abstract base class for research paper discovery providers
 

@@ -96,20 +96,23 @@ async def test_download_pdf_success(pdf_service):
     pdf_content = b'%PDF-1.4\nTest PDF content here'
 
     # Mock aiohttp response
-    mock_response = AsyncMock()
+    mock_response = MagicMock()
     mock_response.status = 200
     mock_response.headers = {'content-length': str(len(pdf_content))}
-    mock_response.content.iter_chunked = AsyncMock(
-        return_value=[pdf_content]
-    )
+
+    # Mock async iterator for content
+    async def mock_iter_chunked(size):
+        yield pdf_content
+
+    mock_response.content.iter_chunked = mock_iter_chunked
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=None)
 
     # Mock session
-    mock_session = AsyncMock()
-    mock_session.__aenter__.return_value = mock_session
-    mock_session.__aexit__.return_value = None
-    mock_session.get = AsyncMock()
-    mock_session.get.return_value.__aenter__.return_value = mock_response
-    mock_session.get.return_value.__aexit__.return_value = None
+    mock_session = MagicMock()
+    mock_session.get = MagicMock(return_value=mock_response)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
 
     with patch('aiohttp.ClientSession', return_value=mock_session):
         pdf_path = await pdf_service.download_pdf(
@@ -128,16 +131,16 @@ async def test_download_pdf_file_too_large(pdf_service):
     # Mock response with size > max_size_bytes
     large_size = pdf_service.max_size_bytes + 1000
 
-    mock_response = AsyncMock()
+    mock_response = MagicMock()
     mock_response.status = 200
     mock_response.headers = {'content-length': str(large_size)}
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=None)
 
-    mock_session = AsyncMock()
-    mock_session.__aenter__.return_value = mock_session
-    mock_session.__aexit__.return_value = None
-    mock_session.get = AsyncMock()
-    mock_session.get.return_value.__aenter__.return_value = mock_response
-    mock_session.get.return_value.__aexit__.return_value = None
+    mock_session = MagicMock()
+    mock_session.get = MagicMock(return_value=mock_response)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
 
     with patch('aiohttp.ClientSession', return_value=mock_session):
         with pytest.raises(FileSizeError) as exc_info:
@@ -151,15 +154,15 @@ async def test_download_pdf_file_too_large(pdf_service):
 @pytest.mark.asyncio
 async def test_download_pdf_http_error(pdf_service):
     """Test download_pdf handles HTTP errors"""
-    mock_response = AsyncMock()
+    mock_response = MagicMock()
     mock_response.status = 404
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=None)
 
-    mock_session = AsyncMock()
-    mock_session.__aenter__.return_value = mock_session
-    mock_session.__aexit__.return_value = None
-    mock_session.get = AsyncMock()
-    mock_session.get.return_value.__aenter__.return_value = mock_response
-    mock_session.get.return_value.__aexit__.return_value = None
+    mock_session = MagicMock()
+    mock_session.get = MagicMock(return_value=mock_response)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
 
     with patch('aiohttp.ClientSession', return_value=mock_session):
         with pytest.raises(PDFDownloadError) as exc_info:

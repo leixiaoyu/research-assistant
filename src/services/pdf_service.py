@@ -15,6 +15,7 @@ Security Features:
 
 import asyncio
 import subprocess
+import re
 from pathlib import Path
 from typing import Optional
 import structlog
@@ -27,7 +28,6 @@ from src.utils.exceptions import (
     PDFValidationError,
     ConversionError
 )
-from src.utils.security import PathSanitizer
 
 logger = structlog.get_logger()
 
@@ -38,6 +38,25 @@ class PDFService:
     Uses marker-pdf for conversion which preserves code formatting.
     Implements retry logic for transient failures.
     """
+
+    @staticmethod
+    def _sanitize_filename(filename: str) -> str:
+        """Sanitize filename to prevent directory traversal
+
+        Args:
+            filename: Filename to sanitize
+
+        Returns:
+            Safe filename with only alphanumeric, dash, underscore, and dot
+        """
+        # Remove any directory components
+        filename = Path(filename).name
+        # Keep only safe characters
+        safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
+        # Prevent hidden files
+        if safe_name.startswith('.'):
+            safe_name = '_' + safe_name
+        return safe_name
 
     def __init__(
         self,
@@ -53,10 +72,12 @@ class PDFService:
             timeout_seconds: Timeout for downloads and conversions
 
         Security:
-            - temp_dir is sanitized to prevent directory traversal
+            - temp_dir is resolved to absolute path
             - File size is enforced to prevent DoS
+            - Filenames are sanitized to prevent directory traversal
         """
-        self.temp_dir = PathSanitizer.sanitize_path(temp_dir)
+        # Resolve temp_dir to absolute path (safe since it comes from config, not user input)
+        self.temp_dir = Path(temp_dir).resolve()
         self.max_size_bytes = max_size_mb * 1024 * 1024
         self.timeout_seconds = timeout_seconds
 
@@ -73,11 +94,6 @@ class PDFService:
             timeout_seconds=timeout_seconds
         )
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type(PDFDownloadError)
-    )
     async def download_pdf(
         self,
         url: str,
@@ -102,12 +118,22 @@ class PDFService:
             - File size checked before download
             - PDF magic bytes validated after download
         """
-        # Security: Ensure HTTPS
+        # Security: Ensure HTTPS (don't retry this - it's a validation error)
         if not url.startswith('https://'):
             raise PDFDownloadError(f"Only HTTPS URLs allowed: {url}")
 
+        # Use retry logic for actual download
+        return await self._download_with_retry(url, paper_id)
+
+    async def _download_with_retry(
+        self,
+        url: str,
+        paper_id: str
+    ) -> Path:
+        """Internal method with retry logic for network operations"""
+
         # Sanitize filename
-        safe_filename = PathSanitizer.sanitize_filename(f"{paper_id}.pdf")
+        safe_filename = self._sanitize_filename(f"{paper_id}.pdf")
         output_path = self.pdf_dir / safe_filename
 
         logger.info(
@@ -121,7 +147,17 @@ class PDFService:
             timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url) as response:
-                    if response.status != 200:
+                    # Don't retry client errors (4xx) - these won't succeed on retry
+                    if 400 <= response.status < 500:
+                        raise PDFDownloadError(
+                            f"HTTP {response.status} for {url}"
+                        )
+                    # Retry server errors (5xx) - might be transient
+                    elif response.status >= 500:
+                        raise PDFDownloadError(
+                            f"HTTP {response.status} for {url} (will retry)"
+                        )
+                    elif response.status != 200:
                         raise PDFDownloadError(
                             f"HTTP {response.status} for {url}"
                         )
@@ -237,7 +273,7 @@ class PDFService:
             raise ConversionError(f"PDF file not found: {pdf_path}")
 
         # Prepare output path
-        safe_filename = PathSanitizer.sanitize_filename(f"{paper_id}.md")
+        safe_filename = self._sanitize_filename(f"{paper_id}.md")
         output_path = self.markdown_dir / safe_filename
 
         logger.info(

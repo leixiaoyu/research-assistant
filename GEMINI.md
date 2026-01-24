@@ -27,9 +27,33 @@ The following requirements are **absolute** and **block all commits and pushes**
 ### PR Requirements (Non-Negotiable)
 Before a Pull Request can be merged into `main`:
 1. **CI Status:** The "test (3.10)" workflow must pass with **100% success rate**.
-2. **Coverage:** The "test (3.10)" workflow must verify **≥95% test coverage**.
-3. **Approval:** At least **one approving review** from a human teammate is required.
-4. **Admin Enforcement:** These rules apply to **all users**, including administrators. No bypasses.
+2. **Linting & Types:** **Flake8**, **Black** (formatting), and **Mypy** (static analysis) must pass with zero issues.
+3. **Coverage:** The "test (3.10)" workflow must verify **≥95% test coverage per module**.
+4. **Approval:** At least **one approving review** from a human teammate is required.
+5. **Admin Enforcement:** These rules apply to **all users**, including administrators. No bypasses.
+
+### Pull Request Review Protocol (High Standard)
+Reviewers must maintain **extreme engineering rigor** and keep the bar exceptionally high. A "High Standard" review is a non-negotiable requirement and must include:
+
+1. **Executive Summary:** A concise overview of the PR's purpose and its impact on the project state.
+2. **Requirements Verification:**
+   - **Functional:** Ensure 100% of the features specified in the relevant `PHASE_X_SPEC.md` are implemented and function correctly.
+   - **Non-Functional:** Verify performance, observability (logging), and resilience (error handling) meet project standards.
+3. **Local Verification:** Reviewers SHOULD fetch the branch and verify results locally:
+   - Confirm **100% Pass Rate** for automated tests.
+   - Verify **≥95% Coverage** per module. **Test coverage is non-negotiable.**
+   - Run **Flake8**, **Black**, and **Mypy** to ensure zero regressions.
+   - Check alignment with `ci.yml` enforcement rules.
+4. **Technical Assessment & Rigor:**
+   - **Engineering Best Practices:** Adherence to SOLID, DRY, and KISS principles is mandatory.
+   - **API Implementation:** Verify protocol security (HTTPS), parameter accuracy, and graceful error handling.
+   - **Type Safety & Validation:** Ensure robust Pydantic usage and centralized validation.
+   - **Architecture Alignment:** Check for proper delegation patterns and adherence to layered design.
+5. **Security & Path Safety (Non-Negotiable):**
+   - **Security First:** Verify all security checklist items are met. No compromises.
+   - **Secrets Management:** Ensure no real keys are committed.
+   - **Path Security:** Audit `.gitignore` and path sanitization logic.
+6. **Final Assessment:** A clear "Status" (APPROVED or CHANGES REQUESTED) with a recommendation for action.
 
 ---
 

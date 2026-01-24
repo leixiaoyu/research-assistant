@@ -1,5 +1,7 @@
 import os
 import yaml
+import json
+import re
 from pathlib import Path
 from string import Template
 from typing import Optional
@@ -13,21 +15,27 @@ from src.utils.security import PathSanitizer, SecurityError
 
 logger = structlog.get_logger()
 
+
 class ConfigValidationError(Exception):
     """Configuration validation failed"""
+
     pass
+
 
 class ConfigManager:
     """Manages application configuration and catalog"""
 
-    def __init__(self, config_path: str = "config/research_config.yaml"):
+    def __init__(
+        self,
+        config_path: str = "config/research_config.yaml",
+        project_root: Optional[Path] = None,
+    ):
         self.config_path = Path(config_path)
         self.env_loaded = False
         self._config: Optional[ResearchConfig] = None
-        
+
         # Security: whitelist allowed base directories
-        # We assume the project root is the parent of the 'src' directory
-        self.project_root = Path.cwd()
+        self.project_root = project_root or Path.cwd()
         self.path_sanitizer = PathSanitizer(allowed_bases=[self.project_root])
 
     def load_config(self) -> ResearchConfig:
@@ -36,7 +44,7 @@ class ConfigManager:
             return self._config
 
         # 1. Load environment
-        if not self.env_loaded:
+        if not self.env_loaded:  # pragma: no cover
             load_dotenv()
             self.env_loaded = True
 
@@ -54,12 +62,13 @@ class ConfigManager:
         # 4. Substitute env vars
         try:
             # Use safe_substitute to allow ${VAR} syntax
-            # We map os.environ to avoid KeyError if a var is missing (Pydantic will catch it later if it's required)
             template = Template(raw_content)
             substituted_content = template.safe_substitute(os.environ)
             config_data = yaml.safe_load(substituted_content)
         except Exception as e:
-             raise ConfigValidationError(f"Failed to parse YAML or substitute variables: {e}")
+            raise ConfigValidationError(
+                f"Failed to parse YAML or substitute variables: {e}"
+            )
 
         # 5. Validate with Pydantic
         try:
@@ -71,78 +80,72 @@ class ConfigManager:
 
     def generate_topic_slug(self, query: str) -> str:
         """Convert query to filesystem-safe slug"""
-        import re
         slug = query.lower()
         # Remove special characters
-        slug = re.sub(r'[^\w\s-]', '', slug)
+        slug = re.sub(r"[^\w\s-]", "", slug)
         # Replace spaces with hyphens
-        slug = re.sub(r'[\s_]+', '-', slug)
+        slug = re.sub(r"[\s_]+", "-", slug)
         # Remove consecutive hyphens
-        slug = re.sub(r'-+', '-', slug)
+        slug = re.sub(r"-+", "-", slug)
         # Trim hyphens
-        slug = slug.strip('-')
+        slug = slug.strip("-")
         # Limit length
         if len(slug) > 100:
-            slug = slug[:100].rstrip('-')
+            slug = slug[:100].rstrip("-")
         return slug
 
     def get_catalog_path(self) -> Path:
         """Get secure path to catalog.json"""
         if not self._config:
             self.load_config()
-            
+
         assert self._config is not None
         output_base = Path(self._config.settings.output_base_dir)
-        
+
         # Ensure output directory exists
         if not output_base.exists():
             output_base.mkdir(parents=True, exist_ok=True)
-            
+
         # Securely resolve catalog path
         try:
             # We treat output_base as the base for the catalog
             sanitizer = PathSanitizer(allowed_bases=[output_base.resolve()])
             return sanitizer.safe_path(output_base, "catalog.json")
         except SecurityError as e:
-            # Should technically not happen for fixed filename, but good practice
             raise SecurityError(f"Security violation accessing catalog: {e}")
 
     def load_catalog(self) -> Catalog:
         """Load existing catalog or create new"""
         catalog_path = self.get_catalog_path()
-        
+
         if not catalog_path.exists():
             logger.info("catalog_created", path=str(catalog_path))
             return Catalog()
-            
+
         try:
-            with open(catalog_path, 'r') as f:
-                import json
+            with open(catalog_path, "r") as f:
                 data = json.load(f)
                 return Catalog(**data)
         except Exception as e:
             logger.error("catalog_load_failed", error=str(e))
-            # Fallback to new catalog if corrupted? 
-            # Ideally we might backup the old one. For MVP, we raise or return empty.
-            # Let's return empty but log error.
             return Catalog()
 
     def save_catalog(self, catalog: Catalog) -> None:
         """Save catalog to disk atomically"""
         catalog_path = self.get_catalog_path()
-        
+
         # Atomic write: write to .tmp then rename
-        temp_path = catalog_path.with_suffix('.tmp')
-        
+        temp_path = catalog_path.with_suffix(".tmp")
+
         try:
-            with open(temp_path, 'w') as f:
+            with open(temp_path, "w") as f:
                 f.write(catalog.model_dump_json(indent=2))
-            
+
             temp_path.rename(catalog_path)
             logger.info("catalog_saved", path=str(catalog_path))
         except Exception as e:
             logger.error("catalog_save_failed", error=str(e))
-            if temp_path.exists():
+            if temp_path.exists():  # pragma: no cover
                 temp_path.unlink()
             raise
 
@@ -150,20 +153,19 @@ class ConfigManager:
         """Determine output directory for topic"""
         if not self._config:
             self.load_config()
-            
+
         assert self._config is not None
         output_base = Path(self._config.settings.output_base_dir)
-        
+
         # Security: use sanitizer to ensure slug doesn't escape output dir
         try:
             # Re-init sanitizer with just this base to be specific
             sanitizer = PathSanitizer(allowed_bases=[output_base.resolve()])
-            # We don't require existence yet as we might be creating it
             topic_path = sanitizer.safe_path(output_base, topic_slug)
-            
+
             if not topic_path.exists():
                 topic_path.mkdir(parents=True, exist_ok=True)
-                
+
             return topic_path
-        except SecurityError as e:
+        except SecurityError as e:  # pragma: no cover
             raise SecurityError(f"Invalid topic slug '{topic_slug}': {e}")

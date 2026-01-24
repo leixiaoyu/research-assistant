@@ -4,13 +4,18 @@ Extended test coverage for SemanticScholarProvider to meet ≥95% requirement.
 This file adds comprehensive tests for all uncovered code paths identified
 in the coverage analysis.
 """
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 import asyncio
 from datetime import date
-from src.services.providers.semantic_scholar import SemanticScholarProvider, APIError, RateLimitError
-from src.models.config import ResearchTopic, TimeframeRecent, TimeframeSinceYear, TimeframeDateRange
-from tenacity import RetryError
+from src.services.providers.semantic_scholar import SemanticScholarProvider
+from src.models.config import (
+    ResearchTopic,
+    TimeframeRecent,
+    TimeframeSinceYear,
+    TimeframeDateRange,
+)
 
 
 @pytest.fixture
@@ -21,15 +26,14 @@ def provider():
 @pytest.fixture
 def topic():
     return ResearchTopic(
-        query="test query",
-        timeframe=TimeframeRecent(value="48h"),
-        max_papers=10
+        query="test query", timeframe=TimeframeRecent(value="48h"), max_papers=10
     )
 
 
 # ============================================================================
 # Property Tests (Coverage: name, requires_api_key)
 # ============================================================================
+
 
 def test_provider_name(provider):
     """Test name property returns 'semantic_scholar'"""
@@ -44,6 +48,7 @@ def test_requires_api_key(provider):
 # ============================================================================
 # validate_query() Tests (Coverage: Lines 48-59)
 # ============================================================================
+
 
 def test_validate_query_success(provider):
     """Test validate_query accepts valid queries"""
@@ -98,6 +103,7 @@ def test_validate_query_allows_tabs_newlines(provider):
 # search() Error Handling Tests
 # ============================================================================
 
+
 @pytest.mark.asyncio
 async def test_search_invalid_query_returns_empty(provider, topic):
     """Test search returns empty list for invalid queries"""
@@ -115,7 +121,7 @@ async def test_search_server_error_500(provider, topic):
         mock_get.return_value.__aenter__.return_value = mock_resp
 
         # Should raise after retries
-        with pytest.raises(Exception):  # RetryError wraps ClientError
+        with pytest.raises(Exception):
             await provider.search(topic)
 
 
@@ -127,7 +133,7 @@ async def test_search_server_error_503(provider, topic):
         mock_resp.status = 503
         mock_get.return_value.__aenter__.return_value = mock_resp
 
-        with pytest.raises(Exception):  # RetryError
+        with pytest.raises(Exception):
             await provider.search(topic)
 
 
@@ -158,6 +164,7 @@ async def test_search_timeout_error(provider, topic):
 # _build_query_params() Timeframe Tests
 # ============================================================================
 
+
 def test_build_query_params_since_year(provider, topic):
     """Test _build_query_params with TimeframeSinceYear"""
     topic.timeframe = TimeframeSinceYear(value=2020)
@@ -172,8 +179,7 @@ def test_build_query_params_since_year(provider, topic):
 def test_build_query_params_date_range(provider, topic):
     """Test _build_query_params with TimeframeDateRange"""
     topic.timeframe = TimeframeDateRange(
-        start_date=date(2023, 1, 1),
-        end_date=date(2023, 12, 31)
+        start_date=date(2023, 1, 1), end_date=date(2023, 12, 31)
     )
 
     params = provider._build_query_params(topic, "test query")
@@ -207,6 +213,7 @@ def test_build_query_params_recent_days(provider, topic):
 # _parse_response() Tests - Edge Cases
 # ============================================================================
 
+
 def test_parse_response_empty_data(provider):
     """Test _parse_response handles empty data array"""
     response = {"data": []}
@@ -230,13 +237,7 @@ def test_parse_response_null_data(provider):
 
 def test_parse_response_missing_authors(provider):
     """Test _parse_response handles missing authors"""
-    response = {
-        "data": [{
-            "paperId": "123",
-            "title": "Test Paper",
-            "authors": None
-        }]
-    }
+    response = {"data": [{"paperId": "123", "title": "Test Paper", "authors": None}]}
 
     papers = provider._parse_response(response)
     assert len(papers) == 1
@@ -245,13 +246,7 @@ def test_parse_response_missing_authors(provider):
 
 def test_parse_response_empty_authors(provider):
     """Test _parse_response handles empty authors array"""
-    response = {
-        "data": [{
-            "paperId": "123",
-            "title": "Test Paper",
-            "authors": []
-        }]
-    }
+    response = {"data": [{"paperId": "123", "title": "Test Paper", "authors": []}]}
 
     papers = provider._parse_response(response)
     assert len(papers) == 1
@@ -261,14 +256,16 @@ def test_parse_response_empty_authors(provider):
 def test_parse_response_author_without_name(provider):
     """Test _parse_response skips authors without names"""
     response = {
-        "data": [{
-            "paperId": "123",
-            "title": "Test Paper",
-            "authors": [
-                {"authorId": "1"},  # No name
-                {"name": "Author 2", "authorId": "2"}
-            ]
-        }]
+        "data": [
+            {
+                "paperId": "123",
+                "title": "Test Paper",
+                "authors": [
+                    {"authorId": "1"},  # No name
+                    {"name": "Author 2", "authorId": "2"},
+                ],
+            }
+        ]
     }
 
     papers = provider._parse_response(response)
@@ -279,12 +276,7 @@ def test_parse_response_author_without_name(provider):
 
 def test_parse_response_missing_open_access_pdf(provider):
     """Test _parse_response handles missing openAccessPdf"""
-    response = {
-        "data": [{
-            "paperId": "123",
-            "title": "Test Paper"
-        }]
-    }
+    response = {"data": [{"paperId": "123", "title": "Test Paper"}]}
 
     papers = provider._parse_response(response)
     assert len(papers) == 1
@@ -294,11 +286,7 @@ def test_parse_response_missing_open_access_pdf(provider):
 def test_parse_response_null_open_access_pdf(provider):
     """Test _parse_response handles null openAccessPdf"""
     response = {
-        "data": [{
-            "paperId": "123",
-            "title": "Test Paper",
-            "openAccessPdf": None
-        }]
+        "data": [{"paperId": "123", "title": "Test Paper", "openAccessPdf": None}]
     }
 
     papers = provider._parse_response(response)
@@ -309,11 +297,13 @@ def test_parse_response_null_open_access_pdf(provider):
 def test_parse_response_open_access_pdf_without_url(provider):
     """Test _parse_response handles openAccessPdf without url"""
     response = {
-        "data": [{
-            "paperId": "123",
-            "title": "Test Paper",
-            "openAccessPdf": {"status": "CLOSED"}
-        }]
+        "data": [
+            {
+                "paperId": "123",
+                "title": "Test Paper",
+                "openAccessPdf": {"status": "CLOSED"},
+            }
+        ]
     }
 
     papers = provider._parse_response(response)
@@ -324,11 +314,13 @@ def test_parse_response_open_access_pdf_without_url(provider):
 def test_parse_response_open_access_pdf_with_url(provider):
     """Test _parse_response extracts openAccessPdf URL"""
     response = {
-        "data": [{
-            "paperId": "123",
-            "title": "Test Paper",
-            "openAccessPdf": {"url": "https://example.com/paper.pdf"}
-        }]
+        "data": [
+            {
+                "paperId": "123",
+                "title": "Test Paper",
+                "openAccessPdf": {"url": "https://example.com/paper.pdf"},
+            }
+        ]
     }
 
     papers = provider._parse_response(response)
@@ -339,11 +331,9 @@ def test_parse_response_open_access_pdf_with_url(provider):
 def test_parse_response_invalid_publication_date(provider):
     """Test _parse_response handles invalid publication date format"""
     response = {
-        "data": [{
-            "paperId": "123",
-            "title": "Test Paper",
-            "publicationDate": "invalid-date"
-        }]
+        "data": [
+            {"paperId": "123", "title": "Test Paper", "publicationDate": "invalid-date"}
+        ]
     }
 
     papers = provider._parse_response(response)
@@ -354,11 +344,9 @@ def test_parse_response_invalid_publication_date(provider):
 def test_parse_response_valid_publication_date(provider):
     """Test _parse_response parses valid publication date"""
     response = {
-        "data": [{
-            "paperId": "123",
-            "title": "Test Paper",
-            "publicationDate": "2023-06-15"
-        }]
+        "data": [
+            {"paperId": "123", "title": "Test Paper", "publicationDate": "2023-06-15"}
+        ]
     }
 
     papers = provider._parse_response(response)
@@ -371,12 +359,7 @@ def test_parse_response_valid_publication_date(provider):
 
 def test_parse_response_missing_publication_date(provider):
     """Test _parse_response handles missing publicationDate"""
-    response = {
-        "data": [{
-            "paperId": "123",
-            "title": "Test Paper"
-        }]
-    }
+    response = {"data": [{"paperId": "123", "title": "Test Paper"}]}
 
     papers = provider._parse_response(response)
     assert len(papers) == 1
@@ -391,10 +374,7 @@ def test_parse_response_paper_parsing_exception(provider):
                 # Missing required 'paperId' field - will cause KeyError
                 "title": "Broken Paper"
             },
-            {
-                "paperId": "456",
-                "title": "Valid Paper"
-            }
+            {"paperId": "456", "title": "Valid Paper"},
         ]
     }
 
@@ -411,12 +391,7 @@ def test_parse_response_paper_parsing_exception(provider):
 
 def test_parse_response_missing_title_uses_default(provider):
     """Test _parse_response uses 'Unknown Title' for missing title"""
-    response = {
-        "data": [{
-            "paperId": "123",
-            "title": None
-        }]
-    }
+    response = {"data": [{"paperId": "123", "title": None}]}
 
     papers = provider._parse_response(response)
     assert len(papers) == 1
@@ -425,13 +400,7 @@ def test_parse_response_missing_title_uses_default(provider):
 
 def test_parse_response_missing_url_uses_default(provider):
     """Test _parse_response generates default URL when missing"""
-    response = {
-        "data": [{
-            "paperId": "abc123",
-            "title": "Test Paper",
-            "url": None
-        }]
-    }
+    response = {"data": [{"paperId": "abc123", "title": "Test Paper", "url": None}]}
 
     papers = provider._parse_response(response)
     assert len(papers) == 1
@@ -441,22 +410,24 @@ def test_parse_response_missing_url_uses_default(provider):
 def test_parse_response_complete_paper(provider):
     """Test _parse_response with all fields present"""
     response = {
-        "data": [{
-            "paperId": "123",
-            "title": "Complete Paper",
-            "abstract": "This is the abstract",
-            "url": "https://example.com/paper",
-            "year": 2023,
-            "publicationDate": "2023-06-15",
-            "authors": [
-                {"name": "Author 1", "authorId": "a1"},
-                {"name": "Author 2", "authorId": "a2"}
-            ],
-            "citationCount": 42,
-            "influentialCitationCount": 5,
-            "venue": "ICML 2023",
-            "openAccessPdf": {"url": "https://example.com/paper.pdf"}
-        }]
+        "data": [
+            {
+                "paperId": "123",
+                "title": "Complete Paper",
+                "abstract": "This is the abstract",
+                "url": "https://example.com/paper",
+                "year": 2023,
+                "publicationDate": "2023-06-15",
+                "authors": [
+                    {"name": "Author 1", "authorId": "a1"},
+                    {"name": "Author 2", "authorId": "a2"},
+                ],
+                "citationCount": 42,
+                "influentialCitationCount": 5,
+                "venue": "ICML 2023",
+                "openAccessPdf": {"url": "https://example.com/paper.pdf"},
+            }
+        ]
     }
 
     papers = provider._parse_response(response)

@@ -94,8 +94,8 @@ def run(
 
             # PDF Service
             pdf_service = PDFService(
-                temp_dir=config.settings.pdf_settings.temp_dir,
-                max_file_size_mb=config.settings.pdf_settings.max_file_size_mb,
+                temp_dir=Path(config.settings.pdf_settings.temp_dir),
+                max_size_mb=config.settings.pdf_settings.max_file_size_mb,
                 timeout_seconds=config.settings.pdf_settings.timeout_seconds
             )
 

@@ -7,7 +7,7 @@ This module defines the data structures for:
 - Extracted papers (papers with metadata and extractions)
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Dict, Any, Optional, Literal
 from datetime import datetime
 
@@ -45,16 +45,15 @@ class ExtractionTarget(BaseModel):
         description="Example extractions to guide the LLM"
     )
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "name": "system_prompts",
-                "description": "Extract all LLM system prompts used in the paper",
-                "output_format": "list",
-                "required": False,
-                "examples": ["You are a helpful AI assistant..."]
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "name": "system_prompts",
+            "description": "Extract all LLM system prompts used in the paper",
+            "output_format": "list",
+            "required": False,
+            "examples": ["You are a helpful AI assistant..."]
         }
+    })
 
 
 class ExtractionResult(BaseModel):
@@ -79,16 +78,15 @@ class ExtractionResult(BaseModel):
         description="Error message if extraction failed"
     )
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "target_name": "system_prompts",
-                "success": True,
-                "content": ["You are a helpful AI assistant...", "You are an expert translator..."],
-                "confidence": 0.95,
-                "error": None
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "target_name": "system_prompts",
+            "success": True,
+            "content": ["You are a helpful AI assistant...", "You are an expert translator..."],
+            "confidence": 0.95,
+            "error": None
         }
+    })
 
 
 class PaperExtraction(BaseModel):
@@ -116,16 +114,15 @@ class PaperExtraction(BaseModel):
         description="When extraction was performed"
     )
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "paper_id": "2301.12345",
-                "extraction_results": [],
-                "tokens_used": 45000,
-                "cost_usd": 0.15,
-                "extraction_timestamp": "2025-01-24T10:00:00Z"
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "paper_id": "2301.12345",
+            "extraction_results": [],
+            "tokens_used": 45000,
+            "cost_usd": 0.15,
+            "extraction_timestamp": "2025-01-24T10:00:00Z"
         }
+    })
 
 
 class ExtractedPaper(BaseModel):
@@ -154,19 +151,18 @@ class ExtractedPaper(BaseModel):
         description="LLM extraction results"
     )
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "metadata": {
-                    "paper_id": "2301.12345",
-                    "title": "Sample Paper",
-                    "abstract": "This is a sample abstract...",
-                    "authors": [{"name": "John Doe"}],
-                    "year": 2023
-                },
-                "pdf_available": True,
-                "pdf_path": "/temp/pdfs/2301.12345.pdf",
-                "markdown_path": "/temp/markdown/2301.12345.md",
-                "extraction": None
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "metadata": {
+                "paper_id": "2301.12345",
+                "title": "Sample Paper",
+                "abstract": "This is a sample abstract...",
+                "authors": [{"name": "John Doe"}],
+                "year": 2023
+            },
+            "pdf_available": True,
+            "pdf_path": "/temp/pdfs/2301.12345.pdf",
+            "markdown_path": "/temp/markdown/2301.12345.md",
+            "extraction": None
         }
+    })

@@ -6,7 +6,7 @@ This module defines the data structures for:
 - Usage statistics and tracking
 """
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Literal
 from datetime import datetime
 
@@ -71,17 +71,16 @@ class LLMConfig(BaseModel):
             raise ValueError(f"Google provider cannot use Claude model: {v}")
         return v
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "provider": "anthropic",
-                "model": "claude-3-5-sonnet-20250122",
-                "api_key": "sk-ant-...",
-                "max_tokens": 100000,
-                "temperature": 0.0,
-                "timeout": 300
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "provider": "anthropic",
+            "model": "claude-3-5-sonnet-20250122",
+            "api_key": "sk-ant-...",
+            "max_tokens": 100000,
+            "temperature": 0.0,
+            "timeout": 300
         }
+    })
 
 
 class CostLimits(BaseModel):
@@ -122,14 +121,13 @@ class CostLimits(BaseModel):
             )
         return v
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "max_tokens_per_paper": 100000,
-                "max_daily_spend_usd": 50.0,
-                "max_total_spend_usd": 500.0
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "max_tokens_per_paper": 100000,
+            "max_daily_spend_usd": 50.0,
+            "max_total_spend_usd": 500.0
         }
+    })
 
 
 class UsageStats(BaseModel):
@@ -173,12 +171,11 @@ class UsageStats(BaseModel):
         now = datetime.utcnow()
         return (now.date() > self.last_reset.date())
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "total_tokens": 450000,
-                "total_cost_usd": 15.50,
-                "papers_processed": 12,
-                "last_reset": "2025-01-24T00:00:00Z"
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "total_tokens": 450000,
+            "total_cost_usd": 15.50,
+            "papers_processed": 12,
+            "last_reset": "2025-01-24T00:00:00Z"
         }
+    })

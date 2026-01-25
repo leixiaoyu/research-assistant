@@ -22,13 +22,13 @@ from src.models.extraction import (
     ExtractionTarget,
     ExtractionResult,
     PaperExtraction,
-    ExtractedPaper
+    ExtractedPaper,
 )
 from src.utils.exceptions import (
     PDFDownloadError,
     ConversionError,
     ExtractionError,
-    FileSizeError
+    FileSizeError,
 )
 
 
@@ -54,9 +54,7 @@ def mock_llm_service():
 def extraction_service(mock_pdf_service, mock_llm_service):
     """Create ExtractionService instance"""
     return ExtractionService(
-        pdf_service=mock_pdf_service,
-        llm_service=mock_llm_service,
-        keep_pdfs=True
+        pdf_service=mock_pdf_service, llm_service=mock_llm_service, keep_pdfs=True
     )
 
 
@@ -72,7 +70,7 @@ def paper_with_pdf():
         authors=[Author(name="John Doe")],
         year=2023,
         citation_count=10,
-        venue="ArXiv"
+        venue="ArXiv",
     )
 
 
@@ -88,7 +86,7 @@ def paper_without_pdf():
         authors=[Author(name="Jane Smith")],
         year=2023,
         citation_count=5,
-        venue="Conference"
+        venue="Conference",
     )
 
 
@@ -100,7 +98,7 @@ def extraction_targets():
             name="system_prompts",
             description="Extract system prompts",
             output_format="list",
-            required=False
+            required=False,
         )
     ]
 
@@ -108,9 +106,7 @@ def extraction_targets():
 def test_extraction_service_initialization(mock_pdf_service, mock_llm_service):
     """Test ExtractionService initializes correctly"""
     service = ExtractionService(
-        pdf_service=mock_pdf_service,
-        llm_service=mock_llm_service,
-        keep_pdfs=False
+        pdf_service=mock_pdf_service, llm_service=mock_llm_service, keep_pdfs=False
     )
 
     assert service.pdf_service == mock_pdf_service
@@ -124,7 +120,7 @@ async def test_process_paper_full_pipeline_success(
     mock_pdf_service,
     mock_llm_service,
     paper_with_pdf,
-    extraction_targets
+    extraction_targets,
 ):
     """Test successful processing with full PDF pipeline"""
     # Mock PDF download
@@ -146,12 +142,12 @@ async def test_process_paper_full_pipeline_success(
                 target_name="system_prompts",
                 success=True,
                 content=["Prompt 1"],
-                confidence=0.9
+                confidence=0.9,
             )
         ],
         tokens_used=50000,
         cost_usd=0.20,
-        extraction_timestamp=datetime.utcnow()
+        extraction_timestamp=datetime.utcnow(),
     )
     mock_llm_service.extract.return_value = extraction
 
@@ -160,12 +156,10 @@ async def test_process_paper_full_pipeline_success(
 
     # Verify PDF pipeline was called
     mock_pdf_service.download_pdf.assert_called_once_with(
-        url="https://example.com/paper.pdf",
-        paper_id="2301.12345"
+        url="https://example.com/paper.pdf", paper_id="2301.12345"
     )
     mock_pdf_service.convert_to_markdown.assert_called_once_with(
-        pdf_path=pdf_path,
-        paper_id="2301.12345"
+        pdf_path=pdf_path, paper_id="2301.12345"
     )
 
     # Verify LLM extraction was called with markdown content
@@ -184,8 +178,7 @@ async def test_process_paper_full_pipeline_success(
 
     # Verify cleanup was called
     mock_pdf_service.cleanup_temp_files.assert_called_once_with(
-        paper_id="2301.12345",
-        keep_pdfs=True
+        paper_id="2301.12345", keep_pdfs=True
     )
 
 
@@ -195,7 +188,7 @@ async def test_process_paper_pdf_download_failure_fallback(
     mock_pdf_service,
     mock_llm_service,
     paper_with_pdf,
-    extraction_targets
+    extraction_targets,
 ):
     """Test fallback to abstract when PDF download fails"""
     # Mock PDF download failure
@@ -207,7 +200,7 @@ async def test_process_paper_pdf_download_failure_fallback(
         extraction_results=[],
         tokens_used=5000,
         cost_usd=0.02,
-        extraction_timestamp=datetime.utcnow()
+        extraction_timestamp=datetime.utcnow(),
     )
     mock_llm_service.extract.return_value = extraction
 
@@ -238,7 +231,7 @@ async def test_process_paper_pdf_conversion_failure_fallback(
     mock_pdf_service,
     mock_llm_service,
     paper_with_pdf,
-    extraction_targets
+    extraction_targets,
 ):
     """Test fallback to abstract when PDF conversion fails"""
     # Mock successful PDF download
@@ -246,7 +239,9 @@ async def test_process_paper_pdf_conversion_failure_fallback(
     mock_pdf_service.download_pdf.return_value = pdf_path
 
     # Mock PDF conversion failure
-    mock_pdf_service.convert_to_markdown.side_effect = ConversionError("Conversion timeout")
+    mock_pdf_service.convert_to_markdown.side_effect = ConversionError(
+        "Conversion timeout"
+    )
 
     # Mock LLM extraction
     extraction = PaperExtraction(
@@ -254,7 +249,7 @@ async def test_process_paper_pdf_conversion_failure_fallback(
         extraction_results=[],
         tokens_used=5000,
         cost_usd=0.02,
-        extraction_timestamp=datetime.utcnow()
+        extraction_timestamp=datetime.utcnow(),
     )
     mock_llm_service.extract.return_value = extraction
 
@@ -282,7 +277,7 @@ async def test_process_paper_no_pdf_available(
     mock_pdf_service,
     mock_llm_service,
     paper_without_pdf,
-    extraction_targets
+    extraction_targets,
 ):
     """Test processing when no PDF is available"""
     # Mock LLM extraction
@@ -291,12 +286,14 @@ async def test_process_paper_no_pdf_available(
         extraction_results=[],
         tokens_used=3000,
         cost_usd=0.01,
-        extraction_timestamp=datetime.utcnow()
+        extraction_timestamp=datetime.utcnow(),
     )
     mock_llm_service.extract.return_value = extraction
 
     # Process paper
-    result = await extraction_service.process_paper(paper_without_pdf, extraction_targets)
+    result = await extraction_service.process_paper(
+        paper_without_pdf, extraction_targets
+    )
 
     # Verify PDF pipeline was NOT attempted
     mock_pdf_service.download_pdf.assert_not_called()
@@ -320,14 +317,16 @@ async def test_process_paper_llm_extraction_failure(
     mock_pdf_service,
     mock_llm_service,
     paper_without_pdf,
-    extraction_targets
+    extraction_targets,
 ):
     """Test processing continues when LLM extraction fails"""
     # Mock LLM extraction failure
     mock_llm_service.extract.side_effect = ExtractionError("LLM API error")
 
     # Process paper - should not raise
-    result = await extraction_service.process_paper(paper_without_pdf, extraction_targets)
+    result = await extraction_service.process_paper(
+        paper_without_pdf, extraction_targets
+    )
 
     # Verify extraction was attempted
     mock_llm_service.extract.assert_called_once()
@@ -343,7 +342,7 @@ async def test_process_paper_unexpected_error_during_pdf_pipeline(
     mock_pdf_service,
     mock_llm_service,
     paper_with_pdf,
-    extraction_targets
+    extraction_targets,
 ):
     """Test fallback to abstract on unexpected errors"""
     # Mock unexpected error during PDF download
@@ -355,7 +354,7 @@ async def test_process_paper_unexpected_error_during_pdf_pipeline(
         extraction_results=[],
         tokens_used=5000,
         cost_usd=0.02,
-        extraction_timestamp=datetime.utcnow()
+        extraction_timestamp=datetime.utcnow(),
     )
     mock_llm_service.extract.return_value = extraction
 
@@ -373,7 +372,7 @@ async def test_process_paper_cleanup_always_called(
     mock_pdf_service,
     mock_llm_service,
     paper_with_pdf,
-    extraction_targets
+    extraction_targets,
 ):
     """Test cleanup is always called even if processing fails"""
     # Mock PDF download failure
@@ -385,8 +384,7 @@ async def test_process_paper_cleanup_always_called(
 
     # Verify cleanup was called
     mock_pdf_service.cleanup_temp_files.assert_called_once_with(
-        paper_id="2301.12345",
-        keep_pdfs=True
+        paper_id="2301.12345", keep_pdfs=True
     )
 
 
@@ -396,7 +394,7 @@ async def test_process_paper_cleanup_failure_does_not_crash(
     mock_pdf_service,
     mock_llm_service,
     paper_without_pdf,
-    extraction_targets
+    extraction_targets,
 ):
     """Test processing continues even if cleanup fails"""
     # Mock cleanup failure
@@ -408,12 +406,14 @@ async def test_process_paper_cleanup_failure_does_not_crash(
         extraction_results=[],
         tokens_used=3000,
         cost_usd=0.01,
-        extraction_timestamp=datetime.utcnow()
+        extraction_timestamp=datetime.utcnow(),
     )
     mock_llm_service.extract.return_value = extraction
 
     # Process paper - should not raise
-    result = await extraction_service.process_paper(paper_without_pdf, extraction_targets)
+    result = await extraction_service.process_paper(
+        paper_without_pdf, extraction_targets
+    )
 
     # Verify result is valid
     assert result.extraction == extraction
@@ -426,7 +426,7 @@ async def test_process_papers_batch_processing(
     mock_llm_service,
     paper_with_pdf,
     paper_without_pdf,
-    extraction_targets
+    extraction_targets,
 ):
     """Test batch processing of multiple papers"""
     papers = [paper_with_pdf, paper_without_pdf]
@@ -446,14 +446,14 @@ async def test_process_papers_batch_processing(
         extraction_results=[],
         tokens_used=50000,
         cost_usd=0.20,
-        extraction_timestamp=datetime.utcnow()
+        extraction_timestamp=datetime.utcnow(),
     )
     extraction2 = PaperExtraction(
         paper_id="2301.67890",
         extraction_results=[],
         tokens_used=5000,
         cost_usd=0.02,
-        extraction_timestamp=datetime.utcnow()
+        extraction_timestamp=datetime.utcnow(),
     )
     mock_llm_service.extract.side_effect = [extraction1, extraction2]
 
@@ -478,7 +478,7 @@ async def test_process_papers_continues_on_individual_failures(
     mock_llm_service,
     paper_with_pdf,
     paper_without_pdf,
-    extraction_targets
+    extraction_targets,
 ):
     """Test batch processing continues even if individual papers fail"""
     papers = [paper_with_pdf, paper_without_pdf]
@@ -492,8 +492,8 @@ async def test_process_papers_continues_on_individual_failures(
             extraction_results=[],
             tokens_used=5000,
             cost_usd=0.02,
-            extraction_timestamp=datetime.utcnow()
-        )
+            extraction_timestamp=datetime.utcnow(),
+        ),
     ]
 
     # Process batch
@@ -529,7 +529,7 @@ def test_format_abstract_minimal_metadata(extraction_service):
         authors=[],
         citation_count=0,
         year=None,
-        venue=None
+        venue=None,
     )
 
     markdown = extraction_service._format_abstract(paper)
@@ -549,9 +549,9 @@ def test_format_abstract_multiple_authors(extraction_service):
         authors=[
             Author(name="John Doe"),
             Author(name="Jane Smith"),
-            Author(name="Bob Johnson")
+            Author(name="Bob Johnson"),
         ],
-        citation_count=0
+        citation_count=0,
     )
 
     markdown = extraction_service._format_abstract(paper)
@@ -568,7 +568,7 @@ def test_get_extraction_summary_complete(extraction_service):
                 title="Paper 1",
                 url="https://example.com/1",
                 authors=[],
-                citation_count=0
+                citation_count=0,
             ),
             pdf_available=True,
             extraction=PaperExtraction(
@@ -576,8 +576,8 @@ def test_get_extraction_summary_complete(extraction_service):
                 extraction_results=[],
                 tokens_used=50000,
                 cost_usd=0.20,
-                extraction_timestamp=datetime.utcnow()
-            )
+                extraction_timestamp=datetime.utcnow(),
+            ),
         ),
         ExtractedPaper(
             metadata=PaperMetadata(
@@ -585,7 +585,7 @@ def test_get_extraction_summary_complete(extraction_service):
                 title="Paper 2",
                 url="https://example.com/2",
                 authors=[],
-                citation_count=0
+                citation_count=0,
             ),
             pdf_available=False,
             extraction=PaperExtraction(
@@ -593,8 +593,8 @@ def test_get_extraction_summary_complete(extraction_service):
                 extraction_results=[],
                 tokens_used=30000,
                 cost_usd=0.12,
-                extraction_timestamp=datetime.utcnow()
-            )
+                extraction_timestamp=datetime.utcnow(),
+            ),
         ),
         ExtractedPaper(
             metadata=PaperMetadata(
@@ -602,11 +602,11 @@ def test_get_extraction_summary_complete(extraction_service):
                 title="Paper 3",
                 url="https://example.com/3",
                 authors=[],
-                citation_count=0
+                citation_count=0,
             ),
             pdf_available=True,
-            extraction=None  # Extraction failed
-        )
+            extraction=None,  # Extraction failed
+        ),
     ]
 
     summary = extraction_service.get_extraction_summary(results)
@@ -644,10 +644,10 @@ def test_get_extraction_summary_no_successful_extractions(extraction_service):
                 title="Paper 1",
                 url="https://example.com/1",
                 authors=[],
-                citation_count=0
+                citation_count=0,
             ),
             pdf_available=False,
-            extraction=None
+            extraction=None,
         )
     ]
 

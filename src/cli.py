@@ -163,7 +163,13 @@ def run(
 
 
 async def _process_topics(
-    config, discovery, catalog_svc, md_gen, config_mgr, extraction_svc=None, phase2_enabled=False
+    config,
+    discovery,
+    catalog_svc,
+    md_gen,
+    config_mgr,
+    extraction_svc=None,
+    phase2_enabled=False,
 ):
     """Async processing of topics
 
@@ -247,7 +253,9 @@ async def _process_topics(
             with open(output_file, "w") as f:
                 f.write(content)
 
-            logger.info("report_generated", path=str(output_file), phase2=phase2_enabled)
+            logger.info(
+                "report_generated", path=str(output_file), phase2=phase2_enabled
+            )
 
             # E. Update Catalog
             papers_processed = len(papers)
@@ -315,7 +323,8 @@ def catalog(
         typer.echo(f"History for {t.query}:")
         for run in t.runs:
             typer.echo(
-                f"  {run.date}: Found {run.papers_found} papers " f"-> {run.output_file}"
+                f"  {run.date}: Found {run.papers_found} papers "
+                f"-> {run.output_file}"
             )
 
 

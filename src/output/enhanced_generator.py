@@ -32,7 +32,7 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
         extracted_papers: List[ExtractedPaper],
         topic: ResearchTopic,
         run_id: str,
-        summary_stats: Optional[dict] = None
+        summary_stats: Optional[dict] = None,
     ) -> str:
         """Generate enhanced markdown with extraction results
 
@@ -47,15 +47,17 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
         """
         # Resolve timeframe string safely
         timeframe_str = "Unknown"
-        if hasattr(topic.timeframe, 'value'):
-            timeframe_str = str(getattr(topic.timeframe, 'value'))
+        if hasattr(topic.timeframe, "value"):
+            timeframe_str = str(getattr(topic.timeframe, "value"))
         else:
             timeframe_str = "custom"
 
         # Calculate statistics
         total_papers = len(extracted_papers)
         papers_with_pdf = sum(1 for p in extracted_papers if p.pdf_available)
-        papers_with_extraction = sum(1 for p in extracted_papers if p.extraction is not None)
+        papers_with_extraction = sum(
+            1 for p in extracted_papers if p.extraction is not None
+        )
 
         total_tokens = sum(
             p.extraction.tokens_used
@@ -64,9 +66,7 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
         )
 
         total_cost = sum(
-            p.extraction.cost_usd
-            for p in extracted_papers
-            if p.extraction is not None
+            p.extraction.cost_usd for p in extracted_papers if p.extraction is not None
         )
 
         # 1. Enhanced Frontmatter
@@ -80,7 +80,7 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
             "total_cost_usd": round(total_cost, 2),
             "timeframe": timeframe_str,
             "run_id": run_id,
-            "tags": ["research-brief", "arisp", "phase-2"]
+            "tags": ["research-brief", "arisp", "phase-2"],
         }
 
         md_lines = []
@@ -90,15 +90,21 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
 
         # 2. Header
         md_lines.append(f"# Research Brief: {topic.query}\n")
-        md_lines.append(f"**Generated:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        md_lines.append(
+            f"**Generated:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        )
         md_lines.append(f"**Papers Found:** {total_papers}\n")
 
         # 3. Pipeline Summary
         md_lines.append("## Pipeline Summary\n")
         md_lines.append(f"- **Papers Processed:** {total_papers}")
         if total_papers > 0:
-            md_lines.append(f"- **With Full PDF:** {papers_with_pdf} ({papers_with_pdf/total_papers*100:.1f}%)")
-            md_lines.append(f"- **With Extractions:** {papers_with_extraction} ({papers_with_extraction/total_papers*100:.1f}%)")
+            md_lines.append(
+                f"- **With Full PDF:** {papers_with_pdf} ({papers_with_pdf/total_papers*100:.1f}%)"
+            )
+            md_lines.append(
+                f"- **With Extractions:** {papers_with_extraction} ({papers_with_extraction/total_papers*100:.1f}%)"
+            )
         else:
             md_lines.append(f"- **With Full PDF:** 0")
             md_lines.append(f"- **With Extractions:** 0")
@@ -107,9 +113,15 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
 
         if summary_stats:
             md_lines.append("### Extraction Statistics\n")
-            md_lines.append(f"- **PDF Success Rate:** {summary_stats.get('pdf_success_rate', 0):.1f}%")
-            md_lines.append(f"- **Avg Tokens/Paper:** {summary_stats.get('avg_tokens_per_paper', 0):,}")
-            md_lines.append(f"- **Avg Cost/Paper:** ${summary_stats.get('avg_cost_per_paper', 0):.3f}\n")
+            md_lines.append(
+                f"- **PDF Success Rate:** {summary_stats.get('pdf_success_rate', 0):.1f}%"
+            )
+            md_lines.append(
+                f"- **Avg Tokens/Paper:** {summary_stats.get('avg_tokens_per_paper', 0):,}"
+            )
+            md_lines.append(
+                f"- **Avg Cost/Paper:** ${summary_stats.get('avg_cost_per_paper', 0):.3f}\n"
+            )
 
         # 4. Paper Statistics
         if extracted_papers:
@@ -151,7 +163,9 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
 
         lines.append(f"### {index}. [{paper.title}]({paper.url})")
         lines.append(f"**Authors:** {authors}")
-        lines.append(f"**Published:** {paper.year or 'Unknown'} | **Citations:** {paper.citation_count}")
+        lines.append(
+            f"**Published:** {paper.year or 'Unknown'} | **Citations:** {paper.citation_count}"
+        )
         if paper.venue:
             lines.append(f"**Venue:** {paper.venue}")
 
@@ -164,7 +178,9 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
         # Extraction info
         if extracted.extraction:
             ext = extracted.extraction
-            lines.append(f"**Tokens Used:** {ext.tokens_used:,} | **Cost:** ${ext.cost_usd:.3f}")
+            lines.append(
+                f"**Tokens Used:** {ext.tokens_used:,} | **Cost:** ${ext.cost_usd:.3f}"
+            )
         lines.append("")
 
         # Abstract
@@ -194,7 +210,9 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
 
         # Format target name as header
         target_name_formatted = result.target_name.replace("_", " ").title()
-        lines.append(f"**{target_name_formatted}** (confidence: {result.confidence:.0%})\n")
+        lines.append(
+            f"**{target_name_formatted}** (confidence: {result.confidence:.0%})\n"
+        )
 
         # Format content based on type
         content = result.content
@@ -227,7 +245,18 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
 
         elif isinstance(content, str):
             # Check if it looks like code
-            if any(keyword in content.lower() for keyword in ['def ', 'class ', 'import ', 'function ', 'const ', 'let ', 'var ']):
+            if any(
+                keyword in content.lower()
+                for keyword in [
+                    "def ",
+                    "class ",
+                    "import ",
+                    "function ",
+                    "const ",
+                    "let ",
+                    "var ",
+                ]
+            ):
                 # Code format
                 # Try to detect language
                 lang = "python"  # Default

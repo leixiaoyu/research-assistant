@@ -20,6 +20,7 @@ class PipelineError(Exception):
         logger.error("Pipeline failed", error=str(e))
     ```
     """
+
     pass
 
 
@@ -32,6 +33,7 @@ class PDFDownloadError(PipelineError):
     - Connection errors
     - All retry attempts exhausted
     """
+
     pass
 
 
@@ -44,6 +46,7 @@ class FileSizeError(PipelineError):
 
     This is a non-retryable error as the file size won't change.
     """
+
     pass
 
 
@@ -55,6 +58,7 @@ class PDFValidationError(PipelineError):
     - File doesn't have PDF magic bytes (%PDF)
     - File is corrupted or invalid
     """
+
     pass
 
 
@@ -67,6 +71,7 @@ class ConversionError(PipelineError):
     - No markdown file generated
     - marker-pdf crashes
     """
+
     pass
 
 
@@ -79,6 +84,7 @@ class ExtractionError(PipelineError):
     - Invalid JSON in LLM response
     - Required extraction target not found
     """
+
     pass
 
 
@@ -92,6 +98,7 @@ class CostLimitExceeded(PipelineError):
 
     This prevents runaway costs by failing fast when budgets are exhausted.
     """
+
     pass
 
 
@@ -104,6 +111,7 @@ class LLMAPIError(ExtractionError):
     - Rate limit exceeded (429)
     - Authentication failed (401)
     """
+
     pass
 
 
@@ -115,4 +123,5 @@ class JSONParseError(ExtractionError):
     - JSON structure doesn't match expected schema
     - Missing required fields in extraction results
     """
+
     pass

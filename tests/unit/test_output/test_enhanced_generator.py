@@ -19,7 +19,7 @@ from src.models.extraction import (
     ExtractionTarget,
     ExtractionResult,
     PaperExtraction,
-    ExtractedPaper
+    ExtractedPaper,
 )
 
 
@@ -35,7 +35,7 @@ def research_topic():
     return ResearchTopic(
         query="Tree of Thoughts AND machine translation",
         timeframe=TimeframeRecent(value="48h"),
-        max_papers=50
+        max_papers=50,
     )
 
 
@@ -51,11 +51,11 @@ def paper_metadata():
         authors=[
             Author(name="John Doe"),
             Author(name="Jane Smith"),
-            Author(name="Bob Johnson")
+            Author(name="Bob Johnson"),
         ],
         year=2023,
         citation_count=42,
-        venue="NeurIPS 2023"
+        venue="NeurIPS 2023",
     )
 
 
@@ -66,7 +66,7 @@ def extraction_result_list():
         target_name="system_prompts",
         success=True,
         content=["You are an expert translator.", "Translate the following text."],
-        confidence=0.95
+        confidence=0.95,
     )
 
 
@@ -77,7 +77,7 @@ def extraction_result_code():
         target_name="code_snippets",
         success=True,
         content="def translate(text, model):\n    return model.generate(text)",
-        confidence=0.88
+        confidence=0.88,
     )
 
 
@@ -88,7 +88,7 @@ def extraction_result_dict():
         target_name="metrics",
         success=True,
         content={"BLEU": 35.2, "accuracy": 0.92, "f1_score": 0.89},
-        confidence=0.90
+        confidence=0.90,
     )
 
 
@@ -99,7 +99,7 @@ def extraction_result_text():
         target_name="summary",
         success=True,
         content="This paper achieves state-of-the-art results on WMT benchmark.",
-        confidence=0.85
+        confidence=0.85,
     )
 
 
@@ -111,7 +111,7 @@ def paper_extraction(extraction_result_list, extraction_result_code):
         extraction_results=[extraction_result_list, extraction_result_code],
         tokens_used=50000,
         cost_usd=0.20,
-        extraction_timestamp=datetime(2025, 1, 24, 12, 0, 0)
+        extraction_timestamp=datetime(2025, 1, 24, 12, 0, 0),
     )
 
 
@@ -123,7 +123,7 @@ def extracted_paper_with_pdf(paper_metadata, paper_extraction):
         pdf_available=True,
         pdf_path="/temp/pdfs/2301.12345.pdf",
         markdown_path="/temp/markdown/2301.12345.md",
-        extraction=paper_extraction
+        extraction=paper_extraction,
     )
 
 
@@ -140,20 +140,18 @@ def extracted_paper_without_pdf(paper_metadata):
         pdf_available=False,
         pdf_path=None,
         markdown_path=None,
-        extraction=None
+        extraction=None,
     )
 
 
 def test_generate_enhanced_basic_structure(
-    generator,
-    research_topic,
-    extracted_paper_with_pdf
+    generator, research_topic, extracted_paper_with_pdf
 ):
     """Test enhanced markdown generation has correct structure"""
     markdown = generator.generate_enhanced(
         extracted_papers=[extracted_paper_with_pdf],
         topic=research_topic,
-        run_id="test-run-001"
+        run_id="test-run-001",
     )
 
     # Check for YAML frontmatter
@@ -170,21 +168,19 @@ def test_generate_enhanced_basic_structure(
 
 
 def test_generate_enhanced_frontmatter(
-    generator,
-    research_topic,
-    extracted_paper_with_pdf
+    generator, research_topic, extracted_paper_with_pdf
 ):
     """Test frontmatter contains correct Phase 2 metadata"""
     markdown = generator.generate_enhanced(
         extracted_papers=[extracted_paper_with_pdf],
         topic=research_topic,
-        run_id="test-run-123"
+        run_id="test-run-123",
     )
 
     # Parse frontmatter
-    lines = markdown.split('\n')
-    frontmatter_end = lines[1:].index('---') + 1
-    frontmatter = '\n'.join(lines[1:frontmatter_end])
+    lines = markdown.split("\n")
+    frontmatter_end = lines[1:].index("---") + 1
+    frontmatter = "\n".join(lines[1:frontmatter_end])
 
     # Check Phase 2 fields
     assert "papers_processed: 1" in frontmatter
@@ -197,16 +193,13 @@ def test_generate_enhanced_frontmatter(
 
 
 def test_generate_enhanced_pipeline_summary(
-    generator,
-    research_topic,
-    extracted_paper_with_pdf,
-    extracted_paper_without_pdf
+    generator, research_topic, extracted_paper_with_pdf, extracted_paper_without_pdf
 ):
     """Test pipeline summary section"""
     markdown = generator.generate_enhanced(
         extracted_papers=[extracted_paper_with_pdf, extracted_paper_without_pdf],
         topic=research_topic,
-        run_id="test-run"
+        run_id="test-run",
     )
 
     # Check pipeline summary stats
@@ -218,22 +211,20 @@ def test_generate_enhanced_pipeline_summary(
 
 
 def test_generate_enhanced_with_summary_stats(
-    generator,
-    research_topic,
-    extracted_paper_with_pdf
+    generator, research_topic, extracted_paper_with_pdf
 ):
     """Test enhanced generation with optional summary stats"""
     summary_stats = {
         "pdf_success_rate": 75.5,
         "avg_tokens_per_paper": 45000,
-        "avg_cost_per_paper": 0.180
+        "avg_cost_per_paper": 0.180,
     }
 
     markdown = generator.generate_enhanced(
         extracted_papers=[extracted_paper_with_pdf],
         topic=research_topic,
         run_id="test-run",
-        summary_stats=summary_stats
+        summary_stats=summary_stats,
     )
 
     # Check extraction statistics section
@@ -244,9 +235,7 @@ def test_generate_enhanced_with_summary_stats(
 
 
 def test_generate_enhanced_research_statistics(
-    generator,
-    research_topic,
-    extracted_paper_with_pdf
+    generator, research_topic, extracted_paper_with_pdf
 ):
     """Test research statistics section"""
     # Create second paper with different metrics
@@ -256,14 +245,14 @@ def test_generate_enhanced_research_statistics(
         url="https://example.com",
         authors=[],
         citation_count=100,
-        year=2024
+        year=2024,
     )
     paper2 = ExtractedPaper(metadata=paper2_metadata, pdf_available=False)
 
     markdown = generator.generate_enhanced(
         extracted_papers=[extracted_paper_with_pdf, paper2],
         topic=research_topic,
-        run_id="test-run"
+        run_id="test-run",
     )
 
     # Check research statistics
@@ -272,10 +261,7 @@ def test_generate_enhanced_research_statistics(
     assert "Year Range:** 2023-2024" in markdown
 
 
-def test_format_extracted_paper_with_pdf(
-    generator,
-    extracted_paper_with_pdf
-):
+def test_format_extracted_paper_with_pdf(generator, extracted_paper_with_pdf):
     """Test paper formatting with PDF and extractions"""
     markdown = generator._format_extracted_paper(extracted_paper_with_pdf, 1)
 
@@ -304,10 +290,7 @@ def test_format_extracted_paper_with_pdf(
     assert "#### Extraction Results" in markdown
 
 
-def test_format_extracted_paper_without_pdf(
-    generator,
-    extracted_paper_without_pdf
-):
+def test_format_extracted_paper_without_pdf(generator, extracted_paper_without_pdf):
     """Test paper formatting without PDF"""
     markdown = generator._format_extracted_paper(extracted_paper_without_pdf, 2)
 
@@ -326,7 +309,7 @@ def test_format_extracted_paper_with_many_authors(generator, paper_metadata):
         Author(name="Author 2"),
         Author(name="Author 3"),
         Author(name="Author 4"),
-        Author(name="Author 5")
+        Author(name="Author 5"),
     ]
 
     extracted = ExtractedPaper(metadata=paper_metadata, pdf_available=False)
@@ -382,11 +365,8 @@ def test_format_extraction_result_dict_complex(generator):
     result = ExtractionResult(
         target_name="complex_data",
         success=True,
-        content={
-            "nested": {"key": "value"},
-            "list": [1, 2, 3]
-        },
-        confidence=0.8
+        content={"nested": {"key": "value"}, "list": [1, 2, 3]},
+        confidence=0.8,
     )
 
     markdown = generator._format_extraction_result(result)
@@ -412,10 +392,7 @@ def test_format_extraction_result_text(generator, extraction_result_text):
 def test_format_extraction_result_empty_content(generator):
     """Test formatting of extraction result with no content"""
     result = ExtractionResult(
-        target_name="missing_data",
-        success=False,
-        content=None,
-        confidence=0.0
+        target_name="missing_data", success=False, content=None, confidence=0.0
     )
 
     markdown = generator._format_extraction_result(result)
@@ -429,7 +406,7 @@ def test_format_extraction_result_javascript_code(generator):
         target_name="js_code",
         success=True,
         content="const translate = function(text) { return text; }",
-        confidence=0.9
+        confidence=0.9,
     )
 
     markdown = generator._format_extraction_result(result)
@@ -445,7 +422,7 @@ def test_format_extraction_result_java_code(generator):
         target_name="java_code",
         success=True,
         content="public class Translator { private String text; }",
-        confidence=0.9
+        confidence=0.9,
     )
 
     markdown = generator._format_extraction_result(result)
@@ -456,16 +433,13 @@ def test_format_extraction_result_java_code(generator):
 
 
 def test_generate_enhanced_multiple_papers(
-    generator,
-    research_topic,
-    extracted_paper_with_pdf,
-    extracted_paper_without_pdf
+    generator, research_topic, extracted_paper_with_pdf, extracted_paper_without_pdf
 ):
     """Test generating markdown with multiple papers"""
     markdown = generator.generate_enhanced(
         extracted_papers=[extracted_paper_with_pdf, extracted_paper_without_pdf],
         topic=research_topic,
-        run_id="test-run"
+        run_id="test-run",
     )
 
     # Check both papers are present
@@ -479,9 +453,7 @@ def test_generate_enhanced_multiple_papers(
 def test_generate_enhanced_empty_papers_list(generator, research_topic):
     """Test generating markdown with no papers"""
     markdown = generator.generate_enhanced(
-        extracted_papers=[],
-        topic=research_topic,
-        run_id="test-run"
+        extracted_papers=[], topic=research_topic, run_id="test-run"
     )
 
     # Check structure is still valid
@@ -490,7 +462,9 @@ def test_generate_enhanced_empty_papers_list(generator, research_topic):
     assert "Papers Processed:** 0" in markdown
 
 
-def test_generate_enhanced_handles_missing_venue(generator, research_topic, paper_metadata):
+def test_generate_enhanced_handles_missing_venue(
+    generator, research_topic, paper_metadata
+):
     """Test paper formatting when venue is missing"""
     paper_metadata.venue = None
     extracted = ExtractedPaper(metadata=paper_metadata, pdf_available=False)
@@ -501,7 +475,9 @@ def test_generate_enhanced_handles_missing_venue(generator, research_topic, pape
     assert "**Venue:**" not in markdown
 
 
-def test_generate_enhanced_handles_missing_year(generator, research_topic, paper_metadata):
+def test_generate_enhanced_handles_missing_year(
+    generator, research_topic, paper_metadata
+):
     """Test paper formatting when year is missing"""
     paper_metadata.year = None
     extracted = ExtractedPaper(metadata=paper_metadata, pdf_available=False)
@@ -512,7 +488,9 @@ def test_generate_enhanced_handles_missing_year(generator, research_topic, paper
     assert "**Published:** Unknown" in markdown
 
 
-def test_generate_enhanced_handles_no_authors(generator, research_topic, paper_metadata):
+def test_generate_enhanced_handles_no_authors(
+    generator, research_topic, paper_metadata
+):
     """Test paper formatting when authors list is empty"""
     paper_metadata.authors = []
     extracted = ExtractedPaper(metadata=paper_metadata, pdf_available=False)

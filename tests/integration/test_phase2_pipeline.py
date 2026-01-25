@@ -20,7 +20,7 @@ from src.models.extraction import (
     ExtractionTarget,
     ExtractionResult,
     PaperExtraction,
-    ExtractedPaper
+    ExtractedPaper,
 )
 from src.models.config import ResearchTopic, TimeframeRecent
 
@@ -35,13 +35,10 @@ def sample_papers() -> List[PaperMetadata]:
             abstract="This paper explores ToT prompting techniques for MT tasks.",
             url="https://arxiv.org/abs/2301.12345",
             open_access_pdf="https://arxiv.org/pdf/2301.12345.pdf",
-            authors=[
-                Author(name="Alice Smith"),
-                Author(name="Bob Johnson")
-            ],
+            authors=[Author(name="Alice Smith"), Author(name="Bob Johnson")],
             year=2023,
             citation_count=42,
-            venue="NeurIPS 2023"
+            venue="NeurIPS 2023",
         ),
         PaperMetadata(
             paper_id="2301.67890",
@@ -52,7 +49,7 @@ def sample_papers() -> List[PaperMetadata]:
             authors=[Author(name="Carol Davis")],
             year=2023,
             citation_count=15,
-            venue="ACL 2023"
+            venue="ACL 2023",
         ),
         PaperMetadata(
             paper_id="2302.11111",
@@ -64,12 +61,12 @@ def sample_papers() -> List[PaperMetadata]:
                 Author(name="David Lee"),
                 Author(name="Emma Wilson"),
                 Author(name="Frank Chen"),
-                Author(name="Grace Kim")
+                Author(name="Grace Kim"),
             ],
             year=2024,
             citation_count=128,
-            venue="ICML 2024"
-        )
+            venue="ICML 2024",
+        ),
     ]
 
 
@@ -79,14 +76,16 @@ def research_topic() -> ResearchTopic:
     return ResearchTopic(
         query="Tree of Thoughts AND machine translation",
         timeframe=TimeframeRecent(value="48h"),
-        max_papers=50
+        max_papers=50,
     )
 
 
 class TestEnhancedMarkdownGeneratorIntegration:
     """Test EnhancedMarkdownGenerator with realistic extraction data"""
 
-    def test_generate_brief_with_mixed_extraction_results(self, sample_papers, research_topic):
+    def test_generate_brief_with_mixed_extraction_results(
+        self, sample_papers, research_topic
+    ):
         """Test generating markdown with papers that have different extraction states"""
         generator = EnhancedMarkdownGenerator()
 
@@ -98,24 +97,24 @@ class TestEnhancedMarkdownGeneratorIntegration:
                     target_name="system_prompts",
                     success=True,
                     content=["You are an expert translator.", "Translate carefully."],
-                    confidence=0.95
+                    confidence=0.95,
                 ),
                 ExtractionResult(
                     target_name="code_snippets",
                     success=True,
                     content="def translate(text, model):\n    return model.generate(text)",
-                    confidence=0.88
+                    confidence=0.88,
                 ),
                 ExtractionResult(
                     target_name="evaluation_metrics",
                     success=True,
                     content={"BLEU": 35.2, "METEOR": 0.72, "accuracy": 0.91},
-                    confidence=0.92
-                )
+                    confidence=0.92,
+                ),
             ],
             tokens_used=45000,
             cost_usd=0.18,
-            extraction_timestamp=datetime.utcnow()
+            extraction_timestamp=datetime.utcnow(),
         )
 
         extraction3 = PaperExtraction(
@@ -125,12 +124,12 @@ class TestEnhancedMarkdownGeneratorIntegration:
                     target_name="system_prompts",
                     success=True,
                     content=["Act as a helpful assistant."],
-                    confidence=0.88
+                    confidence=0.88,
                 )
             ],
             tokens_used=30000,
             cost_usd=0.12,
-            extraction_timestamp=datetime.utcnow()
+            extraction_timestamp=datetime.utcnow(),
         )
 
         extracted_papers = [
@@ -139,29 +138,29 @@ class TestEnhancedMarkdownGeneratorIntegration:
                 pdf_available=True,
                 pdf_path="/tmp/pdfs/2301.12345.pdf",
                 markdown_path="/tmp/markdown/2301.12345.md",
-                extraction=extraction1
+                extraction=extraction1,
             ),
             ExtractedPaper(
                 metadata=sample_papers[1],
                 pdf_available=False,
                 pdf_path=None,
                 markdown_path=None,
-                extraction=None  # No extraction
+                extraction=None,  # No extraction
             ),
             ExtractedPaper(
                 metadata=sample_papers[2],
                 pdf_available=True,
                 pdf_path="/tmp/pdfs/2302.11111.pdf",
                 markdown_path="/tmp/markdown/2302.11111.md",
-                extraction=extraction3
-            )
+                extraction=extraction3,
+            ),
         ]
 
         # Generate markdown
         markdown = generator.generate_enhanced(
             extracted_papers=extracted_papers,
             topic=research_topic,
-            run_id="integration-test-001"
+            run_id="integration-test-001",
         )
 
         # Verify frontmatter
@@ -209,14 +208,12 @@ class TestEnhancedMarkdownGeneratorIntegration:
             extraction_results=[],
             tokens_used=50000,
             cost_usd=0.20,
-            extraction_timestamp=datetime.utcnow()
+            extraction_timestamp=datetime.utcnow(),
         )
 
         extracted_papers = [
             ExtractedPaper(
-                metadata=sample_papers[0],
-                pdf_available=True,
-                extraction=extraction
+                metadata=sample_papers[0], pdf_available=True, extraction=extraction
             )
         ]
 
@@ -229,14 +226,14 @@ class TestEnhancedMarkdownGeneratorIntegration:
             "total_tokens_used": 50000,
             "total_cost_usd": 0.20,
             "avg_tokens_per_paper": 50000,
-            "avg_cost_per_paper": 0.200
+            "avg_cost_per_paper": 0.200,
         }
 
         markdown = generator.generate_enhanced(
             extracted_papers=extracted_papers,
             topic=research_topic,
             run_id="test-002",
-            summary_stats=summary_stats
+            summary_stats=summary_stats,
         )
 
         # Verify summary statistics section
@@ -250,9 +247,7 @@ class TestEnhancedMarkdownGeneratorIntegration:
         generator = EnhancedMarkdownGenerator()
 
         markdown = generator.generate_enhanced(
-            extracted_papers=[],
-            topic=research_topic,
-            run_id="test-empty"
+            extracted_papers=[], topic=research_topic, run_id="test-empty"
         )
 
         # Should still generate valid structure
@@ -270,7 +265,7 @@ class TestEnhancedMarkdownGeneratorIntegration:
             target_name="prompts_list",
             success=True,
             content=["Prompt 1", "Prompt 2", "Prompt 3"],
-            confidence=0.9
+            confidence=0.9,
         )
         list_md = generator._format_extraction_result(list_result)
         assert "- Prompt 1" in list_md
@@ -282,7 +277,7 @@ class TestEnhancedMarkdownGeneratorIntegration:
             target_name="python_code",
             success=True,
             content="def hello():\n    print('world')",
-            confidence=0.85
+            confidence=0.85,
         )
         code_md = generator._format_extraction_result(code_result)
         assert "```python" in code_md
@@ -293,7 +288,7 @@ class TestEnhancedMarkdownGeneratorIntegration:
             target_name="js_code",
             success=True,
             content="const hello = () => console.log('world');",
-            confidence=0.85
+            confidence=0.85,
         )
         js_md = generator._format_extraction_result(js_result)
         assert "```javascript" in js_md
@@ -304,7 +299,7 @@ class TestEnhancedMarkdownGeneratorIntegration:
             target_name="metrics",
             success=True,
             content={"accuracy": 0.95, "f1": 0.89, "recall": 0.92},
-            confidence=0.91
+            confidence=0.91,
         )
         dict_md = generator._format_extraction_result(dict_result)
         assert "| Metric | Value |" in dict_md
@@ -315,7 +310,7 @@ class TestEnhancedMarkdownGeneratorIntegration:
             target_name="complex_data",
             success=True,
             content={"nested": {"key": "value"}, "list": [1, 2, 3]},
-            confidence=0.80
+            confidence=0.80,
         )
         complex_md = generator._format_extraction_result(complex_dict_result)
         assert "```json" in complex_md
@@ -325,17 +320,14 @@ class TestEnhancedMarkdownGeneratorIntegration:
             target_name="summary",
             success=True,
             content="This is a summary of the findings.",
-            confidence=0.87
+            confidence=0.87,
         )
         text_md = generator._format_extraction_result(text_result)
         assert "This is a summary" in text_md
 
         # Test empty content
         empty_result = ExtractionResult(
-            target_name="missing",
-            success=False,
-            content=None,
-            confidence=0.0
+            target_name="missing", success=False, content=None, confidence=0.0
         )
         empty_md = generator._format_extraction_result(empty_result)
         assert "_No content extracted_" in empty_md
@@ -356,12 +348,12 @@ class TestDataFlowIntegration:
                     target_name="test",
                     success=True,
                     content="test content",
-                    confidence=0.9
+                    confidence=0.9,
                 )
             ],
             tokens_used=10000,
             cost_usd=0.04,
-            extraction_timestamp=datetime.utcnow()
+            extraction_timestamp=datetime.utcnow(),
         )
 
         # Create extracted paper
@@ -370,7 +362,7 @@ class TestDataFlowIntegration:
             pdf_available=True,
             pdf_path="/tmp/test.pdf",
             markdown_path="/tmp/test.md",
-            extraction=extraction
+            extraction=extraction,
         )
 
         # Verify data integrity
@@ -387,7 +379,7 @@ class TestDataFlowIntegration:
         extraction_service = ExtractionService(
             pdf_service=None,  # type: ignore
             llm_service=None,  # type: ignore
-            keep_pdfs=False
+            keep_pdfs=False,
         )
 
         # Create extracted papers with various states
@@ -400,13 +392,11 @@ class TestDataFlowIntegration:
                     extraction_results=[],
                     tokens_used=50000,
                     cost_usd=0.20,
-                    extraction_timestamp=datetime.utcnow()
-                )
+                    extraction_timestamp=datetime.utcnow(),
+                ),
             ),
             ExtractedPaper(
-                metadata=sample_papers[1],
-                pdf_available=False,
-                extraction=None
+                metadata=sample_papers[1], pdf_available=False, extraction=None
             ),
             ExtractedPaper(
                 metadata=sample_papers[2],
@@ -416,9 +406,9 @@ class TestDataFlowIntegration:
                     extraction_results=[],
                     tokens_used=30000,
                     cost_usd=0.12,
-                    extraction_timestamp=datetime.utcnow()
-                )
-            )
+                    extraction_timestamp=datetime.utcnow(),
+                ),
+            ),
         ]
 
         # Test summary statistics

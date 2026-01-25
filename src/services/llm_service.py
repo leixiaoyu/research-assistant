@@ -31,7 +31,7 @@ from src.utils.exceptions import (
     ExtractionError,
     CostLimitExceeded,
     LLMAPIError,
-    JSONParseError
+    JSONParseError,
 )
 
 logger = structlog.get_logger()
@@ -56,7 +56,7 @@ class LLMService:
         self,
         config: LLMConfig,
         cost_limits: CostLimits,
-        usage_stats: Optional[UsageStats] = None
+        usage_stats: Optional[UsageStats] = None,
     ):
         """Initialize LLM service
 
@@ -77,6 +77,7 @@ class LLMService:
         if config.provider == "anthropic":
             try:
                 from anthropic import AsyncAnthropic
+
                 self.client = AsyncAnthropic(api_key=config.api_key)
             except ImportError:
                 raise ExtractionError(
@@ -85,6 +86,7 @@ class LLMService:
         elif config.provider == "google":
             try:
                 import google.generativeai as genai
+
                 genai.configure(api_key=config.api_key)
                 self.client = genai.GenerativeModel(config.model)
             except ImportError:
@@ -97,14 +99,14 @@ class LLMService:
             "llm_service_initialized",
             provider=config.provider,
             model=config.model,
-            max_tokens=config.max_tokens
+            max_tokens=config.max_tokens,
         )
 
     async def extract(
         self,
         markdown_content: str,
         targets: List[ExtractionTarget],
-        paper_metadata: PaperMetadata
+        paper_metadata: PaperMetadata,
     ) -> PaperExtraction:
         """Extract information from markdown using LLM
 
@@ -132,16 +134,14 @@ class LLMService:
 
         # Build extraction prompt
         prompt = self._build_extraction_prompt(
-            markdown_content,
-            targets,
-            paper_metadata
+            markdown_content, targets, paper_metadata
         )
 
         logger.info(
             "extraction_started",
             paper_id=paper_metadata.paper_id,
             targets=len(targets),
-            provider=self.config.provider
+            provider=self.config.provider,
         )
 
         # Call LLM
@@ -152,7 +152,7 @@ class LLMService:
                 cost = self._calculate_cost_anthropic(response.usage)
             else:  # google
                 response = await self._call_google(prompt)
-                tokens_used = getattr(response.usage_metadata, 'total_token_count', 0)
+                tokens_used = getattr(response.usage_metadata, "total_token_count", 0)
                 cost = self._calculate_cost_google(tokens_used)
 
         except Exception as e:
@@ -160,7 +160,7 @@ class LLMService:
                 "llm_api_call_failed",
                 paper_id=paper_metadata.paper_id,
                 provider=self.config.provider,
-                error=str(e)
+                error=str(e),
             )
             raise LLMAPIError(f"LLM API call failed: {e}")
 
@@ -171,7 +171,7 @@ class LLMService:
             logger.error(
                 "extraction_parse_failed",
                 paper_id=paper_metadata.paper_id,
-                error=str(e)
+                error=str(e),
             )
             raise
 
@@ -183,7 +183,7 @@ class LLMService:
             paper_id=paper_metadata.paper_id,
             tokens_used=tokens_used,
             cost_usd=cost,
-            successful_extractions=sum(1 for r in results if r.success)
+            successful_extractions=sum(1 for r in results if r.success),
         )
 
         return PaperExtraction(
@@ -191,14 +191,11 @@ class LLMService:
             extraction_results=results,
             tokens_used=tokens_used,
             cost_usd=cost,
-            extraction_timestamp=datetime.utcnow()
+            extraction_timestamp=datetime.utcnow(),
         )
 
     def _build_extraction_prompt(
-        self,
-        markdown: str,
-        targets: List[ExtractionTarget],
-        metadata: PaperMetadata
+        self, markdown: str, targets: List[ExtractionTarget], metadata: PaperMetadata
     ) -> str:
         """Build structured extraction prompt for LLM
 
@@ -217,13 +214,13 @@ class LLMService:
                 "description": t.description,
                 "output_format": t.output_format,
                 "required": t.required,
-                "examples": t.examples
+                "examples": t.examples,
             }
             for t in targets
         ]
 
         # Format author names
-        author_names = ', '.join(a.name for a in (metadata.authors or []))
+        author_names = ", ".join(a.name for a in (metadata.authors or []))
 
         prompt = f"""You are a research paper analyst specialized in extracting structured information from academic papers.
 
@@ -283,9 +280,7 @@ class LLMService:
                 model=self.config.model,
                 max_tokens=self.config.max_tokens,
                 temperature=self.config.temperature,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
+                messages=[{"role": "user", "content": prompt}],
             )
             return response
         except Exception as e:
@@ -309,17 +304,15 @@ class LLMService:
                 prompt,
                 generation_config={
                     "temperature": self.config.temperature,
-                    "max_output_tokens": self.config.max_tokens
-                }
+                    "max_output_tokens": self.config.max_tokens,
+                },
             )
             return response
         except Exception as e:
             raise LLMAPIError(f"Google API error: {e}")
 
     def _parse_response(
-        self,
-        response: Any,
-        targets: List[ExtractionTarget]
+        self, response: Any, targets: List[ExtractionTarget]
     ) -> List[ExtractionResult]:
         """Parse LLM response into structured results
 
@@ -354,7 +347,9 @@ class LLMService:
         try:
             data = json.loads(content)
         except json.JSONDecodeError as e:
-            raise JSONParseError(f"Invalid JSON in LLM response: {e}\nContent: {content[:500]}")
+            raise JSONParseError(
+                f"Invalid JSON in LLM response: {e}\nContent: {content[:500]}"
+            )
 
         # Validate structure
         if "extractions" not in data:
@@ -379,26 +374,30 @@ class LLMService:
                 logger.warning("extraction_unknown_target", target_name=target_name)
                 continue
 
-            results.append(ExtractionResult(
-                target_name=target_name,
-                success=ext.get("success", True),
-                content=ext.get("content"),
-                confidence=ext.get("confidence", 0.0),
-                error=ext.get("error")
-            ))
+            results.append(
+                ExtractionResult(
+                    target_name=target_name,
+                    success=ext.get("success", True),
+                    content=ext.get("content"),
+                    confidence=ext.get("confidence", 0.0),
+                    error=ext.get("error"),
+                )
+            )
 
         # Check if all required targets were extracted
         extracted_names = {r.target_name for r in results}
         for target in targets:
             if target.required and target.name not in extracted_names:
                 logger.error("required_target_missing", target_name=target.name)
-                results.append(ExtractionResult(
-                    target_name=target.name,
-                    success=False,
-                    content=None,
-                    confidence=0.0,
-                    error="Required target not found in LLM response"
-                ))
+                results.append(
+                    ExtractionResult(
+                        target_name=target.name,
+                        success=False,
+                        content=None,
+                        confidence=0.0,
+                        error="Required target not found in LLM response",
+                    )
+                )
 
         return results
 
@@ -412,7 +411,9 @@ class LLMService:
             Cost in USD
         """
         input_cost = (usage.input_tokens / 1_000_000) * self.CLAUDE_INPUT_COST_PER_MTOK
-        output_cost = (usage.output_tokens / 1_000_000) * self.CLAUDE_OUTPUT_COST_PER_MTOK
+        output_cost = (
+            usage.output_tokens / 1_000_000
+        ) * self.CLAUDE_OUTPUT_COST_PER_MTOK
         return input_cost + output_cost
 
     def _calculate_cost_google(self, total_tokens: int) -> float:
@@ -471,7 +472,7 @@ class LLMService:
             "usage_updated",
             total_tokens=self.usage_stats.total_tokens,
             total_cost_usd=self.usage_stats.total_cost_usd,
-            papers_processed=self.usage_stats.papers_processed
+            papers_processed=self.usage_stats.papers_processed,
         )
 
     def get_usage_summary(self) -> dict:
@@ -487,10 +488,10 @@ class LLMService:
             "last_reset": self.usage_stats.last_reset.isoformat(),
             "daily_budget_remaining": round(
                 self.cost_limits.max_daily_spend_usd - self.usage_stats.total_cost_usd,
-                2
+                2,
             ),
             "total_budget_remaining": round(
                 self.cost_limits.max_total_spend_usd - self.usage_stats.total_cost_usd,
-                2
-            )
+                2,
+            ),
         }

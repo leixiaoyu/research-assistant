@@ -17,7 +17,7 @@ from src.utils.exceptions import (
     PDFDownloadError,
     FileSizeError,
     PDFValidationError,
-    ConversionError
+    ConversionError,
 )
 
 
@@ -30,11 +30,7 @@ def temp_dir(tmp_path):
 @pytest.fixture
 def pdf_service(temp_dir):
     """Create PDFService instance"""
-    return PDFService(
-        temp_dir=temp_dir,
-        max_size_mb=50,
-        timeout_seconds=300
-    )
+    return PDFService(temp_dir=temp_dir, max_size_mb=50, timeout_seconds=300)
 
 
 def test_pdf_service_initialization(pdf_service, temp_dir):
@@ -50,7 +46,7 @@ def test_validate_pdf_valid(pdf_service, temp_dir):
     # Create a valid PDF file (with PDF magic bytes)
     pdf_path = temp_dir / "test.pdf"
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    pdf_path.write_bytes(b'%PDF-1.4\nTest content')
+    pdf_path.write_bytes(b"%PDF-1.4\nTest content")
 
     assert pdf_service.validate_pdf(pdf_path) is True
 
@@ -59,7 +55,7 @@ def test_validate_pdf_empty_file(pdf_service, temp_dir):
     """Test validate_pdf with empty file"""
     pdf_path = temp_dir / "empty.pdf"
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    pdf_path.write_bytes(b'')
+    pdf_path.write_bytes(b"")
 
     assert pdf_service.validate_pdf(pdf_path) is False
 
@@ -68,7 +64,7 @@ def test_validate_pdf_invalid_magic_bytes(pdf_service, temp_dir):
     """Test validate_pdf with wrong magic bytes"""
     pdf_path = temp_dir / "invalid.pdf"
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    pdf_path.write_bytes(b'NOT A PDF FILE')
+    pdf_path.write_bytes(b"NOT A PDF FILE")
 
     assert pdf_service.validate_pdf(pdf_path) is False
 
@@ -84,8 +80,7 @@ async def test_download_pdf_rejects_http(pdf_service):
     """Test download_pdf rejects HTTP URLs"""
     with pytest.raises(PDFDownloadError) as exc_info:
         await pdf_service.download_pdf(
-            url="http://example.com/paper.pdf",
-            paper_id="test"
+            url="http://example.com/paper.pdf", paper_id="test"
         )
     assert "Only HTTPS URLs allowed" in str(exc_info.value)
 
@@ -93,12 +88,12 @@ async def test_download_pdf_rejects_http(pdf_service):
 @pytest.mark.asyncio
 async def test_download_pdf_success(pdf_service):
     """Test successful PDF download"""
-    pdf_content = b'%PDF-1.4\nTest PDF content here'
+    pdf_content = b"%PDF-1.4\nTest PDF content here"
 
     # Mock aiohttp response
     mock_response = MagicMock()
     mock_response.status = 200
-    mock_response.headers = {'content-length': str(len(pdf_content))}
+    mock_response.headers = {"content-length": str(len(pdf_content))}
 
     # Mock async iterator for content
     async def mock_iter_chunked(size):
@@ -114,10 +109,9 @@ async def test_download_pdf_success(pdf_service):
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=None)
 
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         pdf_path = await pdf_service.download_pdf(
-            url="https://example.com/paper.pdf",
-            paper_id="test123"
+            url="https://example.com/paper.pdf", paper_id="test123"
         )
 
     assert pdf_path.exists()
@@ -133,7 +127,7 @@ async def test_download_pdf_file_too_large(pdf_service):
 
     mock_response = MagicMock()
     mock_response.status = 200
-    mock_response.headers = {'content-length': str(large_size)}
+    mock_response.headers = {"content-length": str(large_size)}
     mock_response.__aenter__ = AsyncMock(return_value=mock_response)
     mock_response.__aexit__ = AsyncMock(return_value=None)
 
@@ -142,11 +136,10 @@ async def test_download_pdf_file_too_large(pdf_service):
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=None)
 
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         with pytest.raises(FileSizeError) as exc_info:
             await pdf_service.download_pdf(
-                url="https://example.com/large.pdf",
-                paper_id="test"
+                url="https://example.com/large.pdf", paper_id="test"
             )
     assert "PDF too large" in str(exc_info.value)
 
@@ -164,11 +157,10 @@ async def test_download_pdf_http_error(pdf_service):
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=None)
 
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         with pytest.raises(PDFDownloadError) as exc_info:
             await pdf_service.download_pdf(
-                url="https://example.com/missing.pdf",
-                paper_id="test"
+                url="https://example.com/missing.pdf", paper_id="test"
             )
     assert "HTTP 404" in str(exc_info.value)
 
@@ -186,7 +178,7 @@ def test_convert_to_markdown_success(pdf_service, temp_dir):
     """Test successful PDF to markdown conversion"""
     # Create a test PDF
     pdf_path = pdf_service.pdf_dir / "test.pdf"
-    pdf_path.write_bytes(b'%PDF-1.4\nTest')
+    pdf_path.write_bytes(b"%PDF-1.4\nTest")
 
     # Create expected markdown output
     expected_md = pdf_service.markdown_dir / "test.md"
@@ -196,7 +188,7 @@ def test_convert_to_markdown_success(pdf_service, temp_dir):
     mock_result.returncode = 0
     mock_result.stderr = ""
 
-    with patch('subprocess.run', return_value=mock_result):
+    with patch("subprocess.run", return_value=mock_result):
         # Create the markdown file that marker would create
         expected_md.write_text("# Test Markdown\n\nContent here")
 
@@ -211,9 +203,11 @@ def test_convert_to_markdown_timeout(pdf_service, temp_dir):
     import subprocess
 
     pdf_path = pdf_service.pdf_dir / "test.pdf"
-    pdf_path.write_bytes(b'%PDF-1.4\nTest')
+    pdf_path.write_bytes(b"%PDF-1.4\nTest")
 
-    with patch('subprocess.run', side_effect=subprocess.TimeoutExpired("marker_single", 300)):
+    with patch(
+        "subprocess.run", side_effect=subprocess.TimeoutExpired("marker_single", 300)
+    ):
         with pytest.raises(ConversionError) as exc_info:
             pdf_service.convert_to_markdown(pdf_path, "test")
     assert "timeout" in str(exc_info.value).lower()
@@ -225,7 +219,7 @@ def test_cleanup_temp_files(pdf_service, temp_dir):
     pdf_file = pdf_service.pdf_dir / "test123.pdf"
     md_file = pdf_service.markdown_dir / "test123.md"
 
-    pdf_file.write_bytes(b'%PDF')
+    pdf_file.write_bytes(b"%PDF")
     md_file.write_text("# Test")
 
     # Cleanup without keeping PDFs
@@ -241,7 +235,7 @@ def test_cleanup_temp_files_keep_pdfs(pdf_service, temp_dir):
     pdf_file = pdf_service.pdf_dir / "test456.pdf"
     md_file = pdf_service.markdown_dir / "test456.md"
 
-    pdf_file.write_bytes(b'%PDF')
+    pdf_file.write_bytes(b"%PDF")
     md_file.write_text("# Test")
 
     # Cleanup keeping PDFs

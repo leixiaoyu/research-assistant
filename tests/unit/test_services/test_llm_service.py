@@ -18,11 +18,7 @@ from src.services.llm_service import LLMService
 from src.models.llm import LLMConfig, CostLimits, UsageStats
 from src.models.extraction import ExtractionTarget, ExtractionResult
 from src.models.paper import PaperMetadata, Author
-from src.utils.exceptions import (
-    CostLimitExceeded,
-    LLMAPIError,
-    JSONParseError
-)
+from src.utils.exceptions import CostLimitExceeded, LLMAPIError, JSONParseError
 
 
 @pytest.fixture
@@ -34,7 +30,7 @@ def llm_config():
         api_key="sk-ant-test12345",
         max_tokens=100000,
         temperature=0.0,
-        timeout=300
+        timeout=300,
     )
 
 
@@ -42,20 +38,15 @@ def llm_config():
 def cost_limits():
     """Create test cost limits"""
     return CostLimits(
-        max_tokens_per_paper=100000,
-        max_daily_spend_usd=50.0,
-        max_total_spend_usd=500.0
+        max_tokens_per_paper=100000, max_daily_spend_usd=50.0, max_total_spend_usd=500.0
     )
 
 
 @pytest.fixture
 def llm_service(llm_config, cost_limits):
     """Create LLM service instance"""
-    with patch('anthropic.AsyncAnthropic'):
-        service = LLMService(
-            config=llm_config,
-            cost_limits=cost_limits
-        )
+    with patch("anthropic.AsyncAnthropic"):
+        service = LLMService(config=llm_config, cost_limits=cost_limits)
     return service
 
 
@@ -67,13 +58,10 @@ def paper_metadata():
         title="Test Paper on Machine Learning",
         abstract="This is a test abstract about ML.",
         url="https://example.com/paper",
-        authors=[
-            Author(name="John Doe"),
-            Author(name="Jane Smith")
-        ],
+        authors=[Author(name="John Doe"), Author(name="Jane Smith")],
         year=2023,
         citation_count=10,
-        venue="ArXiv"
+        venue="ArXiv",
     )
 
 
@@ -85,20 +73,20 @@ def extraction_targets():
             name="system_prompts",
             description="Extract system prompts",
             output_format="list",
-            required=False
+            required=False,
         ),
         ExtractionTarget(
             name="code_snippets",
             description="Extract Python code",
             output_format="code",
-            required=False
-        )
+            required=False,
+        ),
     ]
 
 
 def test_llm_service_initialization_anthropic(llm_config, cost_limits):
     """Test LLM service initializes with Anthropic"""
-    with patch('anthropic.AsyncAnthropic') as mock_anthropic:
+    with patch("anthropic.AsyncAnthropic") as mock_anthropic:
         service = LLMService(llm_config, cost_limits)
 
         assert service.config.provider == "anthropic"
@@ -109,14 +97,12 @@ def test_llm_service_initialization_anthropic(llm_config, cost_limits):
 def test_llm_service_initialization_google():
     """Test LLM service initializes with Google"""
     config = LLMConfig(
-        provider="google",
-        model="gemini-1.5-pro",
-        api_key="google-test-key"
+        provider="google", model="gemini-1.5-pro", api_key="google-test-key"
     )
     limits = CostLimits()
 
-    with patch('google.generativeai.configure') as mock_configure:
-        with patch('google.generativeai.GenerativeModel') as mock_model_class:
+    with patch("google.generativeai.configure") as mock_configure:
+        with patch("google.generativeai.GenerativeModel") as mock_model_class:
             mock_model = Mock()
             mock_model_class.return_value = mock_model
 
@@ -131,9 +117,7 @@ def test_build_extraction_prompt(llm_service, paper_metadata, extraction_targets
     markdown = "# Test Paper\n\nThis is test content."
 
     prompt = llm_service._build_extraction_prompt(
-        markdown,
-        extraction_targets,
-        paper_metadata
+        markdown, extraction_targets, paper_metadata
     )
 
     # Check prompt contains key elements
@@ -149,22 +133,28 @@ def test_parse_response_valid_json(llm_service, extraction_targets):
     """Test parsing valid JSON response"""
     # Mock Anthropic response
     mock_response = Mock()
-    mock_response.content = [Mock(text=json.dumps({
-        "extractions": [
-            {
-                "target_name": "system_prompts",
-                "success": True,
-                "content": ["Prompt 1", "Prompt 2"],
-                "confidence": 0.95
-            },
-            {
-                "target_name": "code_snippets",
-                "success": True,
-                "content": "def example(): pass",
-                "confidence": 0.85
-            }
-        ]
-    }))]
+    mock_response.content = [
+        Mock(
+            text=json.dumps(
+                {
+                    "extractions": [
+                        {
+                            "target_name": "system_prompts",
+                            "success": True,
+                            "content": ["Prompt 1", "Prompt 2"],
+                            "confidence": 0.95,
+                        },
+                        {
+                            "target_name": "code_snippets",
+                            "success": True,
+                            "content": "def example(): pass",
+                            "confidence": 0.85,
+                        },
+                    ]
+                }
+            )
+        )
+    ]
 
     results = llm_service._parse_response(mock_response, extraction_targets)
 
@@ -185,7 +175,7 @@ def test_parse_response_with_markdown_code_blocks(llm_service, extraction_target
                 "target_name": "system_prompts",
                 "success": True,
                 "content": ["Test"],
-                "confidence": 0.9
+                "confidence": 0.9,
             }
         ]
     }
@@ -226,18 +216,12 @@ def test_parse_response_missing_extractions_key(llm_service, extraction_targets)
 def test_parse_response_required_target_missing(llm_service):
     """Test parsing adds error for missing required target"""
     targets = [
-        ExtractionTarget(
-            name="required_field",
-            description="Test",
-            required=True
-        )
+        ExtractionTarget(name="required_field", description="Test", required=True)
     ]
 
     # Response missing the required target
     mock_response = Mock()
-    mock_response.content = [Mock(text=json.dumps({
-        "extractions": []
-    }))]
+    mock_response.content = [Mock(text=json.dumps({"extractions": []}))]
 
     results = llm_service._parse_response(mock_response, targets)
 
@@ -335,16 +319,22 @@ async def test_extract_success(llm_service, paper_metadata, extraction_targets):
 
     # Mock LLM response
     mock_response = Mock()
-    mock_response.content = [Mock(text=json.dumps({
-        "extractions": [
-            {
-                "target_name": "system_prompts",
-                "success": True,
-                "content": ["Prompt 1"],
-                "confidence": 0.9
-            }
-        ]
-    }))]
+    mock_response.content = [
+        Mock(
+            text=json.dumps(
+                {
+                    "extractions": [
+                        {
+                            "target_name": "system_prompts",
+                            "success": True,
+                            "content": ["Prompt 1"],
+                            "confidence": 0.9,
+                        }
+                    ]
+                }
+            )
+        )
+    ]
     mock_response.usage = Mock(input_tokens=10000, output_tokens=5000)
 
     llm_service._call_anthropic = AsyncMock(return_value=mock_response)
@@ -382,7 +372,9 @@ async def test_extract_daily_reset(llm_service, paper_metadata, extraction_targe
 
 
 @pytest.mark.asyncio
-async def test_extract_cost_limit_check(llm_service, paper_metadata, extraction_targets):
+async def test_extract_cost_limit_check(
+    llm_service, paper_metadata, extraction_targets
+):
     """Test extraction checks cost limits before calling LLM"""
     # Set cost to exceed limit
     llm_service.usage_stats.total_cost_usd = 600.0

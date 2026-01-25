@@ -86,6 +86,7 @@ def test_load_config_read_error(tmp_path):
 
     # Mock open to raise exception only for the config file, not .env
     original_open = open
+
     def selective_open(file, *args, **kwargs):
         if str(config_file) in str(file):
             raise Exception("Read error")

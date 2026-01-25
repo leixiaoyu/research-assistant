@@ -21,7 +21,7 @@ def test_llm_config_anthropic():
         api_key="sk-ant-test12345",
         max_tokens=100000,
         temperature=0.0,
-        timeout=300
+        timeout=300,
     )
 
     assert config.provider == "anthropic"
@@ -33,9 +33,7 @@ def test_llm_config_anthropic():
 def test_llm_config_google():
     """Test valid Google LLMConfig"""
     config = LLMConfig(
-        provider="google",
-        model="gemini-1.5-pro",
-        api_key="test-google-key"
+        provider="google", model="gemini-1.5-pro", api_key="test-google-key"
     )
 
     assert config.provider == "google"
@@ -49,19 +47,13 @@ def test_llm_config_invalid_api_key():
     for key in placeholder_keys:
         with pytest.raises(ValidationError) as exc_info:
             LLMConfig(
-                provider="anthropic",
-                model="claude-3-5-sonnet-20250122",
-                api_key=key
+                provider="anthropic", model="claude-3-5-sonnet-20250122", api_key=key
             )
         assert "API key must be a valid credential" in str(exc_info.value)
 
     # Test empty string which triggers Pydantic's min_length validation
     with pytest.raises(ValidationError) as exc_info:
-        LLMConfig(
-            provider="anthropic",
-            model="claude-3-5-sonnet-20250122",
-            api_key=""
-        )
+        LLMConfig(provider="anthropic", model="claude-3-5-sonnet-20250122", api_key="")
     assert "String should have at least" in str(exc_info.value)
 
 
@@ -69,19 +61,13 @@ def test_llm_config_model_provider_mismatch():
     """Test LLMConfig validates model matches provider"""
     # Anthropic with Gemini model
     with pytest.raises(ValidationError) as exc_info:
-        LLMConfig(
-            provider="anthropic",
-            model="gemini-1.5-pro",
-            api_key="sk-ant-test"
-        )
+        LLMConfig(provider="anthropic", model="gemini-1.5-pro", api_key="sk-ant-test")
     assert "Anthropic provider requires Claude model" in str(exc_info.value)
 
     # Google with Claude model
     with pytest.raises(ValidationError) as exc_info:
         LLMConfig(
-            provider="google",
-            model="claude-3-5-sonnet-20250122",
-            api_key="google-test"
+            provider="google", model="claude-3-5-sonnet-20250122", api_key="google-test"
         )
     assert "Google provider cannot use Claude model" in str(exc_info.value)
 
@@ -89,39 +75,82 @@ def test_llm_config_model_provider_mismatch():
 def test_llm_config_temperature_range():
     """Test temperature must be between 0 and 1"""
     # Valid temperatures
-    LLMConfig(provider="anthropic", model="claude-3-5-sonnet-20250122", api_key="test", temperature=0.0)
-    LLMConfig(provider="anthropic", model="claude-3-5-sonnet-20250122", api_key="test", temperature=1.0)
-    LLMConfig(provider="anthropic", model="claude-3-5-sonnet-20250122", api_key="test", temperature=0.5)
+    LLMConfig(
+        provider="anthropic",
+        model="claude-3-5-sonnet-20250122",
+        api_key="test",
+        temperature=0.0,
+    )
+    LLMConfig(
+        provider="anthropic",
+        model="claude-3-5-sonnet-20250122",
+        api_key="test",
+        temperature=1.0,
+    )
+    LLMConfig(
+        provider="anthropic",
+        model="claude-3-5-sonnet-20250122",
+        api_key="test",
+        temperature=0.5,
+    )
 
     # Invalid temperatures
     with pytest.raises(ValidationError):
-        LLMConfig(provider="anthropic", model="claude-3-5-sonnet-20250122", api_key="test", temperature=-0.1)
+        LLMConfig(
+            provider="anthropic",
+            model="claude-3-5-sonnet-20250122",
+            api_key="test",
+            temperature=-0.1,
+        )
 
     with pytest.raises(ValidationError):
-        LLMConfig(provider="anthropic", model="claude-3-5-sonnet-20250122", api_key="test", temperature=1.1)
+        LLMConfig(
+            provider="anthropic",
+            model="claude-3-5-sonnet-20250122",
+            api_key="test",
+            temperature=1.1,
+        )
 
 
 def test_llm_config_max_tokens_range():
     """Test max_tokens validation"""
     # Valid
-    LLMConfig(provider="anthropic", model="claude-3-5-sonnet-20250122", api_key="test", max_tokens=1000)
-    LLMConfig(provider="anthropic", model="claude-3-5-sonnet-20250122", api_key="test", max_tokens=200000)
+    LLMConfig(
+        provider="anthropic",
+        model="claude-3-5-sonnet-20250122",
+        api_key="test",
+        max_tokens=1000,
+    )
+    LLMConfig(
+        provider="anthropic",
+        model="claude-3-5-sonnet-20250122",
+        api_key="test",
+        max_tokens=200000,
+    )
 
     # Invalid - too small
     with pytest.raises(ValidationError):
-        LLMConfig(provider="anthropic", model="claude-3-5-sonnet-20250122", api_key="test", max_tokens=0)
+        LLMConfig(
+            provider="anthropic",
+            model="claude-3-5-sonnet-20250122",
+            api_key="test",
+            max_tokens=0,
+        )
 
     # Invalid - too large
     with pytest.raises(ValidationError):
-        LLMConfig(provider="anthropic", model="claude-3-5-sonnet-20250122", api_key="test", max_tokens=300000)
+        LLMConfig(
+            provider="anthropic",
+            model="claude-3-5-sonnet-20250122",
+            api_key="test",
+            max_tokens=300000,
+        )
 
 
 def test_cost_limits_valid():
     """Test valid CostLimits"""
     limits = CostLimits(
-        max_tokens_per_paper=100000,
-        max_daily_spend_usd=50.0,
-        max_total_spend_usd=500.0
+        max_tokens_per_paper=100000, max_daily_spend_usd=50.0, max_total_spend_usd=500.0
     )
 
     assert limits.max_tokens_per_paper == 100000
@@ -133,16 +162,14 @@ def test_cost_limits_total_exceeds_daily():
     """Test total spending must be >= daily spending"""
     # Valid - total > daily
     CostLimits(
-        max_tokens_per_paper=100000,
-        max_daily_spend_usd=50.0,
-        max_total_spend_usd=500.0
+        max_tokens_per_paper=100000, max_daily_spend_usd=50.0, max_total_spend_usd=500.0
     )
 
     # Valid - total == daily
     CostLimits(
         max_tokens_per_paper=100000,
         max_daily_spend_usd=100.0,
-        max_total_spend_usd=100.0
+        max_total_spend_usd=100.0,
     )
 
     # Invalid - total < daily
@@ -150,7 +177,7 @@ def test_cost_limits_total_exceeds_daily():
         CostLimits(
             max_tokens_per_paper=100000,
             max_daily_spend_usd=100.0,
-            max_total_spend_usd=50.0
+            max_total_spend_usd=50.0,
         )
     assert "must be >=" in str(exc_info.value)
 
@@ -162,14 +189,14 @@ def test_cost_limits_ranges():
         CostLimits(
             max_tokens_per_paper=-1000,
             max_daily_spend_usd=50.0,
-            max_total_spend_usd=500.0
+            max_total_spend_usd=500.0,
         )
 
     with pytest.raises(ValidationError):
         CostLimits(
             max_tokens_per_paper=100000,
             max_daily_spend_usd=-10.0,
-            max_total_spend_usd=500.0
+            max_total_spend_usd=500.0,
         )
 
 
@@ -187,10 +214,7 @@ def test_usage_stats_with_values():
     """Test UsageStats with custom values"""
     now = datetime.utcnow()
     stats = UsageStats(
-        total_tokens=50000,
-        total_cost_usd=2.5,
-        papers_processed=10,
-        last_reset=now
+        total_tokens=50000, total_cost_usd=2.5, papers_processed=10, last_reset=now
     )
 
     assert stats.total_tokens == 50000
@@ -201,11 +225,7 @@ def test_usage_stats_with_values():
 
 def test_usage_stats_reset_daily():
     """Test reset_daily_stats()"""
-    stats = UsageStats(
-        total_tokens=100000,
-        total_cost_usd=5.0,
-        papers_processed=20
-    )
+    stats = UsageStats(total_tokens=100000, total_cost_usd=5.0, papers_processed=20)
 
     old_reset_time = stats.last_reset
 

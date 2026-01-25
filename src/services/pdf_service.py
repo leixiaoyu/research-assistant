@@ -19,14 +19,19 @@ import re
 from pathlib import Path
 from typing import Optional
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
 import aiohttp
 
 from src.utils.exceptions import (
     PDFDownloadError,
     FileSizeError,
     PDFValidationError,
-    ConversionError
+    ConversionError,
 )
 
 logger = structlog.get_logger()
@@ -52,17 +57,14 @@ class PDFService:
         # Remove any directory components
         filename = Path(filename).name
         # Keep only safe characters
-        safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
+        safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", filename)
         # Prevent hidden files
-        if safe_name.startswith('.'):
-            safe_name = '_' + safe_name
+        if safe_name.startswith("."):
+            safe_name = "_" + safe_name
         return safe_name
 
     def __init__(
-        self,
-        temp_dir: Path,
-        max_size_mb: int = 50,
-        timeout_seconds: int = 300
+        self, temp_dir: Path, max_size_mb: int = 50, timeout_seconds: int = 300
     ):
         """Initialize PDF service
 
@@ -91,14 +93,10 @@ class PDFService:
             "pdf_service_initialized",
             temp_dir=str(self.temp_dir),
             max_size_mb=max_size_mb,
-            timeout_seconds=timeout_seconds
+            timeout_seconds=timeout_seconds,
         )
 
-    async def download_pdf(
-        self,
-        url: str,
-        paper_id: str
-    ) -> Path:
+    async def download_pdf(self, url: str, paper_id: str) -> Path:
         """Download PDF from URL with retry logic
 
         Args:
@@ -119,17 +117,13 @@ class PDFService:
             - PDF magic bytes validated after download
         """
         # Security: Ensure HTTPS (don't retry this - it's a validation error)
-        if not url.startswith('https://'):
+        if not url.startswith("https://"):
             raise PDFDownloadError(f"Only HTTPS URLs allowed: {url}")
 
         # Use retry logic for actual download
         return await self._download_with_retry(url, paper_id)
 
-    async def _download_with_retry(
-        self,
-        url: str,
-        paper_id: str
-    ) -> Path:
+    async def _download_with_retry(self, url: str, paper_id: str) -> Path:
         """Internal method with retry logic for network operations"""
 
         # Sanitize filename
@@ -140,7 +134,7 @@ class PDFService:
             "pdf_download_started",
             url=url,
             paper_id=paper_id,
-            output_path=str(output_path)
+            output_path=str(output_path),
         )
 
         try:
@@ -149,21 +143,17 @@ class PDFService:
                 async with session.get(url) as response:
                     # Don't retry client errors (4xx) - these won't succeed on retry
                     if 400 <= response.status < 500:
-                        raise PDFDownloadError(
-                            f"HTTP {response.status} for {url}"
-                        )
+                        raise PDFDownloadError(f"HTTP {response.status} for {url}")
                     # Retry server errors (5xx) - might be transient
                     elif response.status >= 500:
                         raise PDFDownloadError(
                             f"HTTP {response.status} for {url} (will retry)"
                         )
                     elif response.status != 200:
-                        raise PDFDownloadError(
-                            f"HTTP {response.status} for {url}"
-                        )
+                        raise PDFDownloadError(f"HTTP {response.status} for {url}")
 
                     # Check size before downloading
-                    content_length = response.headers.get('content-length')
+                    content_length = response.headers.get("content-length")
                     if content_length:
                         size = int(content_length)
                         if size > self.max_size_bytes:
@@ -173,7 +163,7 @@ class PDFService:
 
                     # Stream download
                     total_bytes = 0
-                    with open(output_path, 'wb') as f:
+                    with open(output_path, "wb") as f:
                         async for chunk in response.content.iter_chunked(8192):
                             total_bytes += len(chunk)
                             # Security: Check size during download
@@ -193,25 +183,18 @@ class PDFService:
                 "pdf_download_success",
                 paper_id=paper_id,
                 size_bytes=total_bytes,
-                path=str(output_path)
+                path=str(output_path),
             )
 
             return output_path
 
         except aiohttp.ClientError as e:
             logger.error(
-                "pdf_download_failed",
-                paper_id=paper_id,
-                url=url,
-                error=str(e)
+                "pdf_download_failed", paper_id=paper_id, url=url, error=str(e)
             )
             raise PDFDownloadError(f"Download failed: {e}")
         except asyncio.TimeoutError:
-            logger.error(
-                "pdf_download_timeout",
-                paper_id=paper_id,
-                url=url
-            )
+            logger.error("pdf_download_timeout", paper_id=paper_id, url=url)
             raise PDFDownloadError(f"Download timeout after {self.timeout_seconds}s")
 
     def validate_pdf(self, pdf_path: Path) -> bool:
@@ -228,31 +211,29 @@ class PDFService:
             - File has PDF magic bytes (%PDF)
         """
         if not pdf_path.exists() or pdf_path.stat().st_size == 0:
-            logger.warning("pdf_validation_failed", reason="file_empty", path=str(pdf_path))
+            logger.warning(
+                "pdf_validation_failed", reason="file_empty", path=str(pdf_path)
+            )
             return False
 
         # Check PDF magic bytes
         try:
-            with open(pdf_path, 'rb') as f:
+            with open(pdf_path, "rb") as f:
                 header = f.read(4)
-                is_valid = header == b'%PDF'
+                is_valid = header == b"%PDF"
                 if not is_valid:
                     logger.warning(
                         "pdf_validation_failed",
                         reason="invalid_magic_bytes",
                         path=str(pdf_path),
-                        header=header.hex()
+                        header=header.hex(),
                     )
                 return is_valid
         except Exception as e:
             logger.error("pdf_validation_error", path=str(pdf_path), error=str(e))
             return False
 
-    def convert_to_markdown(
-        self,
-        pdf_path: Path,
-        paper_id: str
-    ) -> Path:
+    def convert_to_markdown(self, pdf_path: Path, paper_id: str) -> Path:
         """Convert PDF to markdown using marker-pdf
 
         Args:
@@ -280,16 +261,19 @@ class PDFService:
             "pdf_conversion_started",
             paper_id=paper_id,
             pdf_path=str(pdf_path),
-            output_path=str(output_path)
+            output_path=str(output_path),
         )
 
         # Run marker_single command
         cmd = [
             "marker_single",
             str(pdf_path),
-            "--output_dir", str(self.markdown_dir),
-            "--output_format", "markdown",
-            "--batch_multiplier", "2"  # Higher quality
+            "--output_dir",
+            str(self.markdown_dir),
+            "--output_format",
+            "markdown",
+            "--batch_multiplier",
+            "2",  # Higher quality
         ]
 
         try:
@@ -298,7 +282,7 @@ class PDFService:
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
-                check=False  # Don't raise on non-zero exit
+                check=False,  # Don't raise on non-zero exit
             )
 
             # Check for errors
@@ -307,7 +291,7 @@ class PDFService:
                     "marker_pdf_failed",
                     paper_id=paper_id,
                     returncode=result.returncode,
-                    stderr=result.stderr
+                    stderr=result.stderr,
                 )
                 raise ConversionError(
                     f"marker-pdf failed (exit {result.returncode}): {result.stderr}"
@@ -324,9 +308,7 @@ class PDFService:
                     md_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
 
             if not md_files:
-                raise ConversionError(
-                    f"No markdown file generated for {paper_id}"
-                )
+                raise ConversionError(f"No markdown file generated for {paper_id}")
 
             # Use first match or rename to expected path
             generated_file = md_files[0]
@@ -337,7 +319,7 @@ class PDFService:
                 "pdf_conversion_success",
                 paper_id=paper_id,
                 output_path=str(output_path),
-                size_bytes=output_path.stat().st_size
+                size_bytes=output_path.stat().st_size,
             )
 
             return output_path
@@ -346,17 +328,11 @@ class PDFService:
             logger.error(
                 "pdf_conversion_timeout",
                 paper_id=paper_id,
-                timeout=self.timeout_seconds
+                timeout=self.timeout_seconds,
             )
-            raise ConversionError(
-                f"Conversion timeout after {self.timeout_seconds}s"
-            )
+            raise ConversionError(f"Conversion timeout after {self.timeout_seconds}s")
         except Exception as e:
-            logger.error(
-                "pdf_conversion_error",
-                paper_id=paper_id,
-                error=str(e)
-            )
+            logger.error("pdf_conversion_error", paper_id=paper_id, error=str(e))
             raise ConversionError(f"Conversion failed: {e}")
 
     def cleanup_temp_files(self, paper_id: str, keep_pdfs: bool = True) -> None:
@@ -375,7 +351,9 @@ class PDFService:
                     pdf_file.unlink()
                     logger.debug("pdf_deleted", path=str(pdf_file))
                 except Exception as e:
-                    logger.warning("pdf_delete_failed", path=str(pdf_file), error=str(e))
+                    logger.warning(
+                        "pdf_delete_failed", path=str(pdf_file), error=str(e)
+                    )
 
         # Always clean up markdown files (can regenerate from PDF if needed)
         md_pattern = f"*{paper_id}*.md"
@@ -384,4 +362,6 @@ class PDFService:
                 md_file.unlink()
                 logger.debug("markdown_deleted", path=str(md_file))
             except Exception as e:
-                logger.warning("markdown_delete_failed", path=str(md_file), error=str(e))
+                logger.warning(
+                    "markdown_delete_failed", path=str(md_file), error=str(e)
+                )

@@ -25,7 +25,7 @@ from src.utils.exceptions import (
     ConversionError,
     ExtractionError,
     FileSizeError,
-    PDFValidationError
+    PDFValidationError,
 )
 
 logger = structlog.get_logger()
@@ -41,10 +41,7 @@ class ExtractionService:
     """
 
     def __init__(
-        self,
-        pdf_service: PDFService,
-        llm_service: LLMService,
-        keep_pdfs: bool = True
+        self, pdf_service: PDFService, llm_service: LLMService, keep_pdfs: bool = True
     ):
         """Initialize extraction service
 
@@ -57,15 +54,10 @@ class ExtractionService:
         self.llm_service = llm_service
         self.keep_pdfs = keep_pdfs
 
-        logger.info(
-            "extraction_service_initialized",
-            keep_pdfs=keep_pdfs
-        )
+        logger.info("extraction_service_initialized", keep_pdfs=keep_pdfs)
 
     async def process_paper(
-        self,
-        paper: PaperMetadata,
-        targets: List[ExtractionTarget]
+        self, paper: PaperMetadata, targets: List[ExtractionTarget]
     ) -> ExtractedPaper:
         """Process a single paper through the full pipeline
 
@@ -86,10 +78,7 @@ class ExtractionService:
             This method never raises exceptions for individual paper failures.
             It always returns an ExtractedPaper, even if extraction failed.
         """
-        extracted = ExtractedPaper(
-            metadata=paper,
-            pdf_available=False
-        )
+        extracted = ExtractedPaper(metadata=paper, pdf_available=False)
 
         markdown_content: str = ""
 
@@ -98,35 +87,38 @@ class ExtractionService:
             try:
                 # Download PDF
                 pdf_path = await self.pdf_service.download_pdf(
-                    url=str(paper.open_access_pdf),
-                    paper_id=paper.paper_id
+                    url=str(paper.open_access_pdf), paper_id=paper.paper_id
                 )
                 extracted.pdf_available = True
                 extracted.pdf_path = str(pdf_path)
 
                 # Convert to markdown
                 md_path = self.pdf_service.convert_to_markdown(
-                    pdf_path=pdf_path,
-                    paper_id=paper.paper_id
+                    pdf_path=pdf_path, paper_id=paper.paper_id
                 )
                 extracted.markdown_path = str(md_path)
 
                 # Read markdown content
-                markdown_content = md_path.read_text(encoding='utf-8')
+                markdown_content = md_path.read_text(encoding="utf-8")
 
                 logger.info(
                     "pdf_pipeline_success",
                     paper_id=paper.paper_id,
                     pdf_size=pdf_path.stat().st_size,
-                    md_size=len(markdown_content)
+                    md_size=len(markdown_content),
                 )
 
-            except (PDFDownloadError, FileSizeError, PDFValidationError, ConversionError) as e:
+            except (
+                PDFDownloadError,
+                FileSizeError,
+                PDFValidationError,
+                ConversionError,
+            ) as e:
                 logger.warning(
                     "pdf_pipeline_failed_fallback_to_abstract",
                     paper_id=paper.paper_id,
                     error_type=type(e).__name__,
-                    error=str(e)
+                    error=str(e),
                 )
                 # Reset PDF status on failure
                 extracted.pdf_available = False
@@ -139,7 +131,7 @@ class ExtractionService:
                 logger.error(
                     "pdf_pipeline_unexpected_error",
                     paper_id=paper.paper_id,
-                    error=str(e)
+                    error=str(e),
                 )
                 # Reset PDF status on failure
                 extracted.pdf_available = False
@@ -149,18 +141,13 @@ class ExtractionService:
 
         else:
             # No PDF available, use abstract
-            logger.info(
-                "no_pdf_available_using_abstract",
-                paper_id=paper.paper_id
-            )
+            logger.info("no_pdf_available_using_abstract", paper_id=paper.paper_id)
             markdown_content = self._format_abstract(paper)
 
         # LLM Extraction (always attempted, even for abstract-only)
         try:
             extraction = await self.llm_service.extract(
-                markdown_content=markdown_content,
-                targets=targets,
-                paper_metadata=paper
+                markdown_content=markdown_content, targets=targets, paper_metadata=paper
             )
             extracted.extraction = extraction
 
@@ -168,43 +155,30 @@ class ExtractionService:
                 "extraction_success",
                 paper_id=paper.paper_id,
                 tokens_used=extraction.tokens_used,
-                cost_usd=extraction.cost_usd
+                cost_usd=extraction.cost_usd,
             )
 
         except ExtractionError as e:
-            logger.error(
-                "extraction_failed",
-                paper_id=paper.paper_id,
-                error=str(e)
-            )
+            logger.error("extraction_failed", paper_id=paper.paper_id, error=str(e))
             # Don't raise - return extracted paper without extraction results
 
         except Exception as e:
             logger.error(
-                "extraction_unexpected_error",
-                paper_id=paper.paper_id,
-                error=str(e)
+                "extraction_unexpected_error", paper_id=paper.paper_id, error=str(e)
             )
 
         # Cleanup temporary files
         try:
             self.pdf_service.cleanup_temp_files(
-                paper_id=paper.paper_id,
-                keep_pdfs=self.keep_pdfs
+                paper_id=paper.paper_id, keep_pdfs=self.keep_pdfs
             )
         except Exception as e:
-            logger.warning(
-                "cleanup_failed",
-                paper_id=paper.paper_id,
-                error=str(e)
-            )
+            logger.warning("cleanup_failed", paper_id=paper.paper_id, error=str(e))
 
         return extracted
 
     async def process_papers(
-        self,
-        papers: List[PaperMetadata],
-        targets: List[ExtractionTarget]
+        self, papers: List[PaperMetadata], targets: List[ExtractionTarget]
     ) -> List[ExtractedPaper]:
         """Process multiple papers sequentially
 
@@ -220,9 +194,7 @@ class ExtractionService:
             comply with rate limits. Phase 3 will add concurrent processing.
         """
         logger.info(
-            "batch_processing_started",
-            total_papers=len(papers),
-            targets=len(targets)
+            "batch_processing_started", total_papers=len(papers), targets=len(targets)
         )
 
         results = []
@@ -230,7 +202,7 @@ class ExtractionService:
             logger.info(
                 "processing_paper",
                 paper_id=paper.paper_id,
-                progress=f"{i}/{len(papers)}"
+                progress=f"{i}/{len(papers)}",
             )
 
             extracted = await self.process_paper(paper, targets)
@@ -244,7 +216,7 @@ class ExtractionService:
             "batch_processing_completed",
             total_papers=len(papers),
             successful_extractions=successful,
-            papers_with_pdf=with_pdf
+            papers_with_pdf=with_pdf,
         )
 
         return results
@@ -260,12 +232,12 @@ class ExtractionService:
         """
         # Format authors
         if paper.authors:
-            authors = ', '.join(a.name for a in paper.authors)
+            authors = ", ".join(a.name for a in paper.authors)
         else:
-            authors = 'Unknown'
+            authors = "Unknown"
 
         # Format venue
-        venue = paper.venue or 'Unknown'
+        venue = paper.venue or "Unknown"
 
         # Format markdown
         markdown = f"""# {paper.title or 'Untitled Paper'}
@@ -300,15 +272,11 @@ class ExtractionService:
         with_extraction = sum(1 for r in results if r.extraction is not None)
 
         total_tokens = sum(
-            r.extraction.tokens_used
-            for r in results
-            if r.extraction is not None
+            r.extraction.tokens_used for r in results if r.extraction is not None
         )
 
         total_cost = sum(
-            r.extraction.cost_usd
-            for r in results
-            if r.extraction is not None
+            r.extraction.cost_usd for r in results if r.extraction is not None
         )
 
         return {
@@ -316,9 +284,15 @@ class ExtractionService:
             "papers_with_pdf": with_pdf,
             "papers_with_extraction": with_extraction,
             "pdf_success_rate": round(with_pdf / total * 100, 1) if total > 0 else 0.0,
-            "extraction_success_rate": round(with_extraction / total * 100, 1) if total > 0 else 0.0,
+            "extraction_success_rate": (
+                round(with_extraction / total * 100, 1) if total > 0 else 0.0
+            ),
             "total_tokens_used": total_tokens,
             "total_cost_usd": round(total_cost, 2),
-            "avg_tokens_per_paper": round(total_tokens / with_extraction) if with_extraction > 0 else 0,
-            "avg_cost_per_paper": round(total_cost / with_extraction, 3) if with_extraction > 0 else 0.0
+            "avg_tokens_per_paper": (
+                round(total_tokens / with_extraction) if with_extraction > 0 else 0
+            ),
+            "avg_cost_per_paper": (
+                round(total_cost / with_extraction, 3) if with_extraction > 0 else 0.0
+            ),
         }

@@ -25,10 +25,14 @@ def mock_catalog_service():
 
 
 def test_run_dry_run(mock_config_manager):
-    # Setup mock
+    # Setup mock - Phase 1 only (no Phase 2 settings)
     mock_instance = mock_config_manager.return_value
     mock_config = MagicMock()
     mock_config.research_topics = []
+    # Disable Phase 2 by setting Phase 2 settings to None
+    mock_config.settings.pdf_settings = None
+    mock_config.settings.llm_settings = None
+    mock_config.settings.cost_limits = None
     mock_instance.load_config.return_value = mock_config
 
     result = runner.invoke(app, ["run", "--dry-run"])

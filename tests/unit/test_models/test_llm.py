@@ -44,9 +44,9 @@ def test_llm_config_google():
 
 def test_llm_config_invalid_api_key():
     """Test LLMConfig rejects invalid API keys"""
-    invalid_keys = ["YOUR_API_KEY", "PLACEHOLDER", "", "None"]
-
-    for key in invalid_keys:
+    # Test placeholder keys that should trigger custom validator
+    placeholder_keys = ["YOUR_API_KEY", "PLACEHOLDER", "None"]
+    for key in placeholder_keys:
         with pytest.raises(ValidationError) as exc_info:
             LLMConfig(
                 provider="anthropic",
@@ -54,6 +54,15 @@ def test_llm_config_invalid_api_key():
                 api_key=key
             )
         assert "API key must be a valid credential" in str(exc_info.value)
+
+    # Test empty string which triggers Pydantic's min_length validation
+    with pytest.raises(ValidationError) as exc_info:
+        LLMConfig(
+            provider="anthropic",
+            model="claude-3-5-sonnet-20250122",
+            api_key=""
+        )
+    assert "String should have at least" in str(exc_info.value)
 
 
 def test_llm_config_model_provider_mismatch():

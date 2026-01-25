@@ -82,9 +82,16 @@ def test_load_config_read_error(tmp_path):
     config_file = tmp_path / "broken.yaml"
     config_file.touch()
     manager = ConfigManager(config_path=str(config_file))
-    from unittest.mock import patch
+    from unittest.mock import patch, mock_open
 
-    with patch("builtins.open", side_effect=Exception("Read error")):
+    # Mock open to raise exception only for the config file, not .env
+    original_open = open
+    def selective_open(file, *args, **kwargs):
+        if str(config_file) in str(file):
+            raise Exception("Read error")
+        return original_open(file, *args, **kwargs)
+
+    with patch("builtins.open", side_effect=selective_open):
         with pytest.raises(ConfigValidationError, match="Failed to read config file"):
             manager.load_config()
 

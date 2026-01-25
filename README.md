@@ -2,10 +2,10 @@
 
 > Automate the discovery, extraction, and synthesis of cutting-edge AI research papers with intelligent LLM-powered analysis.
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10.19](https://img.shields.io/badge/python-3.10.19-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Security: High](https://img.shields.io/badge/security-high-green.svg)](docs/security/)
-[![Test Coverage: 97%](https://img.shields.io/badge/coverage-97%25-brightgreen.svg)](tests/)
+[![Test Coverage: 100%](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](tests/)
 
 ## 🎯 Overview
 
@@ -15,7 +15,7 @@ ARISP automates the research process by:
 - 🤖 **Extracting** prompts, code, and insights using LLM (Claude/Gemini)
 - 📝 **Synthesizing** Obsidian-ready markdown briefs for engineering teams
 
-**✨ New in Phase 1.5:** No API key required! ArXiv integration provides immediate access to 99% of cutting-edge AI research papers with guaranteed PDF access.
+**✨ Phase 1.5 Stabilized:** The foundation is now production-grade with 100% test coverage and automated quality enforcement.
 
 ## ✨ Key Features
 
@@ -72,6 +72,15 @@ pip install -r requirements.txt
 cp .env.template .env
 # Edit .env and add your LLM API key
 # Semantic Scholar API key is optional (defaults to ArXiv)
+```
+
+### Development & Verification
+
+Every push must pass the "Golden Path" verification:
+
+```bash
+# Run all quality checks (Formatting, Linting, Types, Tests, Coverage)
+./verify.sh
 ```
 
 ### Configuration
@@ -256,14 +265,16 @@ output/
 
 ## 📊 Performance & Quality
 
-### Current Metrics (Phase 1 + 1.5)
-- ✅ **Test Coverage**: **97%** (exceeds ≥95% requirement)
+### Current Metrics (Phase 1.5 Final)
+- ✅ **Test Coverage**: **100%**
+- ✅ **Quality Enforcement**: Automated (Flake8, Black, Mypy, Pytest)
 - ✅ **Security Compliance**: **17/17 requirements met** (12 Phase 1 + 5 Phase 1.5)
-- ✅ **Test Suite**: 72 automated tests (100% pass rate)
+- ✅ **Test Suite**: 114 automated tests (100% pass rate)
 - ✅ **Configuration Validation**: <1s
 - ✅ **Catalog Operations**: <100ms
 - ✅ **Memory Usage**: <100MB idle
 - ✅ **Rate Limiting**: 3-second delay verified (ArXiv compliance)
+- ✅ **Environment**: Python 3.10.19 (Strict)
 
 ### Target Metrics (Phase 3)
 - 🎯 **Processing Speed**: 50 papers in <30 minutes

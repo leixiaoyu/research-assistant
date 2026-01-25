@@ -1,6 +1,6 @@
 # ARISP System Architecture
-**Version:** 1.1
-**Status:** Phase 1.5 Complete
+**Version:** 1.2
+**Status:** Phase 1.5 Stabilized
 **Last Updated:** 2026-01-24
 
 ---
@@ -109,6 +109,9 @@ Pipeline can be safely re-run; checkpoints enable resume.
 
 ### 11. **Test-Driven Development**
 No code pushed without complete verification (automated tests or manual validation).
+- **Target**: 100% test coverage for all modules.
+- **Minimum**: 95% test coverage per module (Non-negotiable blocking gate).
+- **CI Enforcement**: Automated coverage checks, linting (Flake8/Black), and type checking (Mypy).
 
 ---
 

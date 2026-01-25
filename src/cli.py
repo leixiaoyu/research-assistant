@@ -4,7 +4,7 @@ import structlog
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 
 from src.services.config_manager import ConfigManager, ConfigValidationError
 from src.services.discovery_service import DiscoveryService, APIError
@@ -63,6 +63,11 @@ def run(
                 typer.echo(f" - {t.query} ({t.timeframe.type})")
 
             if phase2_enabled:
+                # Type narrowing for Mypy
+                assert config.settings.pdf_settings is not None
+                assert config.settings.llm_settings is not None
+                assert config.settings.cost_limits is not None
+
                 typer.secho("\nPhase 2 Features Enabled:", fg=typer.colors.CYAN)
                 pdf_status = (
                     "Keep PDFs"
@@ -97,9 +102,15 @@ def run(
         pdf_service = None
         llm_service = None
         extraction_service = None
-        md_generator = None
+        md_generator: Optional[Union[MarkdownGenerator, EnhancedMarkdownGenerator]] = (
+            None
+        )
 
         if phase2_enabled:
+            # Type narrowing: these are guaranteed not None due to phase2_enabled check
+            assert config.settings.pdf_settings is not None
+            assert config.settings.llm_settings is not None
+            assert config.settings.cost_limits is not None
             typer.secho("Initializing Phase 2 services...", fg=typer.colors.CYAN)
 
             # PDF Service
@@ -110,11 +121,17 @@ def run(
             )
 
             # LLM Service
+            # Ensure api_key is a string (never None)
+            api_key_value: str = (
+                config.settings.llm_settings.api_key
+                if config.settings.llm_settings.api_key is not None
+                else os.getenv("LLM_API_KEY", "")
+            )
+
             llm_config = LLMConfig(
                 provider=config.settings.llm_settings.provider,
                 model=config.settings.llm_settings.model,
-                api_key=config.settings.llm_settings.api_key
-                or os.getenv("LLM_API_KEY", ""),
+                api_key=api_key_value,
                 max_tokens=config.settings.llm_settings.max_tokens,
                 temperature=config.settings.llm_settings.temperature,
                 timeout=config.settings.llm_settings.timeout,

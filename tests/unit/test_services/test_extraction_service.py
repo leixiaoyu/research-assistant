@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from unittest.mock import Mock, AsyncMock, patch, mock_open
+from unittest.mock import Mock, AsyncMock, MagicMock
 
 from src.services.extraction_service import ExtractionService
 from src.services.pdf_service import PDFService
@@ -46,26 +46,31 @@ class TestExtractionService:
         self, extraction_service, mock_pdf_service, mock_llm_service, mock_paper
     ):
         """Test successful end-to-end processing of a single paper"""
-        pdf_path = Path("/tmp/test.pdf")
-        md_path = Path("/tmp/test.md")
+        # Create mock Path objects with necessary methods
+        mock_pdf_path = MagicMock(spec=Path)
+        mock_pdf_path.__str__ = Mock(return_value="/tmp/test.pdf")
+        mock_pdf_path.stat.return_value.st_size = 1024  # Mock file size
 
-        mock_pdf_service.download_pdf = AsyncMock(return_value=pdf_path)
-        mock_pdf_service.convert_to_markdown = Mock(return_value=md_path)
+        mock_md_path = MagicMock(spec=Path)
+        mock_md_path.__str__ = Mock(return_value="/tmp/test.md")
+        mock_md_path.read_text.return_value = "# Test Paper\n\nMarkdown content"
 
-        with patch("builtins.open", mock_open(read_data="Markdown content")):
-            extraction = PaperExtraction(
-                paper_id=mock_paper.paper_id,
-                extraction_results=[],
-                tokens_used=1000,
-                cost_usd=0.01,
-            )
-            mock_llm_service.extract = AsyncMock(return_value=extraction)
+        mock_pdf_service.download_pdf = AsyncMock(return_value=mock_pdf_path)
+        mock_pdf_service.convert_to_markdown = Mock(return_value=mock_md_path)
 
-            result = await extraction_service.process_paper(mock_paper, [])
+        extraction = PaperExtraction(
+            paper_id=mock_paper.paper_id,
+            extraction_results=[],
+            tokens_used=1000,
+            cost_usd=0.01,
+        )
+        mock_llm_service.extract = AsyncMock(return_value=extraction)
 
-            assert result.pdf_available is True
-            assert result.extraction == extraction
-            mock_pdf_service.cleanup_temp_files.assert_called_once()
+        result = await extraction_service.process_paper(mock_paper, [])
+
+        assert result.pdf_available is True
+        assert result.extraction == extraction
+        mock_pdf_service.cleanup_temp_files.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_process_paper_pdf_failure_fallback(
@@ -90,7 +95,7 @@ class TestExtractionService:
         assert result.extraction == extraction
         # Should have called extract with abstract-based markdown
         args, kwargs = mock_llm_service.extract.call_args
-        assert "Abstract" in args[0]
+        assert "Abstract" in kwargs["markdown_content"]
 
     def test_get_extraction_summary(self, extraction_service, mock_paper):
         """Test summary statistics calculation"""

@@ -62,8 +62,8 @@ class TestEnhancedMarkdownGenerator:
         )
 
         assert "# Research Brief: machine learning" in markdown
-        assert "Run ID: run-123" in markdown
-        assert "Total Tokens Used: 1,000" in markdown
+        assert "run_id: run-123" in markdown
+        assert "**Total Tokens Used:** 1,000" in markdown
         assert "### 1. [Test Paper]" in markdown
         assert "A good summary" in markdown
 
@@ -88,23 +88,29 @@ class TestEnhancedMarkdownGenerator:
             confidence=0.8,
         )
         formatted = generator._format_extraction_result(result)
-        assert "acc: 0.95" in formatted
-        assert "f1: 0.92" in formatted
+        # Dict is formatted as a markdown table
+        assert "| Metric | Value |" in formatted
+        assert "| acc | 0.95 |" in formatted
+        assert "| f1 | 0.92 |" in formatted
 
     def test_format_extraction_result_code(self, generator):
         """Test formatting code content"""
         result = ExtractionResult(
-            target_name="code", success=True, content="print('hello')", confidence=0.9
+            target_name="code",
+            success=True,
+            content="def hello():\n    print('hello')",
+            confidence=0.9,
         )
         # Use target with 'code' in name to trigger code block
         formatted = generator._format_extraction_result(result)
         assert "```python" in formatted
-        assert "print('hello')" in formatted
+        assert "def hello():" in formatted
 
     def test_generate_enhanced_no_papers(self, generator, mock_topic):
         """Test generation with no papers"""
         markdown = generator.generate_enhanced([], mock_topic, "run-empty")
-        assert "No papers processed" in markdown
+        assert "**Papers Processed:** 0" in markdown
+        assert "**Papers Found:** 0" in markdown
 
     def test_author_formatting_long_list(self, generator, mock_paper, mock_topic):
         """Test author list truncation with et al."""

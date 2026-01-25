@@ -3,7 +3,110 @@
 **Status:** Phase 1.5 Stabilized
 **Last Updated:** 2026-01-24
 
-...
+---
+
+## Table of Contents
+1. [Architecture Overview](#architecture-overview)
+2. [Design Principles](#design-principles)
+3. [System Architecture](#system-architecture)
+4. [Data Models](#data-models)
+5. [Core Components](#core-components)
+6. [Concurrency & Resilience](#concurrency--resilience)
+7. [Storage & Caching](#storage--caching)
+8. [Observability](#observability)
+9. [Security](#security)
+10. [Deployment Architecture](#deployment-architecture)
+11. [Gap Resolution Matrix](#gap-resolution-matrix)
+
+---
+
+## Architecture Overview
+
+### System Context
+
+ARISP (Automated Research Ingestion & Synthesis Pipeline) is a production-grade system for automated research paper discovery, processing, and synthesis using LLM-powered extraction.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         ARISP System                        │
+│                                                             │
+│  ┌────────────┐    ┌─────────────┐    ┌────────────────┐  │
+│  │   User     │───▶│   ARISP     │───▶│   Research     │  │
+│  │   Config   │    │   Pipeline  │    │   Briefs       │  │
+│  └────────────┘    └─────────────┘    └────────────────┘  │
+│                            │                                │
+│                            ▼                                │
+│         ┌──────────────────┴──────────────────┐           │
+│         │                                      │           │
+│    ┌────▼────┐  ┌────────┐  ┌─────────┐  ┌───▼────┐     │
+│    │ ArXiv   │  │  PDFs  │  │   LLM   │  │ Catalog│     │
+│    │   API   │  │(marker)│  │(Claude/ │  │   DB   │     │
+│    │(Default)│  │        │  │Gemini)  │  │        │     │
+│    └────┬────┘  └────────┘  └─────────┘  └────────┘     │
+│         │                                                  │
+│    ┌────▼────┐                                            │
+│    │Semantic │                                            │
+│    │Scholar  │                                            │
+│    │(Optional)                                            │
+│    └─────────┘                                            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Capabilities
+- **Discovery**: Multi-provider support (ArXiv default, Semantic Scholar optional) with flexible queries
+- **Processing**: PDF→Markdown conversion with code preservation
+- **Extraction**: LLM-powered content analysis with configurable targets
+- **Intelligence**: Deduplication, caching, quality filtering
+- **Observability**: Structured logging, metrics, monitoring
+
+---
+
+## Design Principles
+
+### 1. **Security First** ⚠️ **CRITICAL**
+Security is the #1 priority and cannot be compromised in any situation:
+- **Never hardcode secrets**: All credentials via environment variables or secure vaults
+- **Input validation**: All user inputs validated with Pydantic before processing
+- **Path sanitization**: Prevent directory traversal attacks
+- **Secret scanning**: Automated checks before commits
+- **Least privilege**: Minimal permissions required
+- **Audit logging**: All security-relevant operations logged
+- **Community safe**: Tool can be shared without exposing sensitive data
+
+### 2. **Autonomous Operation**
+System operates intelligently without constant human intervention:
+- **Intelligent stopping criteria**: Knows when research is complete
+- **Quality convergence detection**: Stops when no new high-quality papers found
+- **Incremental search**: Continues from last checkpoint
+- **Self-optimization**: Learns from past runs to improve filters
+
+### 3. **Separation of Concerns**
+Each layer and component has a single, well-defined responsibility.
+
+### 4. **Fail-Safe Operation**
+System degrades gracefully rather than failing completely:
+- No PDF? Use abstract only
+- LLM fails? Skip extraction, keep metadata
+- Partial failures don't abort entire pipeline
+
+### 5. **Type Safety**
+All data structures use Pydantic models with runtime validation.
+
+### 6. **Async-First**
+I/O-bound operations use asyncio for maximum throughput.
+
+### 7. **Configurable by Default**
+Every behavior is configurable via YAML/environment variables.
+
+### 8. **Observable**
+Every operation emits structured logs and metrics.
+
+### 9. **Cost-Aware**
+LLM usage is tracked, limited, and optimized.
+
+### 10. **Idempotent**
+Pipeline can be safely re-run; checkpoints enable resume.
+
 ### 11. **Test-Driven Development**
 No code pushed without complete verification (automated tests or manual validation).
 - **Target**: 100% test coverage for all modules.

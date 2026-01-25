@@ -24,8 +24,13 @@ def mock_components():
         topic = MagicMock()
         topic.query = "Test Query"
         topic.timeframe.value = "48h"
+        topic.extraction_targets = None  # No Phase 2 extraction
         config.research_topics = [topic]
         config.settings.semantic_scholar_api_key = "key"
+        # Disable Phase 2 by setting Phase 2 settings to None
+        config.settings.pdf_settings = None
+        config.settings.llm_settings = None
+        config.settings.cost_limits = None
         config_instance.load_config.return_value = config
         config_instance.get_output_path.return_value = MagicMock()  # Path object
 

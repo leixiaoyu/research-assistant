@@ -14,8 +14,46 @@ The following requirements are **absolute** and **block all commits and pushes**
 2. **🧪 Test Coverage:** ≥95% coverage for all modules (target 100%)
 3. **✅ Tests Passing:** 100% pass rate (0 failures)
 4. **📋 Completeness:** All feature requirements fully implemented
+5. **🔏 Branch Protection:** No direct pushes to `main`. All changes via PR only.
 
 **If ANY of these fail, you MUST stop and fix before committing or pushing. No exceptions.**
+
+---
+
+## Workflow & Branch Protection (Strict)
+
+**Direct pushes to `main` are disabled and strictly forbidden.**
+
+### PR Requirements (Non-Negotiable)
+Before a Pull Request can be merged into `main`:
+1. **CI Status:** The "test (3.10)" workflow must pass with **100% success rate**.
+2. **Linting & Types:** **Flake8**, **Black** (formatting), and **Mypy** (static analysis) must pass with zero issues.
+3. **Coverage:** The "test (3.10)" workflow must verify **≥95% test coverage per module**.
+4. **Approval:** At least **one approving review** from a human teammate is required.
+5. **Admin Enforcement:** These rules apply to **all users**, including administrators. No bypasses.
+
+### Pull Request Review Protocol (High Standard)
+Reviewers must maintain **extreme engineering rigor** and keep the bar exceptionally high. A "High Standard" review is a non-negotiable requirement and must include:
+
+1. **Executive Summary:** A concise overview of the PR's purpose and its impact on the project state.
+2. **Requirements Verification:**
+   - **Functional:** Ensure 100% of the features specified in the relevant `PHASE_X_SPEC.md` are implemented and function correctly.
+   - **Non-Functional:** Verify performance, observability (logging), and resilience (error handling) meet project standards.
+3. **Local Verification:** Reviewers SHOULD fetch the branch and verify results locally:
+   - Confirm **100% Pass Rate** for automated tests.
+   - Verify **≥95% Coverage** per module. **Test coverage is non-negotiable.**
+   - Run **`./verify.sh`** to ensure zero regressions.
+   - Check alignment with `ci.yml` enforcement rules.
+4. **Technical Assessment & Rigor:**
+   - **Engineering Best Practices:** Adherence to SOLID, DRY, and KISS principles is mandatory.
+   - **API Implementation:** Verify protocol security (HTTPS), parameter accuracy, and graceful error handling.
+   - **Type Safety & Validation:** Ensure robust Pydantic usage and centralized validation.
+   - **Architecture Alignment:** Check for proper delegation patterns and adherence to layered design.
+5. **Security & Path Safety (Non-Negotiable):**
+   - **Security First:** Verify all security checklist items are met. No compromises.
+   - **Secrets Management:** Ensure no real keys are committed.
+   - **Path Security:** Audit `.gitignore` and path sanitization logic.
+6. **Final Assessment:** A clear "Status" (APPROVED or CHANGES REQUESTED) with a recommendation for action.
 
 ---
 
@@ -77,6 +115,7 @@ Every feature must have:
    - Integration tests for service interactions
    - End-to-end tests for critical workflows
    - **Test coverage ≥95% (see Test Coverage section above)**
+   - **100% pass rate required for all CI pipelines**
 
 2. **Manual Verification** (when automated tests insufficient):
    - Step-by-step manual testing by Claude Code
@@ -285,29 +324,54 @@ The pipeline consists of five main modules:
 5. Handle all error cases gracefully
 6. Document security considerations
 
+### Verification Script
+
+**Always use `./verify.sh` before committing.**
+
+The project includes a comprehensive verification script that runs all required checks:
+
+```bash
+./verify.sh
+```
+
+**What it checks:**
+1. ✅ **Black** - Code formatting (zero changes required)
+2. ✅ **Flake8** - Linting (zero issues)
+3. ✅ **Mypy** - Type checking (zero errors)
+4. ✅ **Pytest** - All tests pass with ≥95% coverage
+
+**This script MUST pass 100% before:**
+- Committing code
+- Pushing to remote
+- Creating a Pull Request
+
+**If `./verify.sh` fails, you MUST NOT proceed. Fix all issues first.**
+
+---
+
 ### Before Committing
-1. Run all tests: `pytest tests/`
-2. **Check test coverage:** `pytest --cov=src --cov-report=term-missing`
-   - **MUST show ≥95% coverage for all modified modules**
-   - Document any uncovered lines with justification
-3. Format code: `black .`
-4. Type check: `mypy src/`
-5. Security scan: Check for hardcoded secrets
-6. Review security checklist
-7. Generate verification report with coverage proof
+1. **Run verification script:** `./verify.sh` (MUST pass 100%)
+2. Review output for any warnings or issues
+3. Security scan: Check for hardcoded secrets
+4. Review security checklist
+5. Generate verification report with coverage proof
 
 ### Before Pushing to Remote
 
 **⚠️ BLOCKING REQUIREMENTS - ALL must pass:**
 
-1. **All tests must pass** (100% pass rate, 0 failures)
-2. **Coverage must be ≥95%** for all modified modules
-   - Run: `pytest --cov=src --cov-report=term-missing`
+1. **`./verify.sh` must pass 100%** (Formatting, Linting, Types, Tests)
+2. **All tests must pass** (100% pass rate, 0 failures)
+3. **Coverage must be ≥95%** for all modified modules
+   - Run: `pytest --cov=src --cov-report=term-missing --cov-fail-under=95`
    - Any module below 95% BLOCKS the push
    - Overall project coverage must remain ≥95%
-3. **Security checklist complete** (all items checked)
-4. **Verification report generated** (includes coverage analysis)
-5. **Feature specification 100% met** (all requirements implemented)
+4. **No linting errors** (Flake8 clean)
+5. **No type errors** (Mypy clean)
+6. **No formatting issues** (Black clean)
+7. **Security checklist complete** (all items checked)
+8. **Verification report generated** (includes coverage analysis)
+9. **Feature specification 100% met** (all requirements implemented)
 
 **If ANY requirement fails, you MUST NOT push. Fix issues first. No exceptions.**
 
@@ -315,6 +379,28 @@ The pipeline consists of five main modules:
 - If coverage < 95%: Add tests until ≥95%
 - If legitimately uncoverable: Document in verification report
 - If uncertain: Ask for clarification, do NOT push
+
+### CI/CD Enforcement
+
+**The CI pipeline enforces all quality gates automatically.**
+
+**GitHub Actions Workflow (`ci.yml`):**
+- Runs on: All pull requests and pushes to `main`
+- Python Version: 3.10 (enforced)
+- Checks:
+  1. Black formatting
+  2. Flake8 linting
+  3. Mypy type checking
+  4. Pytest with ≥95% coverage
+
+**If CI fails, the PR cannot be merged.**
+
+**Branch Protection Rules:**
+- Direct pushes to `main` are **disabled**
+- All changes must go through Pull Request
+- At least 1 approving review required
+- CI must pass (status checks required)
+- Rules apply to all users, including admins
 
 ---
 

@@ -1,0 +1,52 @@
+# E2E Test Configuration - Small Sample
+# For manual Phase 2 testing with real papers
+
+research_topics:
+  # Test 1: Recent machine learning papers (small sample)
+  - query: "machine learning"
+    provider: "arxiv"
+    timeframe:
+      type: "recent"
+      value: "7d"  # Last 7 days
+    max_papers: 2  # Small sample for initial testing
+
+    extraction_targets:
+      - name: "key_methods"
+        description: "Extract the main machine learning methods or algorithms used"
+        output_format: "list"
+        required: false
+
+      - name: "engineering_summary"
+        description: "Write a brief 2-sentence summary for engineering teams"
+        output_format: "text"
+        required: true
+
+# Global Settings
+settings:
+  output_base_dir: "./output"
+  enable_duplicate_detection: true
+
+  # No Semantic Scholar key needed for ArXiv
+  semantic_scholar_api_key: null
+
+  # PDF Processing (Phase 2)
+  pdf_settings:
+    temp_dir: "./temp"
+    keep_pdfs: false  # Don't keep PDFs for testing
+    max_file_size_mb: 50
+    timeout_seconds: 300
+
+  # LLM Configuration (Phase 2)
+  llm_settings:
+    provider: "${LLM_PROVIDER}"
+    model: "${LLM_MODEL}"
+    api_key: "${LLM_API_KEY}"
+    max_tokens: 50000  # Reduced for faster testing
+    temperature: 0.0
+    timeout: 180  # 3 minutes
+
+  # Cost Controls (Phase 2)
+  cost_limits:
+    max_tokens_per_paper: 50000
+    max_daily_spend_usd: 5.0  # Conservative for testing
+    max_total_spend_usd: 10.0

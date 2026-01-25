@@ -1,3 +1,9 @@
+"""Base Markdown Generator for Phase 1
+
+This generator creates Obsidian-compatible markdown briefs from paper metadata.
+Phase 2's EnhancedMarkdownGenerator extends this to include extraction results.
+"""
+
 from typing import List
 from datetime import datetime
 import yaml
@@ -72,8 +78,9 @@ class MarkdownGenerator:
 
     def _format_paper(self, paper: PaperMetadata, index: int) -> str:
         """Format a single paper entry"""
-        authors = ", ".join([a.name for a in paper.authors[:3]])
-        if len(paper.authors) > 3:
+        # Defensive check for authors
+        authors = ", ".join([a.name for a in (paper.authors or [])[:3]])
+        if paper.authors and len(paper.authors) > 3:
             authors += ", et al."
 
         lines = []

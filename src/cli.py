@@ -1,16 +1,24 @@
 import typer
 import asyncio
 import structlog
+import os
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 
 from src.services.config_manager import ConfigManager, ConfigValidationError
 from src.services.discovery_service import DiscoveryService, APIError
 from src.services.catalog_service import CatalogService
 from src.output.markdown_generator import MarkdownGenerator
+from src.output.enhanced_generator import EnhancedMarkdownGenerator
 from src.models.catalog import CatalogRun
 from src.utils.logging import configure_logging
+
+# Phase 2 imports
+from src.services.pdf_service import PDFService
+from src.services.llm_service import LLMService
+from src.services.extraction_service import ExtractionService
+from src.models.llm import LLMConfig, CostLimits
 
 # Configure structured logging
 configure_logging()
@@ -41,27 +49,127 @@ def run(
             typer.secho(f"Configuration Error: {e}", fg=typer.colors.RED)
             raise typer.Exit(code=1)
 
+        # Check if Phase 2 is enabled (based on config)
+        phase2_enabled = (
+            config.settings.pdf_settings is not None
+            and config.settings.llm_settings is not None
+            and config.settings.cost_limits is not None
+        )
+
         if dry_run:
             typer.secho("Dry run: Configuration valid.", fg=typer.colors.GREEN)
             typer.echo(f"Found {len(config.research_topics)} topics:")
             for t in config.research_topics:  # pragma: no cover
                 typer.echo(f" - {t.query} ({t.timeframe.type})")
+
+            if phase2_enabled:
+                # Type narrowing for Mypy
+                assert config.settings.pdf_settings is not None
+                assert config.settings.llm_settings is not None
+                assert config.settings.cost_limits is not None
+
+                typer.secho("\nPhase 2 Features Enabled:", fg=typer.colors.CYAN)
+                pdf_status = (
+                    "Keep PDFs"
+                    if config.settings.pdf_settings.keep_pdfs
+                    else "Delete after processing"
+                )
+                typer.echo(f" - PDF Processing: {pdf_status}")
+                typer.echo(f" - LLM Provider: {config.settings.llm_settings.provider}")
+                typer.echo(f" - LLM Model: {config.settings.llm_settings.model}")
+                daily_limit = config.settings.cost_limits.max_daily_spend_usd
+                total_limit = config.settings.cost_limits.max_total_spend_usd
+                typer.echo(f" - Daily Cost Limit: ${daily_limit:.2f}")
+                typer.echo(f" - Total Cost Limit: ${total_limit:.2f}")
+            else:
+                typer.secho(
+                    "\nPhase 2 Features: Disabled (Phase 1 discovery only)",
+                    fg=typer.colors.YELLOW,
+                )
+
             return  # pragma: no cover
 
-        # 2. Initialize Services
+        # 2. Initialize Core Services (Phase 1)
         discovery_service = DiscoveryService(
             api_key=config.settings.semantic_scholar_api_key or ""
         )
         catalog_service = CatalogService(config_manager)
-        md_generator = MarkdownGenerator()
 
         # Load catalog once
         catalog_service.load()
 
-        # 3. Process Topics
+        # 3. Initialize Phase 2 Services (if enabled)
+        pdf_service = None
+        llm_service = None
+        extraction_service = None
+        md_generator: Optional[Union[MarkdownGenerator, EnhancedMarkdownGenerator]] = (
+            None
+        )
+
+        if phase2_enabled:
+            # Type narrowing: these are guaranteed not None due to phase2_enabled check
+            assert config.settings.pdf_settings is not None
+            assert config.settings.llm_settings is not None
+            assert config.settings.cost_limits is not None
+            typer.secho("Initializing Phase 2 services...", fg=typer.colors.CYAN)
+
+            # PDF Service
+            pdf_service = PDFService(
+                temp_dir=Path(config.settings.pdf_settings.temp_dir),
+                max_size_mb=config.settings.pdf_settings.max_file_size_mb,
+                timeout_seconds=config.settings.pdf_settings.timeout_seconds,
+            )
+
+            # LLM Service
+            # Ensure api_key is a string (never None)
+            api_key_value: str = (
+                config.settings.llm_settings.api_key
+                if config.settings.llm_settings.api_key is not None
+                else os.getenv("LLM_API_KEY", "")
+            )
+
+            llm_config = LLMConfig(
+                provider=config.settings.llm_settings.provider,
+                model=config.settings.llm_settings.model,
+                api_key=api_key_value,
+                max_tokens=config.settings.llm_settings.max_tokens,
+                temperature=config.settings.llm_settings.temperature,
+                timeout=config.settings.llm_settings.timeout,
+            )
+
+            cost_limits = CostLimits(
+                max_tokens_per_paper=config.settings.cost_limits.max_tokens_per_paper,
+                max_daily_spend_usd=config.settings.cost_limits.max_daily_spend_usd,
+                max_total_spend_usd=config.settings.cost_limits.max_total_spend_usd,
+            )
+
+            llm_service = LLMService(config=llm_config, cost_limits=cost_limits)
+
+            # Extraction Service
+            extraction_service = ExtractionService(
+                pdf_service=pdf_service,
+                llm_service=llm_service,
+                keep_pdfs=config.settings.pdf_settings.keep_pdfs,
+            )
+
+            # Enhanced Markdown Generator
+            md_generator = EnhancedMarkdownGenerator()
+
+            typer.secho("✓ Phase 2 services initialized", fg=typer.colors.GREEN)
+        else:
+            # Phase 1 only - basic markdown generator
+            md_generator = MarkdownGenerator()
+
+        # 4. Process Topics
         asyncio.run(
             _process_topics(
-                config, discovery_service, catalog_service, md_generator, config_manager
+                config=config,
+                discovery=discovery_service,
+                catalog_svc=catalog_service,
+                md_gen=md_generator,
+                config_mgr=config_manager,
+                extraction_svc=extraction_service,
+                phase2_enabled=phase2_enabled,
             )
         )
 
@@ -71,12 +179,35 @@ def run(
         raise typer.Exit(code=1)
 
 
-async def _process_topics(config, discovery, catalog_svc, md_gen, config_mgr):
-    """Async processing of topics"""
+async def _process_topics(
+    config,
+    discovery,
+    catalog_svc,
+    md_gen,
+    config_mgr,
+    extraction_svc=None,
+    phase2_enabled=False,
+):
+    """Async processing of topics
+
+    Args:
+        config: Research configuration
+        discovery: Discovery service
+        catalog_svc: Catalog service
+        md_gen: Markdown generator (MarkdownGenerator or EnhancedMarkdownGenerator)
+        config_mgr: Configuration manager
+        extraction_svc: Extraction service (Phase 2, optional)
+        phase2_enabled: Whether Phase 2 features are enabled
+    """
     for topic in config.research_topics:
         try:
             run_id = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-            logger.info("processing_topic", topic=topic.query, run_id=run_id)
+            logger.info(
+                "processing_topic",
+                topic=topic.query,
+                run_id=run_id,
+                phase2=phase2_enabled,
+            )
 
             # A. Get/Create Topic in Catalog
             catalog_topic = catalog_svc.get_or_create_topic(topic.query)
@@ -88,25 +219,71 @@ async def _process_topics(config, discovery, catalog_svc, md_gen, config_mgr):
                 logger.warning("no_papers_found", topic=topic.query)
                 continue
 
-            # C. Generate Output
+            # C. Phase 2: PDF Processing & LLM Extraction (if enabled)
+            extracted_papers = None
+            summary_stats = None
+
+            if phase2_enabled and extraction_svc and topic.extraction_targets:
+                logger.info(
+                    "starting_phase2_extraction",
+                    topic=topic.query,
+                    papers_count=len(papers),
+                    targets_count=len(topic.extraction_targets),
+                )
+
+                # Process papers through extraction pipeline
+                extracted_papers = await extraction_svc.process_papers(
+                    papers=papers, targets=topic.extraction_targets
+                )
+
+                # Get summary statistics
+                summary_stats = extraction_svc.get_extraction_summary(extracted_papers)
+
+                logger.info(
+                    "phase2_extraction_completed",
+                    topic=topic.query,
+                    papers_with_pdf=summary_stats["papers_with_pdf"],
+                    papers_with_extraction=summary_stats["papers_with_extraction"],
+                    total_tokens=summary_stats["total_tokens_used"],
+                    total_cost_usd=summary_stats["total_cost_usd"],
+                )
+
+            # D. Generate Output
             # Get output path from config manager
             output_dir = config_mgr.get_output_path(catalog_topic.topic_slug)
             filename = f"{datetime.utcnow().strftime('%Y-%m-%d')}_Research.md"
             output_file = output_dir / filename
 
-            content = md_gen.generate(papers, topic, run_id)
+            # Generate markdown (Phase 1 or Phase 2 format)
+            if phase2_enabled and extracted_papers is not None:
+                # Phase 2: Enhanced markdown with extraction results
+                content = md_gen.generate_enhanced(
+                    extracted_papers=extracted_papers,
+                    topic=topic,
+                    run_id=run_id,
+                    summary_stats=summary_stats,
+                )
+            else:
+                # Phase 1: Basic markdown from paper metadata only
+                content = md_gen.generate(papers, topic, run_id)
 
             with open(output_file, "w") as f:
                 f.write(content)
 
-            logger.info("report_generated", path=str(output_file))
+            logger.info(
+                "report_generated", path=str(output_file), phase2=phase2_enabled
+            )
 
-            # D. Update Catalog
+            # E. Update Catalog
+            papers_processed = len(papers)
+            if phase2_enabled and summary_stats:
+                papers_processed = summary_stats["papers_with_extraction"]
+
             run = CatalogRun(
                 run_id=run_id,
                 date=datetime.utcnow(),
                 papers_found=len(papers),
-                papers_processed=len(papers),
+                papers_processed=papers_processed,
                 timeframe=(
                     str(topic.timeframe.value)
                     if hasattr(topic.timeframe, "value")

@@ -1,0 +1,59 @@
+# Phase 2 End-to-End Verification Test Configuration
+# Tests: PDF download, conversion, LLM extraction, markdown generation
+
+research_topics:
+  - query: "large language models"
+    provider: "arxiv"
+    timeframe:
+      type: "recent"
+      value: "7d"
+    max_papers: 2  # Limit to 2 papers for cost control
+
+    extraction_targets:
+      - name: "key_findings"
+        description: "Extract 2-3 key findings or contributions from the paper"
+        output_format: "list"
+        required: false
+
+      - name: "methodology"
+        description: "Summarize the main methodology in 1-2 sentences"
+        output_format: "text"
+        required: false
+
+      - name: "code_snippets"
+        description: "Extract any Python code examples if present"
+        output_format: "code"
+        required: false
+
+      - name: "engineering_summary"
+        description: "Write a brief 1-paragraph summary for engineers"
+        output_format: "text"
+        required: true
+
+# Global Settings
+settings:
+  output_base_dir: "./output_test_e2e"
+  enable_duplicate_detection: true
+  # semantic_scholar_api_key not needed for ArXiv provider
+
+  # PDF Processing
+  pdf_settings:
+    temp_dir: "./temp_test"
+    keep_pdfs: false  # Clean up after test
+    max_file_size_mb: 50
+    timeout_seconds: 300
+
+  # LLM Configuration
+  llm_settings:
+    provider: "${LLM_PROVIDER}"
+    model: "${LLM_MODEL}"
+    api_key: "${LLM_API_KEY}"
+    max_tokens: 50000  # Lower for test
+    temperature: 0.0
+    timeout: 300
+
+  # Cost Controls
+  cost_limits:
+    max_tokens_per_paper: 50000
+    max_daily_spend_usd: 5.0  # Lower limit for test
+    max_total_spend_usd: 10.0

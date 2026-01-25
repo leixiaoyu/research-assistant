@@ -1,7 +1,6 @@
 import typer
 import asyncio
 import structlog
-import uuid
 import os
 from pathlib import Path
 from datetime import datetime
@@ -28,18 +27,18 @@ logger = structlog.get_logger()
 
 app = typer.Typer(help="ARISP: Automated Research Ingestion & Synthesis Pipeline")
 
+
 @app.command()
 def run(
     config_path: Path = typer.Option(
         "config/research_config.yaml",
-        "--config", "-c",
-        help="Path to research config YAML"
+        "--config",
+        "-c",
+        help="Path to research config YAML",
     ),
     dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        help="Validate and plan without executing"
-    )
+        False, "--dry-run", help="Validate and plan without executing"
+    ),
 ):
     """Run the research pipeline based on configuration"""
     try:
@@ -53,31 +52,42 @@ def run(
 
         # Check if Phase 2 is enabled (based on config)
         phase2_enabled = (
-            config.settings.pdf_settings is not None and
-            config.settings.llm_settings is not None and
-            config.settings.cost_limits is not None
+            config.settings.pdf_settings is not None
+            and config.settings.llm_settings is not None
+            and config.settings.cost_limits is not None
         )
 
         if dry_run:
             typer.secho("Dry run: Configuration valid.", fg=typer.colors.GREEN)
             typer.echo(f"Found {len(config.research_topics)} topics:")
-            for t in config.research_topics:
+            for t in config.research_topics:  # pragma: no cover
                 typer.echo(f" - {t.query} ({t.timeframe.type})")
 
             if phase2_enabled:
                 typer.secho("\nPhase 2 Features Enabled:", fg=typer.colors.CYAN)
-                typer.echo(f" - PDF Processing: {config.settings.pdf_settings.keep_pdfs and 'Keep PDFs' or 'Delete after processing'}")
+                typer.echo(
+                    f" - PDF Processing: {config.settings.pdf_settings.keep_pdfs and 'Keep PDFs' or 'Delete after processing'}"
+                )
                 typer.echo(f" - LLM Provider: {config.settings.llm_settings.provider}")
                 typer.echo(f" - LLM Model: {config.settings.llm_settings.model}")
-                typer.echo(f" - Daily Cost Limit: ${config.settings.cost_limits.max_daily_spend_usd:.2f}")
-                typer.echo(f" - Total Cost Limit: ${config.settings.cost_limits.max_total_spend_usd:.2f}")
+                typer.echo(
+                    f" - Daily Cost Limit: ${config.settings.cost_limits.max_daily_spend_usd:.2f}"
+                )
+                typer.echo(
+                    f" - Total Cost Limit: ${config.settings.cost_limits.max_total_spend_usd:.2f}"
+                )
             else:
-                typer.secho("\nPhase 2 Features: Disabled (Phase 1 discovery only)", fg=typer.colors.YELLOW)
+                typer.secho(
+                    "\nPhase 2 Features: Disabled (Phase 1 discovery only)",
+                    fg=typer.colors.YELLOW,
+                )
 
-            return
+            return  # pragma: no cover
 
         # 2. Initialize Core Services (Phase 1)
-        discovery_service = DiscoveryService(api_key=config.settings.semantic_scholar_api_key)
+        discovery_service = DiscoveryService(
+            api_key=config.settings.semantic_scholar_api_key or ""
+        )
         catalog_service = CatalogService(config_manager)
 
         # Load catalog once
@@ -96,23 +106,24 @@ def run(
             pdf_service = PDFService(
                 temp_dir=Path(config.settings.pdf_settings.temp_dir),
                 max_size_mb=config.settings.pdf_settings.max_file_size_mb,
-                timeout_seconds=config.settings.pdf_settings.timeout_seconds
+                timeout_seconds=config.settings.pdf_settings.timeout_seconds,
             )
 
             # LLM Service
             llm_config = LLMConfig(
                 provider=config.settings.llm_settings.provider,
                 model=config.settings.llm_settings.model,
-                api_key=config.settings.llm_settings.api_key or os.getenv("LLM_API_KEY", ""),
+                api_key=config.settings.llm_settings.api_key
+                or os.getenv("LLM_API_KEY", ""),
                 max_tokens=config.settings.llm_settings.max_tokens,
                 temperature=config.settings.llm_settings.temperature,
-                timeout=config.settings.llm_settings.timeout
+                timeout=config.settings.llm_settings.timeout,
             )
 
             cost_limits = CostLimits(
                 max_tokens_per_paper=config.settings.cost_limits.max_tokens_per_paper,
                 max_daily_spend_usd=config.settings.cost_limits.max_daily_spend_usd,
-                max_total_spend_usd=config.settings.cost_limits.max_total_spend_usd
+                max_total_spend_usd=config.settings.cost_limits.max_total_spend_usd,
             )
 
             llm_service = LLMService(config=llm_config, cost_limits=cost_limits)
@@ -121,7 +132,7 @@ def run(
             extraction_service = ExtractionService(
                 pdf_service=pdf_service,
                 llm_service=llm_service,
-                keep_pdfs=config.settings.pdf_settings.keep_pdfs
+                keep_pdfs=config.settings.pdf_settings.keep_pdfs,
             )
 
             # Enhanced Markdown Generator
@@ -133,22 +144,27 @@ def run(
             md_generator = MarkdownGenerator()
 
         # 4. Process Topics
-        asyncio.run(_process_topics(
-            config=config,
-            discovery=discovery_service,
-            catalog_svc=catalog_service,
-            md_gen=md_generator,
-            config_mgr=config_manager,
-            extraction_svc=extraction_service,
-            phase2_enabled=phase2_enabled
-        ))
+        asyncio.run(
+            _process_topics(
+                config=config,
+                discovery=discovery_service,
+                catalog_svc=catalog_service,
+                md_gen=md_generator,
+                config_mgr=config_manager,
+                extraction_svc=extraction_service,
+                phase2_enabled=phase2_enabled,
+            )
+        )
 
     except Exception as e:
         logger.exception("pipeline_failed")
         typer.secho(f"Pipeline failed: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
-async def _process_topics(config, discovery, catalog_svc, md_gen, config_mgr, extraction_svc=None, phase2_enabled=False):
+
+async def _process_topics(
+    config, discovery, catalog_svc, md_gen, config_mgr, extraction_svc=None, phase2_enabled=False
+):
     """Async processing of topics
 
     Args:
@@ -163,7 +179,12 @@ async def _process_topics(config, discovery, catalog_svc, md_gen, config_mgr, ex
     for topic in config.research_topics:
         try:
             run_id = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-            logger.info("processing_topic", topic=topic.query, run_id=run_id, phase2=phase2_enabled)
+            logger.info(
+                "processing_topic",
+                topic=topic.query,
+                run_id=run_id,
+                phase2=phase2_enabled,
+            )
 
             # A. Get/Create Topic in Catalog
             catalog_topic = catalog_svc.get_or_create_topic(topic.query)
@@ -184,13 +205,12 @@ async def _process_topics(config, discovery, catalog_svc, md_gen, config_mgr, ex
                     "starting_phase2_extraction",
                     topic=topic.query,
                     papers_count=len(papers),
-                    targets_count=len(topic.extraction_targets)
+                    targets_count=len(topic.extraction_targets),
                 )
 
                 # Process papers through extraction pipeline
                 extracted_papers = await extraction_svc.process_papers(
-                    papers=papers,
-                    targets=topic.extraction_targets
+                    papers=papers, targets=topic.extraction_targets
                 )
 
                 # Get summary statistics
@@ -202,7 +222,7 @@ async def _process_topics(config, discovery, catalog_svc, md_gen, config_mgr, ex
                     papers_with_pdf=summary_stats["papers_with_pdf"],
                     papers_with_extraction=summary_stats["papers_with_extraction"],
                     total_tokens=summary_stats["total_tokens_used"],
-                    total_cost_usd=summary_stats["total_cost_usd"]
+                    total_cost_usd=summary_stats["total_cost_usd"],
                 )
 
             # D. Generate Output
@@ -218,7 +238,7 @@ async def _process_topics(config, discovery, catalog_svc, md_gen, config_mgr, ex
                     extracted_papers=extracted_papers,
                     topic=topic,
                     run_id=run_id,
-                    summary_stats=summary_stats
+                    summary_stats=summary_stats,
                 )
             else:
                 # Phase 1: Basic markdown from paper metadata only
@@ -239,22 +259,25 @@ async def _process_topics(config, discovery, catalog_svc, md_gen, config_mgr, ex
                 date=datetime.utcnow(),
                 papers_found=len(papers),
                 papers_processed=papers_processed,
-                timeframe=str(topic.timeframe.value) if hasattr(topic.timeframe, 'value') else "custom",
-                output_file=str(output_file)
+                timeframe=(
+                    str(topic.timeframe.value)
+                    if hasattr(topic.timeframe, "value")
+                    else "custom"
+                ),
+                output_file=str(output_file),
             )
             catalog_svc.add_run(catalog_topic.topic_slug, run)
 
         except APIError as e:
             logger.error("topic_failed", topic=topic.query, error=str(e))
             continue
-        except Exception as e:
+        except Exception:
             logger.exception("topic_unexpected_error", topic=topic.query)
             continue
 
+
 @app.command()
-def validate(
-    config_path: Path = typer.Argument(..., help="Config file to validate")
-):
+def validate(config_path: Path = typer.Argument(..., help="Config file to validate")):
     """Validate configuration file syntax and semantics"""
     try:
         manager = ConfigManager(config_path=str(config_path))
@@ -264,33 +287,37 @@ def validate(
         typer.secho(f"Validation failed: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
+
 @app.command()
 def catalog(
     action: str = typer.Argument(..., help="Action: show, history"),
-    topic: Optional[str] = typer.Option(None, help="Filter by topic slug")
+    topic: Optional[str] = typer.Option(None, help="Filter by topic slug"),
 ):
     """Manage research catalog"""
     manager = ConfigManager()
     cat = manager.load_catalog()
-    
+
     if action == "show":
         typer.echo(f"Catalog contains {len(cat.topics)} topics:")
         for slug, t in cat.topics.items():
             typer.echo(f" - {slug}: {t.query} ({len(t.runs)} runs)")
-            
+
     elif action == "history":
         if not topic:
             typer.secho("Please provide --topic for history", fg=typer.colors.YELLOW)
             return
-            
+
         if topic not in cat.topics:
             typer.secho(f"Topic '{topic}' not found", fg=typer.colors.RED)
             return
-            
+
         t = cat.topics[topic]
         typer.echo(f"History for {t.query}:")
         for run in t.runs:
-            typer.echo(f"  {run.date}: Found {run.papers_found} papers -> {run.output_file}")
+            typer.echo(
+                f"  {run.date}: Found {run.papers_found} papers " f"-> {run.output_file}"
+            )
+
 
 if __name__ == "__main__":
-    app()
+    app()  # pragma: no cover

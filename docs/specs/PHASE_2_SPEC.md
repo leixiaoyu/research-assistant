@@ -1,8 +1,8 @@
 # Phase 2: PDF Processing & LLM Extraction
-**Version:** 1.1
-**Status:** Draft
+**Version:** 1.2
+**Status:** Ready for Development
 **Timeline:** 2 weeks
-**Dependencies:** Phase 1 Complete + Phase 1.5 Complete (Discovery Provider Abstraction)
+**Dependencies:** Phase 1 Complete + Phase 1.5 Complete & Stabilized
 
 ## Architecture Reference
 
@@ -766,7 +766,7 @@ async def test_fallback_to_abstract():
 - [ ] LLM extraction timeout: 5 minutes
 - [ ] Retry on transient failures (3 attempts)
 - [ ] Cost tracking accurate to $0.01
-- [ ] Test coverage >80%
+- [ ] **Test coverage >= 95% per module (Mandatory)**
 
 ### Performance Requirements
 - [ ] Single paper extraction < 10 minutes

@@ -3,17 +3,24 @@ from typing import List
 from src.models.config import ResearchTopic
 from src.models.paper import PaperMetadata
 
+
 class APIError(Exception):
     """External API error"""
+
     pass
+
 
 class RateLimitError(APIError):
     """Rate limit exceeded"""
+
     pass
+
 
 class APIParameterError(APIError):
     """API parameter validation error (non-retryable)"""
+
     pass
+
 
 class DiscoveryProvider(ABC):
     """Abstract base class for research paper discovery providers
@@ -36,7 +43,7 @@ class DiscoveryProvider(ABC):
             APIError: If search fails
             RateLimitError: If rate limit exceeded
         """
-        pass
+        pass  # pragma: no cover
 
     @abstractmethod
     def validate_query(self, query: str) -> str:
@@ -51,16 +58,16 @@ class DiscoveryProvider(ABC):
         Raises:
             ValueError: If query contains invalid syntax or malicious patterns
         """
-        pass
+        pass  # pragma: no cover
 
     @property
     @abstractmethod
     def name(self) -> str:
         """Provider name for logging and identification"""
-        pass
+        pass  # pragma: no cover
 
     @property
     @abstractmethod
     def requires_api_key(self) -> bool:
         """Whether this provider requires an API key"""
-        pass
+        pass  # pragma: no cover

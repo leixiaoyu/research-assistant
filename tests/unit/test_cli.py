@@ -5,20 +5,24 @@ from unittest.mock import patch, MagicMock
 
 runner = CliRunner()
 
+
 @pytest.fixture
 def mock_config_manager():
     with patch("src.cli.ConfigManager") as MockConfigManager:
         yield MockConfigManager
+
 
 @pytest.fixture
 def mock_discovery_service():
     with patch("src.cli.DiscoveryService") as MockDiscoveryService:
         yield MockDiscoveryService
 
+
 @pytest.fixture
 def mock_catalog_service():
     with patch("src.cli.CatalogService") as MockCatalogService:
         yield MockCatalogService
+
 
 def test_run_dry_run(mock_config_manager):
     # Setup mock
@@ -31,6 +35,7 @@ def test_run_dry_run(mock_config_manager):
     assert result.exit_code == 0
     assert "Dry run: Configuration valid." in result.stdout
 
+
 def test_run_config_error(mock_config_manager):
     mock_instance = mock_config_manager.return_value
     mock_instance.load_config.side_effect = FileNotFoundError("Config not found")
@@ -39,10 +44,12 @@ def test_run_config_error(mock_config_manager):
     assert result.exit_code == 1
     assert "Configuration Error" in result.stdout
 
+
 def test_validate_success(mock_config_manager):
     result = runner.invoke(app, ["validate", "config.yaml"])
     assert result.exit_code == 0
     assert "Configuration is valid" in result.stdout
+
 
 def test_validate_failure(mock_config_manager):
     mock_instance = mock_config_manager.return_value
@@ -51,6 +58,7 @@ def test_validate_failure(mock_config_manager):
     result = runner.invoke(app, ["validate", "config.yaml"])
     assert result.exit_code == 1
     assert "Validation failed" in result.stdout
+
 
 def test_catalog_show(mock_config_manager):
     mock_instance = mock_config_manager.return_value
@@ -62,6 +70,7 @@ def test_catalog_show(mock_config_manager):
     assert result.exit_code == 0
     assert "Catalog contains 1 topics" in result.stdout
     assert "test-topic" in result.stdout
+
 
 def test_catalog_history_success(mock_config_manager):
     mock_instance = mock_config_manager.return_value
@@ -77,10 +86,12 @@ def test_catalog_history_success(mock_config_manager):
     assert "History for Test" in result.stdout
     assert "Found 5 papers" in result.stdout
 
+
 def test_catalog_history_missing_topic_arg(mock_config_manager):
     result = runner.invoke(app, ["catalog", "history"])
     assert result.exit_code == 0
     assert "Please provide --topic" in result.stdout
+
 
 def test_catalog_history_topic_not_found(mock_config_manager):
     mock_instance = mock_config_manager.return_value

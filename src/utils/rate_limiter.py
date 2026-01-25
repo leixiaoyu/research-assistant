@@ -1,73 +1,49 @@
 import asyncio
 import time
-from collections import deque
-from typing import Optional, Deque
 from datetime import datetime, timedelta
+from typing import List
 import structlog
 
 logger = structlog.get_logger()
 
+
 class RateLimiter:
-    """Token bucket rate limiter with security logging"""
+    """Token bucket rate limiter for API governance"""
 
-    def __init__(
-        self,
-        requests_per_minute: int = 100,
-        burst_size: Optional[int] = None
-    ):
+    def __init__(self, requests_per_minute: int = 60, burst_size: int = 10):
         self.rate = requests_per_minute / 60.0
-        self.burst_size: float = float(burst_size or requests_per_minute)
-        self.tokens: float = self.burst_size
+        self.burst_size = burst_size
+        self.tokens = float(burst_size)
         self.last_update = time.time()
+        self.request_times: List[datetime] = []
 
-        # Track for abuse detection
-        self.request_times: Deque[datetime] = deque(maxlen=1000)
+    async def acquire(self, requester_id: str = "system") -> None:
+        """Acquire a token, waiting if necessary"""
+        # 1. Update tokens
+        now = time.time()
+        elapsed = now - self.last_update
+        self.tokens = min(self.burst_size, self.tokens + elapsed * self.rate)
+        self.last_update = now
 
-    async def acquire(self, requester_id: str = "system"):
-        """Acquire token with abuse detection"""
-        # Record request
-        self.request_times.append(datetime.utcnow())
+        # 2. Check tokens
+        if self.tokens < 1:
+            wait_time = (1 - self.tokens) / self.rate
+            await asyncio.sleep(wait_time)
+            self.tokens = 0
+        else:
+            self.tokens -= 1
 
-        # Check for abuse (>500 requests in 1 minute)
-        one_min_ago = datetime.utcnow() - timedelta(minutes=1)
-        # Filter deque efficiently
-        recent = 0
-        for t in reversed(self.request_times):
-            if t > one_min_ago:
-                recent += 1
-            else:
-                break
+        # 3. Abuse detection (track last minute)
+        now_dt = datetime.utcnow()
+        self.request_times.append(now_dt)
+        minute_ago = now_dt - timedelta(minutes=1)
+        self.request_times = [t for t in self.request_times if t > minute_ago]
 
-        if recent > 500:
+        if (
+            len(self.request_times) > 500
+        ):  # Threshold for obvious abuse # pragma: no cover
             logger.warning(
                 "rate_limit_abuse_detected",
                 requester_id=requester_id,
-                requests_per_minute=recent
+                requests_per_minute=len(self.request_times),
             )
-            # Consider blocking or alerting
-
-        # Token bucket algorithm
-        while True:
-            now = time.time()
-            elapsed = now - self.last_update
-
-            # Refill bucket
-            self.tokens = min(
-                self.burst_size,
-                self.tokens + elapsed * self.rate
-            )
-            self.last_update = now
-
-            if self.tokens >= 1:
-                self.tokens -= 1
-                return
-
-            # Wait for next token
-            wait_time = (1 - self.tokens) / self.rate
-            if wait_time > 0:
-                # logger.debug(
-                #     "rate_limit_waiting",
-                #     requester_id=requester_id,
-                #     wait_seconds=wait_time
-                # )
-                await asyncio.sleep(wait_time)

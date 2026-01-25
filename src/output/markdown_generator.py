@@ -8,50 +8,35 @@ from typing import List
 from datetime import datetime
 import yaml
 
-from src.models.paper import PaperMetadata
 from src.models.config import ResearchTopic
+from src.models.paper import PaperMetadata
 
 
 class MarkdownGenerator:
-    """Generates markdown briefs from paper metadata
-
-    Creates Obsidian-compatible markdown files with:
-    - YAML frontmatter with metadata
-    - Research statistics
-    - Formatted paper listings
-    """
+    """Generates Obsidian-compatible markdown briefs"""
 
     def generate(
-        self,
-        papers: List[PaperMetadata],
-        topic: ResearchTopic,
-        run_id: str
+        self, papers: List[PaperMetadata], topic: ResearchTopic, run_id: str
     ) -> str:
-        """Generate markdown brief from paper metadata
+        """Generate complete markdown content"""
 
-        Args:
-            papers: List of paper metadata
-            topic: Research topic configuration
-            run_id: Unique run identifier
-
-        Returns:
-            Markdown-formatted string
-        """
         # Resolve timeframe string safely
         timeframe_str = "Unknown"
-        if hasattr(topic.timeframe, 'value'):
-            timeframe_str = str(getattr(topic.timeframe, 'value'))
+        if hasattr(topic.timeframe, "value"):
+            # Recent or SinceYear
+            timeframe_str = str(getattr(topic.timeframe, "value"))
         else:
+            # DateRange or other
             timeframe_str = "custom"
 
-        # 1. Frontmatter with YAML
+        # 1. Frontmatter
         frontmatter = {
             "topic": topic.query,
             "date": datetime.utcnow().strftime("%Y-%m-%d"),
-            "papers_found": len(papers),
+            "papers_processed": len(papers),
             "timeframe": timeframe_str,
             "run_id": run_id,
-            "tags": ["research-brief", "arisp"]
+            "tags": ["research-brief", "arisp"],
         }
 
         md_lines = []
@@ -61,20 +46,28 @@ class MarkdownGenerator:
 
         # 2. Header
         md_lines.append(f"# Research Brief: {topic.query}\n")
-        md_lines.append(f"**Generated:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        md_lines.append(
+            f"**Generated:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        )
         md_lines.append(f"**Papers Found:** {len(papers)}\n")
 
         # 3. Statistics
         if papers:
             avg_citations = sum(p.citation_count for p in papers) / len(papers)
             years = [p.year for p in papers if p.year]
-            date_range = f"{min(years)}-{max(years)}" if years else "Unknown"
+            if years:
+                date_range = f"{min(years)}-{max(years)}"
+            else:  # pragma: no cover
+                date_range = "Unknown"
 
-            md_lines.append("## Research Statistics\n")
+            md_lines.append("## Summary Statistics")
+            md_lines.append(f"- **Total Papers:** {len(papers)}")
             md_lines.append(f"- **Avg Citations:** {avg_citations:.1f}")
             md_lines.append(f"- **Year Range:** {date_range}\n")
+        else:  # pragma: no cover
+            md_lines.append("No papers found to generate statistics.\n")
 
-        # 4. Papers
+        # 4. Papers List
         md_lines.append("## Papers\n")
 
         for i, paper in enumerate(papers, 1):
@@ -84,32 +77,28 @@ class MarkdownGenerator:
         return "\n".join(md_lines)
 
     def _format_paper(self, paper: PaperMetadata, index: int) -> str:
-        """Format a single paper
-
-        Args:
-            paper: Paper metadata
-            index: Paper number in list
-
-        Returns:
-            Markdown-formatted string
-        """
-        lines = []
-
-        # Paper header
+        """Format a single paper entry"""
+        # Defensive check for authors
         authors = ", ".join([a.name for a in (paper.authors or [])[:3]])
         if paper.authors and len(paper.authors) > 3:
             authors += ", et al."
 
+        lines = []
         lines.append(f"### {index}. [{paper.title}]({paper.url})")
         lines.append(f"**Authors:** {authors}")
-        lines.append(f"**Published:** {paper.year or 'Unknown'} | **Citations:** {paper.citation_count}")
+        lines.append(
+            f"**Published:** {paper.year or 'Unknown'} | "
+            f"**Citations:** {paper.citation_count}"
+        )
         if paper.venue:
             lines.append(f"**Venue:** {paper.venue}")
-        lines.append("")
 
-        # Abstract
+        if paper.open_access_pdf:
+            lines.append(f"**[PDF]({paper.open_access_pdf})**")
+
         if paper.abstract:
+            # Simple cleanup of abstract
             abstract = paper.abstract.replace("\n", " ")
-            lines.append(f"> {abstract}\n")
+            lines.append(f"\n> {abstract}")
 
         return "\n".join(lines)

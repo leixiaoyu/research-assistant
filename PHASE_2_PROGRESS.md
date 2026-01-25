@@ -193,7 +193,26 @@ All test failures resolved:
 
 ### High Priority
 
-1. **Manual E2E Testing** (Complete ✅)
+1. **Fix Legacy Test Failures** (In Progress)
+   - 7 tests failing after main branch merge
+   - Update test mocks to handle Phase 2 config structure
+   - Fix test expectations for Phase 2 behavior
+   - Tests affected:
+     - `test_run_dry_run` - needs Phase 2 config mocking
+     - `test_run_full_flow` - needs Phase 2 config mocking
+     - `test_run_discovery_no_papers` - needs Phase 2 config mocking
+     - `test_run_discovery_error` - needs Phase 2 config mocking
+     - `test_run_unexpected_error` - needs Phase 2 config mocking
+     - `test_load_config_read_error` - dotenv mocking issue
+     - `test_llm_config_invalid_api_key` - Pydantic error message change
+
+2. **Pydantic V2 Migration** (In Progress)
+   - Replace class-based `config` with `ConfigDict` in:
+     - `src/models/extraction.py` (4 classes)
+     - `src/models/llm.py` (3 classes)
+   - Eliminate deprecation warnings
+
+3. **Manual E2E Testing** (Complete ✅)
    - Test with real papers from Semantic Scholar
    - Verify PDF download and conversion
    - Test LLM extraction with real API calls
@@ -202,13 +221,13 @@ All test failures resolved:
 
 ### Medium Priority
 
-2. **Documentation Updates** (Not Started)
+4. **Documentation Updates** (Not Started)
    - Update README.md with Phase 2 features
    - Update SYSTEM_ARCHITECTURE.md
    - Add Phase 2 examples and usage guide
    - Update API documentation
 
-3. **Verification Report** (Not Started)
+5. **Verification Report** (Not Started)
    - Generate comprehensive Phase 2 verification report
    - Document all test cases and coverage
    - Security checklist verification
@@ -216,7 +235,7 @@ All test failures resolved:
 
 ### Low Priority
 
-5. **Code Cleanup** (Optional)
+6. **Code Cleanup** (Optional)
    - Improve LLM service coverage from 80% → 90%+
    - Add more edge case tests
    - Refactor any duplicated code
@@ -321,7 +340,22 @@ Phase 2 implementation is **98% complete** and E2E tested successfully! The next
 
 ## 📈 Recent Updates
 
-**Latest (2026-01-24 - Late Evening):**
+**Latest (2026-01-25 - Morning):**
+- ✅ **Main Branch Merge Complete**
+- ✅ Pulled and merged latest changes from main (Phase 1.5 updates)
+- ✅ Resolved merge conflicts in 3 files (cli.py, config.py, markdown_generator.py)
+- ✅ Integrated Phase 1.5 improvements:
+  - Updated CI/CD to Python 3.10 (fixes marker-pdf compatibility)
+  - New PR review protocol and templates
+  - Enhanced testing standards (95% coverage requirement)
+  - Improved code quality checks (Black, Flake8, Mypy)
+- ⚠️ Test Status: 212/219 passing (97% pass rate)
+  - 7 legacy tests need updates for Phase 2 config structure
+  - All Phase 2-specific tests passing (63/63)
+  - Failures are in pre-existing tests that predate Phase 2
+- 📝 **Next:** Update legacy tests and address Pydantic V2 warnings
+
+**Earlier (2026-01-24 - Late Evening):**
 - ✅ **E2E Testing Complete - 100% Success!**
 - ✅ Gemini 3 Flash Preview API verified working
 - ✅ Full pipeline tested with 2 real ArXiv papers
@@ -346,6 +380,13 @@ Phase 2 implementation is **98% complete** and E2E tested successfully! The next
 - ✅ Updated progress documentation
 
 **Git Commits:**
+- `920d9c2` - merge: Integrate main branch changes with Phase 2 implementation
+- `6376480` - test(phase-2): Add E2E test configuration
+- `6e380f4` - docs: Add known issues documentation
+- `1f28ff3` - docs(phase-2): Update progress - E2E testing complete
+- `895f9f3` - fix(phase-2): Fix PDFService initialization parameters
+- `71ddbe0` - config: Update to Gemini 3 Flash Preview model
+- `27687c6` - config: Switch defaults to Gemini Flash and ArXiv
 - `92d683f` - feat(phase-2): Integrate Phase 2 services into CLI
 - `ef7631d` - docs(phase-2): Update progress document with integration tests
 - `804a81d` - test(phase-2): Add comprehensive integration tests

@@ -12,12 +12,12 @@ Implements fallback strategies:
 This service ties together PDFService and LLMService.
 """
 
-from pathlib import Path
 from typing import List
 import structlog
 
 from src.models.paper import PaperMetadata
-from src.models.extraction import ExtractionTarget, ExtractedPaper, PaperExtraction
+from src.models.extraction import ExtractionTarget, ExtractedPaper
+
 from src.services.pdf_service import PDFService
 from src.services.llm_service import LLMService
 from src.utils.exceptions import (
@@ -253,7 +253,8 @@ class ExtractionService:
 
 ---
 
-**Note:** Full PDF was not available for this paper. Extraction is based on abstract only.
+**Note:** Full PDF was not available for this paper.
+Extraction is based on abstract only.
 """
 
         return markdown

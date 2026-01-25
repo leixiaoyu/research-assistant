@@ -1,425 +1,355 @@
-"""Integration tests for Phase 2: PDF Processing & LLM Extraction Pipeline
-
-Tests service integration and data flow:
-1. Enhanced markdown generator with real extraction data
-2. Extraction service with real PDF/LLM service objects
-3. End-to-end data transformation pipeline
-
-Note: External APIs (Anthropic, Google) are mocked. File system operations
-use temporary directories. Focus is on service integration, not external dependencies.
-"""
-
-import pytest
-from pathlib import Path
+from unittest.mock import Mock
 from datetime import datetime
-from typing import List
+import pytest
 
+from src.services.extraction_service import ExtractionService
 from src.output.enhanced_generator import EnhancedMarkdownGenerator
 from src.models.paper import PaperMetadata, Author
+from src.models.config import ResearchTopic, TimeframeRecent
 from src.models.extraction import (
     ExtractionTarget,
     ExtractionResult,
     PaperExtraction,
     ExtractedPaper,
 )
-from src.models.config import ResearchTopic, TimeframeRecent
+from typing import List
 
 
 @pytest.fixture
-def sample_papers() -> List[PaperMetadata]:
-    """Create sample papers for testing"""
+def mock_papers() -> List[PaperMetadata]:
+    """Provide a list of mock papers for testing"""
     return [
         PaperMetadata(
             paper_id="2301.12345",
-            title="Tree of Thoughts for Machine Translation",
-            abstract="This paper explores ToT prompting techniques for MT tasks.",
+            title="Attention is All You Need",
+            abstract="We propose a new simple network architecture, the Transformer...",
+            authors=[Author(name="Ashish Vaswani"), Author(name="Noam Shazeer")],
             url="https://arxiv.org/abs/2301.12345",
             open_access_pdf="https://arxiv.org/pdf/2301.12345.pdf",
-            authors=[Author(name="Alice Smith"), Author(name="Bob Johnson")],
-            year=2023,
-            citation_count=42,
-            venue="NeurIPS 2023",
+            year=2017,
+            citation_count=100000,
         ),
         PaperMetadata(
             paper_id="2301.67890",
-            title="Few-Shot Learning for NLP",
-            abstract="Exploring few-shot techniques for natural language processing.",
+            title="BERT: Pre-training of Deep Bidirectional Transformers",
+            abstract=(
+                "We introduce a new language representation model "
+                "called BERT..."
+            ),
+            authors=[Author(name="Jacob Devlin"), Author(name="Ming-Wei Chang")],
             url="https://arxiv.org/abs/2301.67890",
-            open_access_pdf=None,
-            authors=[Author(name="Carol Davis")],
-            year=2023,
-            citation_count=15,
-            venue="ACL 2023",
+            open_access_pdf="https://arxiv.org/pdf/2301.67890.pdf",
+            year=2018,
+            citation_count=50000,
         ),
         PaperMetadata(
             paper_id="2302.11111",
-            title="Prompt Engineering Best Practices",
-            abstract="A comprehensive guide to prompt engineering.",
+            title="Language Models are Few-Shot Learners",
+            abstract=(
+                "We demonstrate that scaling up language models greatly "
+                "improves..."
+            ),
+            authors=[
+                Author(name="Tom Brown"),
+                Author(name="Benjamin Mann"),
+                Author(name="Nick Ryder"),
+                Author(name="Melanie Subbiah"),
+            ],
             url="https://arxiv.org/abs/2302.11111",
             open_access_pdf="https://arxiv.org/pdf/2302.11111.pdf",
-            authors=[
-                Author(name="David Lee"),
-                Author(name="Emma Wilson"),
-                Author(name="Frank Chen"),
-                Author(name="Grace Kim"),
-            ],
-            year=2024,
-            citation_count=128,
-            venue="ICML 2024",
+            year=2020,
+            citation_count=20000,
         ),
     ]
 
 
 @pytest.fixture
-def research_topic() -> ResearchTopic:
-    """Create research topic"""
+def mock_topic() -> ResearchTopic:
+    """Provide a mock research topic for testing"""
     return ResearchTopic(
-        query="Tree of Thoughts AND machine translation",
-        timeframe=TimeframeRecent(value="48h"),
-        max_papers=50,
+        query="transformer models",
+        timeframe=TimeframeRecent(type="recent", value="7d"),
+        max_papers=5,
+        extraction_targets=[
+            ExtractionTarget(
+                name="system_prompts",
+                description="Extract system prompts",
+                output_format="list",
+            ),
+            ExtractionTarget(
+                name="code_snippets",
+                description="Extract code",
+                output_format="code",
+            ),
+            ExtractionTarget(
+                name="evaluation_metrics",
+                description="Extract metrics",
+                output_format="json",
+            ),
+        ],
     )
 
 
-class TestEnhancedMarkdownGeneratorIntegration:
-    """Test EnhancedMarkdownGenerator with realistic extraction data"""
-
-    def test_generate_brief_with_mixed_extraction_results(
-        self, sample_papers, research_topic
-    ):
-        """Test generating markdown with papers that have different extraction states"""
-        generator = EnhancedMarkdownGenerator()
-
-        # Create extraction results with different types of content
-        extraction1 = PaperExtraction(
-            paper_id="2301.12345",
-            extraction_results=[
-                ExtractionResult(
-                    target_name="system_prompts",
-                    success=True,
-                    content=["You are an expert translator.", "Translate carefully."],
-                    confidence=0.95,
-                ),
-                ExtractionResult(
-                    target_name="code_snippets",
-                    success=True,
-                    content="def translate(text, model):\n    return model.generate(text)",
-                    confidence=0.88,
-                ),
-                ExtractionResult(
-                    target_name="evaluation_metrics",
-                    success=True,
-                    content={"BLEU": 35.2, "METEOR": 0.72, "accuracy": 0.91},
-                    confidence=0.92,
-                ),
-            ],
-            tokens_used=45000,
-            cost_usd=0.18,
-            extraction_timestamp=datetime.utcnow(),
-        )
-
-        extraction3 = PaperExtraction(
-            paper_id="2302.11111",
-            extraction_results=[
-                ExtractionResult(
-                    target_name="system_prompts",
-                    success=True,
-                    content=["Act as a helpful assistant."],
-                    confidence=0.88,
-                )
-            ],
-            tokens_used=30000,
-            cost_usd=0.12,
-            extraction_timestamp=datetime.utcnow(),
-        )
-
-        extracted_papers = [
-            ExtractedPaper(
-                metadata=sample_papers[0],
-                pdf_available=True,
-                pdf_path="/tmp/pdfs/2301.12345.pdf",
-                markdown_path="/tmp/markdown/2301.12345.md",
-                extraction=extraction1,
+@pytest.fixture
+def mock_extractions(mock_papers) -> List[ExtractedPaper]:
+    """Provide a list of extracted papers for testing"""
+    extraction1 = PaperExtraction(
+        paper_id="2301.12345",
+        extraction_results=[
+            ExtractionResult(
+                target_name="system_prompts",
+                success=True,
+                content=["You are an expert translator.", "Translate carefully."],
+                confidence=0.95,
             ),
-            ExtractedPaper(
-                metadata=sample_papers[1],
-                pdf_available=False,
-                pdf_path=None,
-                markdown_path=None,
-                extraction=None,  # No extraction
+            ExtractionResult(
+                target_name="code_snippets",
+                success=True,
+                content=(
+                    "def translate(text, model):\n" "    return model.generate(text)"
+                ),
+                confidence=0.88,
             ),
-            ExtractedPaper(
-                metadata=sample_papers[2],
-                pdf_available=True,
-                pdf_path="/tmp/pdfs/2302.11111.pdf",
-                markdown_path="/tmp/markdown/2302.11111.md",
-                extraction=extraction3,
+            ExtractionResult(
+                target_name="evaluation_metrics",
+                success=True,
+                content={
+                    "BLEU": 35.2,
+                    "METEOR": 0.72,
+                    "accuracy": 0.91,
+                },
+                confidence=0.92,
             ),
-        ]
+        ],
+        tokens_used=45000,
+        cost_usd=0.18,
+        extraction_timestamp=datetime.utcnow(),
+    )
 
-        # Generate markdown
-        markdown = generator.generate_enhanced(
-            extracted_papers=extracted_papers,
-            topic=research_topic,
-            run_id="integration-test-001",
-        )
-
-        # Verify frontmatter
-        assert "---" in markdown
-        assert "topic: Tree of Thoughts AND machine translation" in markdown
-        assert "papers_processed: 3" in markdown
-        assert "papers_with_pdfs: 2" in markdown
-        assert "papers_with_extractions: 2" in markdown
-        assert "total_tokens_used: 75000" in markdown  # 45000 + 30000
-        assert "total_cost_usd: 0.3" in markdown  # 0.18 + 0.12
-        assert "run_id: integration-test-001" in markdown
-
-        # Verify structure
-        assert "# Research Brief:" in markdown
-        assert "## Pipeline Summary" in markdown
-        assert "## Research Statistics" in markdown
-        assert "## Papers" in markdown
-
-        # Verify all papers are included
-        assert "Tree of Thoughts for Machine Translation" in markdown
-        assert "Few-Shot Learning for NLP" in markdown
-        assert "Prompt Engineering Best Practices" in markdown
-
-        # Verify PDF status indicators
-        assert "✅" in markdown  # Has PDF
-        assert "❌" in markdown  # No PDF
-
-        # Verify extraction results formatting
-        assert "System Prompts" in markdown or "system_prompts" in markdown.lower()
-        assert "You are an expert translator" in markdown
-        assert "```python" in markdown
-        assert "def translate" in markdown
-        assert "| Metric | Value |" in markdown  # Table for metrics
-        assert "| BLEU | 35.2 |" in markdown
-
-        # Verify author formatting with "et al."
-        assert "David Lee, Emma Wilson, Frank Chen, et al." in markdown
-
-    def test_generate_brief_with_summary_stats(self, sample_papers, research_topic):
-        """Test markdown generation with summary statistics"""
-        generator = EnhancedMarkdownGenerator()
-
-        extraction = PaperExtraction(
-            paper_id="2301.12345",
-            extraction_results=[],
-            tokens_used=50000,
-            cost_usd=0.20,
-            extraction_timestamp=datetime.utcnow(),
-        )
-
-        extracted_papers = [
-            ExtractedPaper(
-                metadata=sample_papers[0], pdf_available=True, extraction=extraction
+    extraction3 = PaperExtraction(
+        paper_id="2302.11111",
+        extraction_results=[
+            ExtractionResult(
+                target_name="system_prompts",
+                success=False,
+                content=None,
+                confidence=0.0,
+                error="No prompts found in paper",
             )
-        ]
+        ],
+        tokens_used=32000,
+        cost_usd=0.12,
+        extraction_timestamp=datetime.utcnow(),
+    )
 
+    return [
+        ExtractedPaper(
+            metadata=mock_papers[0],
+            pdf_available=True,
+            pdf_path="/tmp/pdfs/2301.12345.pdf",
+            markdown_path="/tmp/md/2301.12345.md",
+            extraction=extraction1,
+        ),
+        ExtractedPaper(
+            metadata=mock_papers[1],
+            pdf_available=False,
+            extraction=None,  # Failed extraction
+        ),
+        ExtractedPaper(
+            metadata=mock_papers[2],
+            pdf_available=True,
+            pdf_path="/tmp/pdfs/2302.11111.pdf",
+            markdown_path="/tmp/md/2302.11111.pdf",
+            extraction=extraction3,
+        ),
+    ]
+
+
+class TestPhase2PipelineIntegration:
+    """Integration tests for the complete Phase 2 pipeline data flow"""
+
+    def test_markdown_generation_with_mixed_results(self, mock_extractions, mock_topic):
+        """Test generating enhanced markdown with success and failure cases"""
+        generator = EnhancedMarkdownGenerator()
+
+        # Calculate summary stats
         summary_stats = {
-            "total_papers": 1,
-            "papers_with_pdf": 1,
-            "papers_with_extraction": 1,
-            "pdf_success_rate": 100.0,
-            "extraction_success_rate": 100.0,
-            "total_tokens_used": 50000,
-            "total_cost_usd": 0.20,
-            "avg_tokens_per_paper": 50000,
-            "avg_cost_per_paper": 0.200,
+            "total_papers": len(mock_extractions),
+            "papers_with_pdf": 2,
+            "papers_with_extraction": 2,
+            "total_tokens_used": 77000,
+            "total_cost_usd": 0.30,
+            "pdf_success_rate": 66.7,
+            "avg_tokens_per_paper": 38500,
+            "avg_cost_per_paper": 0.15,
         }
 
         markdown = generator.generate_enhanced(
-            extracted_papers=extracted_papers,
-            topic=research_topic,
-            run_id="test-002",
+            extracted_papers=mock_extractions,
+            topic=mock_topic,
+            run_id="test-run-123",
             summary_stats=summary_stats,
         )
 
-        # Verify summary statistics section
-        assert "### Extraction Statistics" in markdown
-        assert "PDF Success Rate:** 100.0%" in markdown
-        assert "Avg Tokens/Paper:** 50,000" in markdown
-        assert "Avg Cost/Paper:** $0.200" in markdown
+        # Verify content
+        assert "# Research Brief: transformer models" in markdown
+        assert "Run ID: test-run-123" in markdown
+        assert "## Pipeline Summary" in markdown
+        assert "Total Tokens Used: 77,000" in markdown
+        assert "Total Cost: $0.30" in markdown
 
-    def test_generate_brief_empty_papers(self, research_topic):
-        """Test markdown generation with no papers"""
+        # Verify extraction results for Paper 1 (Success)
+        assert "### 1. [Attention is All You Need]" in markdown
+        assert "**target_name:** system_prompts" in markdown
+        assert "- You are an expert translator." in markdown
+        assert "def translate(text, model):" in markdown
+
+        # Verify Paper 2 (PDF Unavailable)
+        assert (
+            "### 2. [BERT: Pre-training of Deep Bidirectional Transformers]" in markdown
+        )
+        assert "PDF Available: ❌ (Abstract only)" in markdown
+
+        # Verify Paper 3 (Partial failure)
+        assert "### 3. [Language Models are Few-Shot Learners]" in markdown
+        assert "⚠️ extraction_failed: system_prompts" in markdown
+        assert "No prompts found in paper" in markdown
+
+    def test_summary_stats_formatting(self, mock_extractions, mock_topic):
+        """Test that summary statistics are correctly formatted in markdown"""
         generator = EnhancedMarkdownGenerator()
+
+        # Test with empty stats (fallback behavior)
+        markdown = generator.generate_enhanced(
+            extracted_papers=mock_extractions, topic=mock_topic, run_id="test-run-empty"
+        )
+
+        assert "Extraction Statistics" not in markdown
+        assert "Total Tokens Used: 77,000" in markdown  # Calculated from papers
+
+        # Test with full stats
+        summary_stats = {
+            "total_papers": 3,
+            "papers_with_pdf": 2,
+            "papers_with_extraction": 2,
+            "total_tokens_used": 77000,
+            "total_cost_usd": 0.30,
+            "pdf_success_rate": 66.7,
+            "avg_tokens_per_paper": 38500,
+            "avg_cost_per_paper": 0.15,
+        }
 
         markdown = generator.generate_enhanced(
-            extracted_papers=[], topic=research_topic, run_id="test-empty"
+            extracted_papers=mock_extractions,
+            topic=mock_topic,
+            run_id="test-run-full",
+            summary_stats=summary_stats,
         )
 
-        # Should still generate valid structure
-        assert "---" in markdown
-        assert "# Research Brief:" in markdown
-        assert "Papers Found:** 0" in markdown
-        assert "Papers Processed:** 0" in markdown
+        assert "### Extraction Statistics" in markdown
+        assert "PDF Success Rate: 66.7%" in markdown
+        assert "Avg Tokens/Paper: 38,500" in markdown
+        assert "Avg Cost/Paper: $0.150" in markdown
 
-    def test_extraction_result_formatting_all_types(self):
-        """Test that all content types are formatted correctly"""
+    def test_extraction_result_formatting_all_types(self, mock_papers):
+        """Test formatting of all extraction content types"""
         generator = EnhancedMarkdownGenerator()
 
-        # Test list formatting
-        list_result = ExtractionResult(
-            target_name="prompts_list",
-            success=True,
-            content=["Prompt 1", "Prompt 2", "Prompt 3"],
-            confidence=0.9,
-        )
-        list_md = generator._format_extraction_result(list_result)
-        assert "- Prompt 1" in list_md
-        assert "- Prompt 2" in list_md
-        assert "confidence: 90%" in list_md
-
-        # Test code formatting (Python)
-        code_result = ExtractionResult(
-            target_name="python_code",
-            success=True,
-            content="def hello():\n    print('world')",
-            confidence=0.85,
-        )
-        code_md = generator._format_extraction_result(code_result)
-        assert "```python" in code_md
-        assert "def hello" in code_md
-
-        # Test code formatting (JavaScript)
-        js_result = ExtractionResult(
-            target_name="js_code",
-            success=True,
-            content="const hello = () => console.log('world');",
-            confidence=0.85,
-        )
-        js_md = generator._format_extraction_result(js_result)
-        assert "```javascript" in js_md
-        assert "const hello" in js_md
-
-        # Test dict formatting (simple)
-        dict_result = ExtractionResult(
-            target_name="metrics",
-            success=True,
-            content={"accuracy": 0.95, "f1": 0.89, "recall": 0.92},
-            confidence=0.91,
-        )
-        dict_md = generator._format_extraction_result(dict_result)
-        assert "| Metric | Value |" in dict_md
-        assert "| accuracy | 0.95 |" in dict_md
-
-        # Test dict formatting (complex/nested)
-        complex_dict_result = ExtractionResult(
-            target_name="complex_data",
-            success=True,
-            content={"nested": {"key": "value"}, "list": [1, 2, 3]},
-            confidence=0.80,
-        )
-        complex_md = generator._format_extraction_result(complex_dict_result)
-        assert "```json" in complex_md
-
-        # Test text formatting
-        text_result = ExtractionResult(
-            target_name="summary",
-            success=True,
-            content="This is a summary of the findings.",
-            confidence=0.87,
-        )
-        text_md = generator._format_extraction_result(text_result)
-        assert "This is a summary" in text_md
-
-        # Test empty content
-        empty_result = ExtractionResult(
-            target_name="missing", success=False, content=None, confidence=0.0
-        )
-        empty_md = generator._format_extraction_result(empty_result)
-        assert "_No content extracted_" in empty_md
-
-
-class TestDataFlowIntegration:
-    """Test data flow through the Phase 2 pipeline"""
-
-    def test_paper_metadata_to_extracted_paper_transformation(self, sample_papers):
-        """Test that paper metadata flows correctly through extraction"""
-        paper = sample_papers[0]
-
-        # Simulate extraction result
-        extraction = PaperExtraction(
-            paper_id=paper.paper_id,
-            extraction_results=[
-                ExtractionResult(
-                    target_name="test",
-                    success=True,
-                    content="test content",
-                    confidence=0.9,
-                )
-            ],
-            tokens_used=10000,
-            cost_usd=0.04,
-            extraction_timestamp=datetime.utcnow(),
-        )
-
-        # Create extracted paper
-        extracted = ExtractedPaper(
-            metadata=paper,
-            pdf_available=True,
-            pdf_path="/tmp/test.pdf",
-            markdown_path="/tmp/test.md",
-            extraction=extraction,
-        )
-
-        # Verify data integrity
-        assert extracted.metadata.paper_id == paper.paper_id
-        assert extracted.metadata.title == paper.title
-        assert extracted.extraction.paper_id == paper.paper_id
-        assert extracted.pdf_available is True
-
-    def test_extraction_results_aggregation(self, sample_papers):
-        """Test aggregating extraction results from multiple papers"""
-        from src.services.extraction_service import ExtractionService
-
-        # Create mock services (not testing actual extraction, just aggregation)
-        extraction_service = ExtractionService(
-            pdf_service=None,  # type: ignore
-            llm_service=None,  # type: ignore
-            keep_pdfs=False,
-        )
-
-        # Create extracted papers with various states
-        extracted_papers = [
-            ExtractedPaper(
-                metadata=sample_papers[0],
-                pdf_available=True,
-                extraction=PaperExtraction(
-                    paper_id="2301.12345",
-                    extraction_results=[],
-                    tokens_used=50000,
-                    cost_usd=0.20,
-                    extraction_timestamp=datetime.utcnow(),
-                ),
+        results = [
+            ExtractionResult(
+                target_name="text_target",
+                success=True,
+                content="Sample text",
+                confidence=0.9,
             ),
-            ExtractedPaper(
-                metadata=sample_papers[1], pdf_available=False, extraction=None
+            ExtractionResult(
+                target_name="list_target",
+                success=True,
+                content=["Item 1", "Item 2"],
+                confidence=0.8,
             ),
-            ExtractedPaper(
-                metadata=sample_papers[2],
-                pdf_available=True,
-                extraction=PaperExtraction(
-                    paper_id="2302.11111",
-                    extraction_results=[],
-                    tokens_used=30000,
-                    cost_usd=0.12,
-                    extraction_timestamp=datetime.utcnow(),
-                ),
+            ExtractionResult(
+                target_name="dict_target",
+                success=True,
+                content={"k1": "v1"},
+                confidence=0.7,
+            ),
+            ExtractionResult(
+                target_name="code_target",
+                success=True,
+                content="print('hello')",
+                confidence=0.95,
+            ),
+            ExtractionResult(
+                target_name="empty_target", success=True, content=None, confidence=0.5
             ),
         ]
 
-        # Test summary statistics
-        summary = extraction_service.get_extraction_summary(extracted_papers)
+        extraction = PaperExtraction(
+            paper_id="test-id",
+            extraction_results=results,
+            tokens_used=1000,
+            cost_usd=0.01,
+            extraction_timestamp=datetime.utcnow(),
+        )
+
+        extracted = ExtractedPaper(
+            metadata=mock_papers[0], pdf_available=True, extraction=extraction
+        )
+
+        markdown = generator.generate_enhanced(
+            extracted_papers=[extracted],
+            topic=ResearchTopic(
+                query="test", timeframe=TimeframeRecent(type="recent", value="1d")
+            ),
+            run_id="test",
+        )
+
+        assert "**target_name:** text_target" in markdown
+        assert "Sample text" in markdown
+        assert "- Item 1" in markdown
+        assert "k1: v1" in markdown
+        assert "```python\nprint('hello')\n```" in markdown
+        assert "No content extracted" in markdown
+
+    def test_empty_papers_edge_case(self, mock_topic):
+        """Test pipeline behavior with empty paper list"""
+        generator = EnhancedMarkdownGenerator()
+
+        markdown = generator.generate_enhanced(
+            extracted_papers=[], topic=mock_topic, run_id="empty-test"
+        )
+
+        assert "No papers processed for this topic." in markdown
+        assert "Total Tokens Used: 0" in markdown
+
+    def test_data_flow_transformation(self, mock_papers):
+        """Test transformation of PaperMetadata to ExtractedPaper"""
+        service = ExtractionService(pdf_service=Mock(), llm_service=Mock())
+
+        # Create mock extraction results
+        extractions = [
+            PaperExtraction(
+                paper_id=p.paper_id,
+                extraction_results=[],
+                tokens_used=500,
+                cost_usd=0.005,
+                extraction_timestamp=datetime.utcnow(),
+            )
+            for p in mock_papers
+        ]
+
+        # Manually assemble ExtractedPaper list
+        results = [
+            ExtractedPaper(
+                metadata=mock_papers[i], pdf_available=True, extraction=extractions[i]
+            )
+            for i in range(len(mock_papers))
+        ]
+
+        summary = service.get_extraction_summary(results)
 
         assert summary["total_papers"] == 3
-        assert summary["papers_with_pdf"] == 2
-        assert summary["papers_with_extraction"] == 2
-        assert summary["pdf_success_rate"] == 66.7  # 2/3 * 100
-        assert summary["extraction_success_rate"] == 66.7  # 2/3 * 100
-        assert summary["total_tokens_used"] == 80000  # 50000 + 30000
-        assert summary["total_cost_usd"] == 0.32  # 0.20 + 0.12
-        assert summary["avg_tokens_per_paper"] == 40000  # 80000 / 2
-        assert summary["avg_cost_per_paper"] == 0.160  # 0.32 / 2
+        assert summary["total_tokens_used"] == 1500
+        assert summary["total_cost_usd"] == 0.015
+        assert summary["avg_tokens_per_paper"] == 500

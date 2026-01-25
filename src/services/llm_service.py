@@ -222,7 +222,8 @@ class LLMService:
         # Format author names
         author_names = ", ".join(a.name for a in (metadata.authors or []))
 
-        prompt = f"""You are a research paper analyst specialized in extracting structured information from academic papers.
+        prompt = f"""You are a research paper analyst specialized in
+extracting structured information from academic papers.
 
 **Paper Metadata:**
 - Title: {metadata.title}

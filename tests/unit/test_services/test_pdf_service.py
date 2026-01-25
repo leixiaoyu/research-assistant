@@ -10,13 +10,10 @@ Tests for:
 import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch, AsyncMock, MagicMock
-import aiohttp
-
 from src.services.pdf_service import PDFService
 from src.utils.exceptions import (
     PDFDownloadError,
     FileSizeError,
-    PDFValidationError,
     ConversionError,
 )
 

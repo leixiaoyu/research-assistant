@@ -17,14 +17,7 @@ import asyncio
 import subprocess
 import re
 from pathlib import Path
-from typing import Optional
 import structlog
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-)
 import aiohttp
 
 from src.utils.exceptions import (
@@ -78,7 +71,7 @@ class PDFService:
             - File size is enforced to prevent DoS
             - Filenames are sanitized to prevent directory traversal
         """
-        # Resolve temp_dir to absolute path (safe since it comes from config, not user input)
+        # Resolve temp_dir to absolute path (safe as it comes from config)
         self.temp_dir = Path(temp_dir).resolve()
         self.max_size_bytes = max_size_mb * 1024 * 1024
         self.timeout_seconds = timeout_seconds
@@ -158,7 +151,8 @@ class PDFService:
                         size = int(content_length)
                         if size > self.max_size_bytes:
                             raise FileSizeError(
-                                f"PDF too large: {size} bytes (max: {self.max_size_bytes})"
+                                f"PDF too large: {size} bytes "
+                                f"(max: {self.max_size_bytes})"
                             )
 
                     # Stream download
@@ -170,7 +164,8 @@ class PDFService:
                             if total_bytes > self.max_size_bytes:
                                 output_path.unlink(missing_ok=True)
                                 raise FileSizeError(
-                                    f"PDF exceeded size limit during download: {total_bytes} bytes"
+                                    f"PDF exceeded size limit during download: "
+                                    f"{total_bytes} bytes"
                                 )
                             f.write(chunk)
 

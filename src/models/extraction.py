@@ -8,7 +8,7 @@ This module defines the data structures for:
 """
 
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Dict, Any, Optional, Literal
+from typing import List, Any, Optional, Literal
 from datetime import datetime
 
 from src.models.paper import PaperMetadata

@@ -99,29 +99,26 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
         md_lines.append("## Pipeline Summary\n")
         md_lines.append(f"- **Papers Processed:** {total_papers}")
         if total_papers > 0:
+            pdf_pct = papers_with_pdf / total_papers * 100
+            ext_pct = papers_with_extraction / total_papers * 100
+            md_lines.append(f"- **With Full PDF:** {papers_with_pdf} ({pdf_pct:.1f}%)")
             md_lines.append(
-                f"- **With Full PDF:** {papers_with_pdf} ({papers_with_pdf/total_papers*100:.1f}%)"
-            )
-            md_lines.append(
-                f"- **With Extractions:** {papers_with_extraction} ({papers_with_extraction/total_papers*100:.1f}%)"
+                f"- **With Extractions:** {papers_with_extraction} ({ext_pct:.1f}%)"
             )
         else:
-            md_lines.append(f"- **With Full PDF:** 0")
-            md_lines.append(f"- **With Extractions:** 0")
+            md_lines.append("- **With Full PDF:** 0")
+            md_lines.append("- **With Extractions:** 0")
         md_lines.append(f"- **Total Tokens Used:** {total_tokens:,}")
         md_lines.append(f"- **Total Cost:** ${total_cost:.2f}\n")
 
         if summary_stats:
             md_lines.append("### Extraction Statistics\n")
-            md_lines.append(
-                f"- **PDF Success Rate:** {summary_stats.get('pdf_success_rate', 0):.1f}%"
-            )
-            md_lines.append(
-                f"- **Avg Tokens/Paper:** {summary_stats.get('avg_tokens_per_paper', 0):,}"
-            )
-            md_lines.append(
-                f"- **Avg Cost/Paper:** ${summary_stats.get('avg_cost_per_paper', 0):.3f}\n"
-            )
+            pdf_rate = summary_stats.get("pdf_success_rate", 0)
+            avg_tokens = summary_stats.get("avg_tokens_per_paper", 0)
+            avg_cost = summary_stats.get("avg_cost_per_paper", 0)
+            md_lines.append(f"- **PDF Success Rate:** {pdf_rate:.1f}%")
+            md_lines.append(f"- **Avg Tokens/Paper:** {avg_tokens:,}")
+            md_lines.append(f"- **Avg Cost/Paper:** ${avg_cost:.3f}\n")
 
         # 4. Paper Statistics
         if extracted_papers:
@@ -163,8 +160,9 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
 
         lines.append(f"### {index}. [{paper.title}]({paper.url})")
         lines.append(f"**Authors:** {authors}")
+        pub_year = paper.year or "Unknown"
         lines.append(
-            f"**Published:** {paper.year or 'Unknown'} | **Citations:** {paper.citation_count}"
+            f"**Published:** {pub_year} | **Citations:** {paper.citation_count}"
         )
         if paper.venue:
             lines.append(f"**Venue:** {paper.venue}")
@@ -173,7 +171,7 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
         if extracted.pdf_available:
             lines.append(f"**PDF Available:** ✅ **[PDF]({paper.open_access_pdf})**")
         else:
-            lines.append(f"**PDF Available:** ❌ (Abstract only)")
+            lines.append("**PDF Available:** ❌ (Abstract only)")
 
         # Extraction info
         if extracted.extraction:

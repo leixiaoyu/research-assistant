@@ -4,7 +4,7 @@ import structlog
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 
 from src.services.config_manager import ConfigManager, ConfigValidationError
 from src.services.discovery_service import DiscoveryService, APIError
@@ -19,7 +19,6 @@ from src.services.pdf_service import PDFService
 from src.services.llm_service import LLMService
 from src.services.extraction_service import ExtractionService
 from src.models.llm import LLMConfig, CostLimits
-from src.models.extraction import ExtractionTarget
 
 # Configure structured logging
 configure_logging()
@@ -65,17 +64,18 @@ def run(
 
             if phase2_enabled:
                 typer.secho("\nPhase 2 Features Enabled:", fg=typer.colors.CYAN)
-                typer.echo(
-                    f" - PDF Processing: {config.settings.pdf_settings.keep_pdfs and 'Keep PDFs' or 'Delete after processing'}"
+                pdf_status = (
+                    "Keep PDFs"
+                    if config.settings.pdf_settings.keep_pdfs
+                    else "Delete after processing"
                 )
+                typer.echo(f" - PDF Processing: {pdf_status}")
                 typer.echo(f" - LLM Provider: {config.settings.llm_settings.provider}")
                 typer.echo(f" - LLM Model: {config.settings.llm_settings.model}")
-                typer.echo(
-                    f" - Daily Cost Limit: ${config.settings.cost_limits.max_daily_spend_usd:.2f}"
-                )
-                typer.echo(
-                    f" - Total Cost Limit: ${config.settings.cost_limits.max_total_spend_usd:.2f}"
-                )
+                daily_limit = config.settings.cost_limits.max_daily_spend_usd
+                total_limit = config.settings.cost_limits.max_total_spend_usd
+                typer.echo(f" - Daily Cost Limit: ${daily_limit:.2f}")
+                typer.echo(f" - Total Cost Limit: ${total_limit:.2f}")
             else:
                 typer.secho(
                     "\nPhase 2 Features: Disabled (Phase 1 discovery only)",

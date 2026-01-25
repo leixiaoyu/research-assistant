@@ -15,8 +15,8 @@ from datetime import datetime, timedelta
 import json
 
 from src.services.llm_service import LLMService
-from src.models.llm import LLMConfig, CostLimits, UsageStats
-from src.models.extraction import ExtractionTarget, ExtractionResult
+from src.models.llm import LLMConfig, CostLimits
+from src.models.extraction import ExtractionTarget
 from src.models.paper import PaperMetadata, Author
 from src.utils.exceptions import CostLimitExceeded, LLMAPIError, JSONParseError
 

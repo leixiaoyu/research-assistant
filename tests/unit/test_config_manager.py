@@ -82,7 +82,7 @@ def test_load_config_read_error(tmp_path):
     config_file = tmp_path / "broken.yaml"
     config_file.touch()
     manager = ConfigManager(config_path=str(config_file))
-    from unittest.mock import patch, mock_open
+    from unittest.mock import patch
 
     # Mock open to raise exception only for the config file, not .env
     original_open = open

@@ -16,9 +16,8 @@ anthropic>=0.18.0
 google-generativeai>=0.3.0
 
 # PDF Processing (Phase 2)
-# marker-pdf  # Install separately: pip install marker-pdf
-# Note: marker-pdf requires additional system dependencies
-# See: https://github.com/VikParuchuri/marker
+# NOTE: Requires Python 3.10+ (marker-pdf uses modern type hints)
+marker-pdf>=1.0.0  # PDF to Markdown conversion with code preservation
 
 # Retry & Error Handling
 tenacity>=8.2.0

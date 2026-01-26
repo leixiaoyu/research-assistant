@@ -82,8 +82,17 @@ class ResearchTopic(BaseModel):
         return InputValidation.validate_query(v)
 
 
+class PDFBackendConfig(BaseModel):
+    """Configuration for a single PDF extraction backend"""
+    
+    backend: str = Field(..., description="Backend identifier (pymupdf, pdfplumber, etc)")
+    timeout_seconds: int = Field(60, ge=1, le=600)
+    min_quality: float = Field(0.5, ge=0.0, le=1.0)
+    enabled: bool = Field(True)
+
+
 class PDFSettings(BaseModel):
-    """PDF processing settings (Phase 2)"""
+    """PDF processing settings (Phase 2 & 2.5)"""
 
     temp_dir: str = Field(
         "./temp", description="Temporary directory for PDFs and markdown"
@@ -93,7 +102,21 @@ class PDFSettings(BaseModel):
         50, ge=1, le=500, description="Maximum PDF size in MB"
     )
     timeout_seconds: int = Field(
-        300, ge=60, le=600, description="Timeout for download/conversion"
+        300, ge=60, le=600, description="Global timeout for download/conversion"
+    )
+    
+    # Phase 2.5: Fallback Chain
+    fallback_chain: List[PDFBackendConfig] = Field(
+        default_factory=lambda: [
+            PDFBackendConfig(backend="pymupdf", timeout_seconds=30, min_quality=0.5),
+            PDFBackendConfig(backend="pdfplumber", timeout_seconds=45, min_quality=0.5),
+            PDFBackendConfig(backend="marker", timeout_seconds=300, min_quality=0.7, enabled=False),
+            PDFBackendConfig(backend="pandoc", timeout_seconds=60, min_quality=0.3)
+        ],
+        description="Ordered list of extraction backends to attempt"
+    )
+    stop_on_success: bool = Field(
+        True, description="Stop after first success meeting min_quality"
     )
 
 

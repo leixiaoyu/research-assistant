@@ -260,6 +260,7 @@ class PDFService:
         )
 
         # Run marker_single command
+        # Note: marker-pdf v1.10.1+ uses simplified API
         cmd = [
             "marker_single",
             str(pdf_path),
@@ -267,8 +268,6 @@ class PDFService:
             str(self.markdown_dir),
             "--output_format",
             "markdown",
-            "--batch_multiplier",
-            "2",  # Higher quality
         ]
 
         try:

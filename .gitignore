@@ -75,3 +75,7 @@ dmypy.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Test artifacts (should not be created)
+MagicMock/
+valid-slug/

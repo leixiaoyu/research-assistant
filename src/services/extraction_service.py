@@ -13,7 +13,6 @@ This service ties together PDFService, FallbackPDFService, and LLMService.
 """
 
 from typing import List, Optional
-from pathlib import Path
 import structlog
 
 from src.models.paper import PaperMetadata
@@ -103,17 +102,20 @@ class ExtractionService:
                 # Convert to markdown
                 if self.fallback_service:
                     # Phase 2.5: Use FallbackPDFService
-                    pdf_result = await self.fallback_service.extract_with_fallback(pdf_path)
-                    
+                    pdf_result = await self.fallback_service.extract_with_fallback(
+                        pdf_path
+                    )
+
                     if pdf_result.success and pdf_result.markdown:
                         markdown_content = pdf_result.markdown
-                        # Note: We don't save the markdown file to disk in Phase 2.5 architecture
-                        # unless we want to for debugging. The content is in memory.
-                        # For compatibility with ExtractedPaper model which expects a path,
-                        # we could save it, or just use the content.
+                        # Note: We don't save the markdown file to disk in Phase 2.5
+                        # architecture unless we want to for debugging.
+                        # The content is in memory.
+                        # For compatibility with ExtractedPaper model which
+                        # expects a path, we could save it, or just use content.
                         # The ExtractedPaper model has 'markdown_path' (Optional[str]).
                         # We can skip setting markdown_path if we don't save it.
-                        
+
                         logger.info(
                             "pdf_pipeline_success",
                             paper_id=paper.paper_id,
@@ -130,7 +132,7 @@ class ExtractionService:
                     )
                     extracted.markdown_path = str(md_path)
                     markdown_content = md_path.read_text(encoding="utf-8")
-                    
+
                     logger.info(
                         "pdf_pipeline_success",
                         paper_id=paper.paper_id,

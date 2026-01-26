@@ -53,17 +53,19 @@ async def test_extract_success(extractor):
     mock_page = Mock()
     mock_page.extract_text.return_value = "Page text"
     mock_page.extract_tables.return_value = []
-    
+
     mock_pdf.pages = [mock_page]
     mock_pdf.__enter__.return_value = mock_pdf
 
-    with patch.dict("sys.modules", {"pdfplumber": Mock(open=Mock(return_value=mock_pdf))}):
+    with patch.dict(
+        "sys.modules", {"pdfplumber": Mock(open=Mock(return_value=mock_pdf))}
+    ):
         with patch.object(Path, "exists", return_value=True):
             with patch.object(Path, "stat") as mock_stat:
                 mock_stat.return_value.st_size = 1024
-                
+
                 result = await extractor.extract(Path("test.pdf"))
-                
+
                 assert result.success is True
                 assert "Page text" in result.markdown
                 assert result.metadata.page_count == 1
@@ -75,20 +77,20 @@ async def test_extract_with_table(extractor):
     mock_page = Mock()
     mock_page.extract_text.return_value = ""
     # Table: 2 rows, 2 cols
-    mock_page.extract_tables.return_value = [
-        [["Header1", "Header2"], ["Val1", "Val2"]]
-    ]
-    
+    mock_page.extract_tables.return_value = [[["Header1", "Header2"], ["Val1", "Val2"]]]
+
     mock_pdf.pages = [mock_page]
     mock_pdf.__enter__.return_value = mock_pdf
 
-    with patch.dict("sys.modules", {"pdfplumber": Mock(open=Mock(return_value=mock_pdf))}):
+    with patch.dict(
+        "sys.modules", {"pdfplumber": Mock(open=Mock(return_value=mock_pdf))}
+    ):
         with patch.object(Path, "exists", return_value=True):
             with patch.object(Path, "stat") as mock_stat:
                 mock_stat.return_value.st_size = 1024
-                
+
                 result = await extractor.extract(Path("test.pdf"))
-                
+
                 assert result.success is True
                 assert "| Header1 | Header2 |" in result.markdown
                 assert "| Val1 | Val2 |" in result.markdown

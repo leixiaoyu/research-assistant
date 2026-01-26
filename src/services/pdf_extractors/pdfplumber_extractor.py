@@ -67,7 +67,7 @@ class PDFPlumberExtractor(PDFExtractor):
             import pdfplumber
 
             markdown_content = []
-            
+
             with pdfplumber.open(pdf_path) as pdf:
                 metadata.page_count = len(pdf.pages)
                 metadata.file_size_bytes = pdf_path.stat().st_size
@@ -102,9 +102,7 @@ class PDFPlumberExtractor(PDFExtractor):
         except Exception as e:
             duration = time.time() - start_time
             logger.error(
-                "pdfplumber_extraction_failed",
-                error=str(e),
-                pdf_path=str(pdf_path)
+                "pdfplumber_extraction_failed", error=str(e), pdf_path=str(pdf_path)
             )
             return PDFExtractionResult(
                 success=False,
@@ -120,15 +118,19 @@ class PDFPlumberExtractor(PDFExtractor):
 
         try:
             lines = []
-            
+
             # Header
-            header = [str(c).replace("\n", " ") if c is not None else "" for c in table[0]]
+            header = [
+                str(c).replace("\n", " ") if c is not None else "" for c in table[0]
+            ]
             lines.append("| " + " | ".join(header) + " |")
             lines.append("| " + " | ".join(["---"] * len(header)) + " |")
 
             # Rows
             for row in table[1:]:
-                clean_row = [str(c).replace("\n", " ") if c is not None else "" for c in row]
+                clean_row = [
+                    str(c).replace("\n", " ") if c is not None else "" for c in row
+                ]
                 lines.append("| " + " | ".join(clean_row) + " |")
 
             return "\n".join(lines) + "\n"

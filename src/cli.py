@@ -18,6 +18,7 @@ from src.utils.logging import configure_logging
 from src.services.pdf_service import PDFService
 from src.services.llm_service import LLMService
 from src.services.extraction_service import ExtractionService
+from src.services.pdf_extractors.fallback_service import FallbackPDFService
 from src.models.llm import LLMConfig, CostLimits
 
 # Configure structured logging
@@ -145,10 +146,14 @@ def run(
 
             llm_service = LLMService(config=llm_config, cost_limits=cost_limits)
 
+            # Fallback PDF Service (Phase 2.5)
+            fallback_service = FallbackPDFService(config=config.settings.pdf_settings)
+
             # Extraction Service
             extraction_service = ExtractionService(
                 pdf_service=pdf_service,
                 llm_service=llm_service,
+                fallback_service=fallback_service,
                 keep_pdfs=config.settings.pdf_settings.keep_pdfs,
             )
 

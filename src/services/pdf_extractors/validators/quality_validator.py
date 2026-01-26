@@ -100,8 +100,8 @@ class QualityValidator:
         """
         Check for markdown structural elements (headers, lists).
         """
-        headers = len(re.findall(r"^#{1,6}\s", markdown, re.MULTILINE))
-        lists = len(re.findall(r"^\s*[-\*+]\s", markdown, re.MULTILINE))
+        headers = len(re.findall(r"^#{1,6}\s+", markdown, re.MULTILINE))
+        lists = len(re.findall(r"^\s*[\-\*\+]\s+", markdown, re.MULTILINE))
 
         # Normalize by document length (elements per 1000 characters)
         structures_per_1k = (headers + lists) / max(1, len(markdown) / 1000)
@@ -128,8 +128,8 @@ class QualityValidator:
         Check for table presence.
         """
         # Count markdown table header separators
-        # Look for | --- | style lines
-        tables = len(re.findall(r"|[\s\-:\|]+\|", markdown))
+        # Look for | --- | style lines. Properly escape the pipes!
+        tables = len(re.findall(r"\|[\s\-:\|]+\|", markdown))
         if tables == 0:
             return 0.5  # Neutral
 

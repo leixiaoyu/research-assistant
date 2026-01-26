@@ -5,12 +5,16 @@ backends in a configurable order (Fallback Chain). It validates the quality
 of each extraction and returns the best result.
 """
 
-from typing import List, Optional
+from typing import List
 from pathlib import Path
 import structlog
 
-from src.models.config import PDFSettings, PDFBackendConfig
-from src.models.pdf_extraction import PDFExtractionResult, PDFBackend
+from src.models.config import PDFSettings
+from src.models.pdf_extraction import (
+    PDFExtractionResult,
+    PDFBackend,
+    ExtractionMetadata,
+)
 from src.services.pdf_extractors.base import PDFExtractor
 from src.services.pdf_extractors.validators.quality_validator import QualityValidator
 
@@ -76,7 +80,8 @@ class FallbackPDFService:
 
         # Filter enabled backends from config
         chain = [
-            cfg for cfg in self.config.fallback_chain
+            cfg
+            for cfg in self.config.fallback_chain
             if cfg.enabled and cfg.backend in self.extractors
         ]
 
@@ -84,17 +89,17 @@ class FallbackPDFService:
             return PDFExtractionResult(
                 success=False,
                 error="No enabled PDF extractors available",
-                metadata={"backend": PDFBackend.TEXT_ONLY}
+                metadata=ExtractionMetadata(backend=PDFBackend.TEXT_ONLY),
             )
 
         for backend_cfg in chain:
             extractor = self.extractors[backend_cfg.backend]
-            
+
             logger.info(
                 "attempting_extraction",
                 backend=backend_cfg.backend,
                 pdf_path=str(pdf_path),
-                timeout=backend_cfg.timeout_seconds
+                timeout=backend_cfg.timeout_seconds,
             )
 
             try:
@@ -104,10 +109,7 @@ class FallbackPDFService:
 
                 if result.success and result.markdown:
                     # Score the result
-                    score = self.validator.score_extraction(
-                        result.markdown,
-                        pdf_path
-                    )
+                    score = self.validator.score_extraction(result.markdown, pdf_path)
                     result.quality_score = score
                     results.append(result)
 
@@ -115,18 +117,15 @@ class FallbackPDFService:
                         "extraction_attempt_finished",
                         backend=backend_cfg.backend,
                         success=True,
-                        quality_score=score
+                        quality_score=score,
                     )
 
                     # Check stop condition
-                    if (
-                        self.config.stop_on_success
-                        and score >= backend_cfg.min_quality
-                    ):
+                    if self.config.stop_on_success and score >= backend_cfg.min_quality:
                         logger.info(
                             "fallback_chain_success",
                             backend=backend_cfg.backend,
-                            reason="quality_threshold_met"
+                            reason="quality_threshold_met",
                         )
                         return result
 
@@ -134,7 +133,7 @@ class FallbackPDFService:
                     logger.warning(
                         "extraction_attempt_failed",
                         backend=backend_cfg.backend,
-                        error=result.error
+                        error=result.error,
                     )
                     # Add failed result for debugging
                     results.append(result)
@@ -143,17 +142,21 @@ class FallbackPDFService:
                 logger.error(
                     "extraction_unexpected_error",
                     backend=backend_cfg.backend,
-                    error=str(e)
+                    error=str(e),
                 )
-                results.append(PDFExtractionResult(
-                    success=False,
-                    metadata={"backend": PDFBackend(backend_cfg.backend)},
-                    error=str(e)
-                ))
+                results.append(
+                    PDFExtractionResult(
+                        success=False,
+                        metadata=ExtractionMetadata(
+                            backend=PDFBackend(backend_cfg.backend)
+                        ),
+                        error=str(e),
+                    )
+                )
 
         # If we get here, either no result met the threshold (stop_on_success=True)
         # or we tried everything (stop_on_success=False)
-        
+
         # Filter for successful results
         successful_results = [r for r in results if r.success]
 
@@ -163,7 +166,7 @@ class FallbackPDFService:
             logger.info(
                 "fallback_chain_completed",
                 selected_backend=best.backend,
-                score=best.quality_score
+                score=best.quality_score,
             )
             return best
 
@@ -171,6 +174,6 @@ class FallbackPDFService:
         logger.error("fallback_chain_failed_all_backends", pdf_path=str(pdf_path))
         return PDFExtractionResult(
             success=False,
-            metadata={"backend": PDFBackend.TEXT_ONLY},
-            error="All extraction backends failed"
+            metadata=ExtractionMetadata(backend=PDFBackend.TEXT_ONLY),
+            error="All extraction backends failed",
         )

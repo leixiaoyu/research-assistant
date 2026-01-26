@@ -72,23 +72,21 @@ class PandocExtractor(PDFExtractor):
                 cmd = [
                     "pandoc",
                     str(pdf_path.resolve()),
-                    "-f", "pdf",  # Force input format (though pandoc usually detects)
-                    "-t", "markdown",
-                    "-o", str(output_path.resolve())
+                    "-f",
+                    "pdf",  # Force input format (though pandoc usually detects)
+                    "-t",
+                    "markdown",
+                    "-o",
+                    str(output_path.resolve()),
                 ]
 
                 # Run pandoc
                 # Note: pandoc might use pdftotext internally for PDF input
-                subprocess.run(
-                    cmd,
-                    check=True,
-                    timeout=60,
-                    capture_output=True
-                )
+                subprocess.run(cmd, check=True, timeout=60, capture_output=True)
 
                 # Read result
                 markdown = output_path.read_text(encoding="utf-8")
-                
+
                 metadata.text_length = len(markdown)
                 metadata.file_size_bytes = pdf_path.stat().st_size
                 # Note: pandoc doesn't give us page count easily without parsing
@@ -124,7 +122,9 @@ class PandocExtractor(PDFExtractor):
                 duration_seconds=time.time() - start_time,
             )
         except Exception as e:
-            logger.error("pandoc_extraction_failed", error=str(e), pdf_path=str(pdf_path))
+            logger.error(
+                "pandoc_extraction_failed", error=str(e), pdf_path=str(pdf_path)
+            )
             return PDFExtractionResult(
                 success=False,
                 metadata=metadata,

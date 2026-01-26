@@ -1,7 +1,7 @@
 """Extraction Service for Phase 2: PDF Processing & LLM Extraction
 
 This service orchestrates the complete extraction pipeline:
-1. PDF Download → 2. PDF Conversion → 3. LLM Extraction
+1. PDF Download → 2. PDF Conversion (with Fallback) → 3. LLM Extraction
 
 Implements fallback strategies:
 - If PDF unavailable → Use abstract only
@@ -9,10 +9,11 @@ Implements fallback strategies:
 - If PDF conversion fails → Use abstract only
 - Continue pipeline even if individual papers fail
 
-This service ties together PDFService and LLMService.
+This service ties together PDFService, FallbackPDFService, and LLMService.
 """
 
-from typing import List
+from typing import List, Optional
+from pathlib import Path
 import structlog
 
 from src.models.paper import PaperMetadata
@@ -20,6 +21,7 @@ from src.models.extraction import ExtractionTarget, ExtractedPaper
 
 from src.services.pdf_service import PDFService
 from src.services.llm_service import LLMService
+from src.services.pdf_extractors.fallback_service import FallbackPDFService
 from src.utils.exceptions import (
     PDFDownloadError,
     ConversionError,
@@ -41,20 +43,30 @@ class ExtractionService:
     """
 
     def __init__(
-        self, pdf_service: PDFService, llm_service: LLMService, keep_pdfs: bool = True
+        self,
+        pdf_service: PDFService,
+        llm_service: LLMService,
+        fallback_service: Optional[FallbackPDFService] = None,
+        keep_pdfs: bool = True,
     ):
         """Initialize extraction service
 
         Args:
-            pdf_service: Service for PDF operations
+            pdf_service: Service for PDF operations (download)
             llm_service: Service for LLM extraction
+            fallback_service: Service for multi-backend PDF extraction
             keep_pdfs: Whether to keep PDFs after processing
         """
         self.pdf_service = pdf_service
         self.llm_service = llm_service
+        self.fallback_service = fallback_service
         self.keep_pdfs = keep_pdfs
 
-        logger.info("extraction_service_initialized", keep_pdfs=keep_pdfs)
+        logger.info(
+            "extraction_service_initialized",
+            keep_pdfs=keep_pdfs,
+            has_fallback_service=fallback_service is not None,
+        )
 
     async def process_paper(
         self, paper: PaperMetadata, targets: List[ExtractionTarget]
@@ -63,7 +75,7 @@ class ExtractionService:
 
         Pipeline stages:
         1. Try to download PDF (if available)
-        2. If successful, convert to markdown
+        2. If successful, convert to markdown (using FallbackService if available)
         3. Extract using LLM
         4. If PDF fails at any stage, fall back to abstract only
 
@@ -73,10 +85,6 @@ class ExtractionService:
 
         Returns:
             ExtractedPaper with all available information
-
-        Note:
-            This method never raises exceptions for individual paper failures.
-            It always returns an ExtractedPaper, even if extraction failed.
         """
         extracted = ExtractedPaper(metadata=paper, pdf_available=False)
 
@@ -93,20 +101,42 @@ class ExtractionService:
                 extracted.pdf_path = str(pdf_path)
 
                 # Convert to markdown
-                md_path = self.pdf_service.convert_to_markdown(
-                    pdf_path=pdf_path, paper_id=paper.paper_id
-                )
-                extracted.markdown_path = str(md_path)
-
-                # Read markdown content
-                markdown_content = md_path.read_text(encoding="utf-8")
-
-                logger.info(
-                    "pdf_pipeline_success",
-                    paper_id=paper.paper_id,
-                    pdf_size=pdf_path.stat().st_size,
-                    md_size=len(markdown_content),
-                )
+                if self.fallback_service:
+                    # Phase 2.5: Use FallbackPDFService
+                    pdf_result = await self.fallback_service.extract_with_fallback(pdf_path)
+                    
+                    if pdf_result.success and pdf_result.markdown:
+                        markdown_content = pdf_result.markdown
+                        # Note: We don't save the markdown file to disk in Phase 2.5 architecture
+                        # unless we want to for debugging. The content is in memory.
+                        # For compatibility with ExtractedPaper model which expects a path,
+                        # we could save it, or just use the content.
+                        # The ExtractedPaper model has 'markdown_path' (Optional[str]).
+                        # We can skip setting markdown_path if we don't save it.
+                        
+                        logger.info(
+                            "pdf_pipeline_success",
+                            paper_id=paper.paper_id,
+                            backend=pdf_result.backend,
+                            quality_score=pdf_result.quality_score,
+                            md_size=len(markdown_content),
+                        )
+                    else:
+                        raise ConversionError(f"Extraction failed: {pdf_result.error}")
+                else:
+                    # Phase 2: Use legacy PDFService conversion
+                    md_path = self.pdf_service.convert_to_markdown(
+                        pdf_path=pdf_path, paper_id=paper.paper_id
+                    )
+                    extracted.markdown_path = str(md_path)
+                    markdown_content = md_path.read_text(encoding="utf-8")
+                    
+                    logger.info(
+                        "pdf_pipeline_success",
+                        paper_id=paper.paper_id,
+                        pdf_size=pdf_path.stat().st_size,
+                        md_size=len(markdown_content),
+                    )
 
             except (
                 PDFDownloadError,

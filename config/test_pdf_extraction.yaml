@@ -1,0 +1,38 @@
+# Test Configuration: PDF Extraction with marker-pdf
+# This tests that marker-pdf is working correctly with Python 3.10
+
+research_topics:
+  - query: "attention mechanism"
+    provider: "arxiv"
+    timeframe:
+      type: "recent"
+      value: "30d"
+    max_papers: 1  # Just one paper for quick test
+
+    extraction_targets:
+      - name: "key_method"
+        description: "Extract the main method or algorithm described"
+        output_format: "text"
+        required: true
+
+settings:
+  output_base_dir: "./output_pdf_test"
+
+  pdf_settings:
+    temp_dir: "./temp_pdf_test"
+    keep_pdfs: true  # Keep for inspection
+    max_file_size_mb: 50
+    timeout_seconds: 300
+
+  llm_settings:
+    provider: "${LLM_PROVIDER}"
+    model: "${LLM_MODEL}"
+    api_key: "${LLM_API_KEY}"
+    max_tokens: 50000
+    temperature: 0.0
+    timeout: 300
+
+  cost_limits:
+    max_tokens_per_paper: 50000
+    max_daily_spend_usd: 1.0
+    max_total_spend_usd: 2.0

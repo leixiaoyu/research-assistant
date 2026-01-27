@@ -273,15 +273,15 @@ def test_format_abstract(mock_paper):
     assert "Abstract" in markdown
     assert "Full PDF was not available" in markdown
 
-    # Test with minimal metadata
+    # Test with minimal metadata (note: title must be non-empty per Pydantic validation)
     sparse_paper = PaperMetadata(
         paper_id="sparse",
-        title="",
-        abstract="",
+        title="Untitled",
+        abstract=None,
         authors=[],
         url="https://example.com",
     )
     markdown_sparse = service._format_abstract(sparse_paper)
-    assert "Untitled Paper" in markdown_sparse
+    assert "Untitled" in markdown_sparse
     assert "Unknown" in markdown_sparse
     assert "No abstract available" in markdown_sparse

@@ -1,6 +1,6 @@
 # ARISP System Architecture
 **Version:** 2.0
-**Status:** Phase 2 Complete - Production Ready
+**Status:** Phase 2.5 Complete - Production-Hardened with Multi-Backend PDF Extraction
 **Last Updated:** 2026-01-25
 
 ---
@@ -928,6 +928,202 @@ class DiscoveryService:
 | **Semantic Scholar** | ✅ Yes | Free | 200M+ papers, all fields | Varies | Comprehensive research |
 | **OpenAlex** (future) | Optional | Free | 250M+ works | Varies | Multi-disciplinary |
 | **PubMed** (future) | ❌ No | Free | Medical/life sciences | Varies | Biomedical research |
+
+### 2.5 PDF Extraction Service (Multi-Backend Fallback)
+
+**Responsibility**: Reliable PDF-to-Markdown conversion with automatic fallback and quality scoring
+
+**Phase**: 2.5 (Production-hardened reliability layer)
+
+**Architecture**: Fallback chain with quality-based selection
+
+```
+┌─────────────────────────────────────────────────────┐
+│         FallbackPDFService (Orchestrator)           │
+│                                                     │
+│  ┌─────────────┐   ┌──────────────┐   ┌─────────┐ │
+│  │  PyMuPDF    │ → │  PDFPlumber  │ → │ Pandoc  │ │
+│  │  (Primary)  │   │  (Secondary) │   │(Fallback)│
+│  └─────────────┘   └──────────────┘   └─────────┘ │
+│         ↓                  ↓                ↓       │
+│  ┌───────────────────────────────────────────────┐ │
+│  │       QualityValidator (Scoring 0.0-1.0)      │ │
+│  └───────────────────────────────────────────────┘ │
+│                        ↓                            │
+│           Select Highest Quality Result            │
+└─────────────────────────────────────────────────────┘
+```
+
+#### Fallback Chain Strategy
+
+```python
+class FallbackPDFService:
+    """Multi-backend PDF extraction with quality-based selection
+
+    Implements the "try all, pick best" strategy:
+    1. Attempt all configured backends concurrently or sequentially
+    2. Score each successful extraction (0.0-1.0)
+    3. Return highest quality result
+    4. Gracefully degrade to text-only if all fail
+    """
+
+    def __init__(
+        self,
+        config: PDFSettings,
+        validator: QualityValidator
+    ):
+        self.config = config
+        self.validator = validator
+
+        # Initialize extractors
+        self.extractors = {
+            PDFBackend.PYMUPDF: PyMuPDFExtractor(),
+            PDFBackend.PDFPLUMBER: PDFPlumberExtractor(),
+            PDFBackend.PANDOC: PandocExtractor()
+        }
+
+    async def extract_with_fallback(
+        self,
+        pdf_path: Path
+    ) -> PDFExtractionResult:
+        """Extract with fallback chain
+
+        Process:
+        1. Try each backend in fallback_chain order
+        2. Skip backends that fail setup validation
+        3. Score successful extractions
+        4. Stop on first ≥ min_quality if stop_on_success=True
+        5. Otherwise try all and return best
+        6. Return TEXT_ONLY backend if all fail
+
+        Returns:
+            Best quality extraction or graceful degradation
+        """
+        results = []
+
+        for backend_config in self.config.fallback_chain:
+            extractor = self.extractors[backend_config.backend]
+
+            # Skip if backend not available
+            if not extractor.validate_setup():
+                continue
+
+            # Try extraction with timeout
+            try:
+                result = await asyncio.wait_for(
+                    extractor.extract(pdf_path),
+                    timeout=backend_config.timeout_seconds
+                )
+
+                if result.success:
+                    # Score quality
+                    score = self.validator.score_extraction(
+                        result.markdown,
+                        pdf_path,
+                        result.metadata.page_count
+                    )
+                    result.quality_score = score
+                    results.append(result)
+
+                    # Early exit if quality threshold met
+                    if score >= backend_config.min_quality and self.config.stop_on_success:
+                        break
+
+            except asyncio.TimeoutError:
+                logger.warning("extraction_timeout", backend=backend_config.backend)
+
+        # Return best result or TEXT_ONLY fallback
+        if results:
+            return max(results, key=lambda r: r.quality_score)
+        else:
+            return PDFExtractionResult(
+                success=False,
+                error="All backends failed",
+                backend=PDFBackend.TEXT_ONLY,
+                metadata=ExtractionMetadata(backend=PDFBackend.TEXT_ONLY)
+            )
+```
+
+#### Backend Characteristics
+
+| Backend | Speed | Tables | Code | Complexity | Best For |
+|---------|-------|--------|------|------------|----------|
+| **PyMuPDF** | ⚡⚡⚡ Fast | ✅ Good | ✅ Excellent | Simple | Text-heavy papers, code snippets |
+| **PDFPlumber** | ⚡⚡ Medium | ⭐⭐⭐ Best | ✅ Good | Medium | Papers with complex tables |
+| **Pandoc** | ⚡ Slow | ⚠️ Basic | ⚠️ Fair | Complex | System-level fallback |
+
+#### Quality Scoring Heuristics
+
+```python
+class QualityValidator:
+    """Scores extraction quality using heuristics (0.0-1.0)"""
+
+    def score_extraction(
+        self,
+        markdown: str,
+        pdf_path: Path,
+        page_count: int = 0
+    ) -> float:
+        """Calculate quality score
+
+        Metrics (weighted average):
+        - Text density: 500-2000 chars/page ideal (30%)
+        - Structure: Headers/lists ~10 per 1k chars (25%)
+        - Code detection: Presence of code blocks (20%)
+        - Table detection: Presence of markdown tables (25%)
+
+        Returns:
+            Score 0.0 (poor) to 1.0 (excellent)
+        """
+        if len(markdown) < 100:
+            return 0.0
+
+        scores = {
+            'density': self._calculate_text_density_score(markdown, page_count),
+            'structure': self._calculate_structure_score(markdown),
+            'code': self._calculate_code_detection_score(markdown),
+            'tables': self._calculate_table_detection_score(markdown)
+        }
+
+        weights = {'density': 0.30, 'structure': 0.25, 'code': 0.20, 'tables': 0.25}
+
+        return sum(scores[k] * weights[k] for k in scores)
+```
+
+#### Configuration
+
+```yaml
+# research_config.yaml (Phase 2.5 settings)
+pdf:
+  fallback_chain:
+    - backend: pymupdf
+      timeout_seconds: 60
+      min_quality: 0.7
+    - backend: pdfplumber
+      timeout_seconds: 90
+      min_quality: 0.6
+    - backend: pandoc
+      timeout_seconds: 120
+      min_quality: 0.5
+  stop_on_success: true  # Stop at first backend ≥ min_quality
+  max_file_size_mb: 50
+```
+
+#### Benefits
+
+1. **Reliability**: No single point of failure - if one backend fails, others compensate
+2. **Quality**: Automatic selection of highest quality extraction
+3. **Performance**: `stop_on_success=true` ensures fast path when quality is good
+4. **Graceful Degradation**: TEXT_ONLY fallback ensures pipeline never crashes
+5. **Testability**: 100% test coverage on all extractors and fallback logic
+
+#### Integration Points
+
+- **ExtractionService**: Uses `FallbackPDFService` instead of direct marker-pdf calls
+- **Concurrent Pipeline**: Each worker uses fallback service for PDF processing
+- **Cache Service**: Caches extracted markdown to avoid re-processing
+
+---
 
 ### 3. Concurrent Processing Engine
 

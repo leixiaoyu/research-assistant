@@ -1,9 +1,9 @@
 # ARISP Phased Delivery Plan
 **Automated Research Ingestion & Synthesis Pipeline**
 
-**Version:** 1.2
-**Date:** 2026-01-24
-**Status:** Phase 1.5 Complete & Stabilized, Phase 2 Ready
+**Version:** 1.3
+**Date:** 2026-01-26
+**Status:** Phase 2.5 Complete, Phase 3 Ready
 
 ---
 
@@ -13,15 +13,15 @@ This document outlines a 4-phase, 7-week delivery plan to build the Automated Re
 
 ### Timeline Overview
 ```
-┌──────────┬──────────┬──────────┬──────────┬──────────┐
-│ Phase 1  │Phase 1.5 │ Phase 2  │ Phase 3  │ Phase 4  │
-│✅Complete│✅Complete│(2 weeks) │(2 weeks) │ (1 week) │
-│          │          │          │          │          │
-│ Foundation│ Stabilize│Extraction│Optimize  │ Harden   │
-└──────────┴──────────┴──────────┴──────────┴──────────┘
-    MVP       Unblock    Full      Production  Ops Ready
-  Working     Phase 2   Features     Grade     Deployment
-  End-to-End  ArXiv                Performance
+┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
+│ Phase 1  │Phase 1.5 │ Phase 2  │Phase 2.5 │ Phase 3  │ Phase 4  │
+│✅Complete│✅Complete│✅Complete│✅Complete│(2 weeks) │ (1 week) │
+│          │          │          │          │          │          │
+│Foundation│ Stabilize│Extraction│Reliability│Intelligence│Harden   │
+└──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
+    MVP       Unblock     Full     Production  Optimize   Ops Ready
+  Working     Phase 2    Features   Hardened   Grade      Deployment
+  End-to-End  ArXiv      + LLM    PDF Extract Performance
 
 ```
 

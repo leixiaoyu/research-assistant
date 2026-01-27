@@ -25,6 +25,16 @@ This phase implements production-grade concurrent processing as defined in [SYST
 **⚠️ Critical Dependencies:**
 This phase **requires** Phase 2.5's `FallbackPDFService` to be merged and functional. It integrates all Phase 3 intelligence services (cache, dedup, filter, checkpoint) with concurrent PDF processing.
 
+**📋 Tech Debt from Phase 2.5:**
+As identified in [PR #9 review](https://github.com/leixiaoyu/research-assistant/pull/9), `src/services/extraction_service.py` currently has 85% test coverage (below the 95% requirement). This phase MUST address this debt by:
+1. Adding comprehensive error handling tests for `extraction_service.py`
+2. Mocking LLM service failures (timeout, rate limit, invalid response)
+3. Testing extraction result validation failures
+4. Testing partial extraction and retry logic
+5. Achieving ≥95% coverage for `extraction_service.py`
+
+See [TECH_DEBT.md](../TECH_DEBT.md#1-extractionservice-coverage-gap-phase-31) for full details.
+
 ---
 
 ## Overview

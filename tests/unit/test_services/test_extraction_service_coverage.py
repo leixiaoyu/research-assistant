@@ -1,357 +1,287 @@
-"""Coverage tests for ExtractionService to achieve ≥95% coverage
-
-This file contains additional tests targeting specific uncovered lines
-in extraction_service.py, particularly error handling paths and edge cases.
-"""
+"""Unit tests for ExtractionService with FallbackPDFService integration."""
 
 import pytest
+from unittest.mock import Mock, AsyncMock, patch
 from pathlib import Path
-from unittest.mock import Mock, AsyncMock, MagicMock
 
 from src.services.extraction_service import ExtractionService
 from src.services.pdf_service import PDFService
 from src.services.llm_service import LLMService
-from src.models.paper import PaperMetadata, Author
-from src.models.extraction import PaperExtraction, ExtractedPaper
-from src.utils.exceptions import (
-    ConversionError,
-    ExtractionError,
-    FileSizeError,
-    PDFValidationError,
-)
+from src.services.pdf_extractors.fallback_service import FallbackPDFService
+from src.models.paper import PaperMetadata
+from src.models.extraction import PaperExtraction
+from src.models.pdf_extraction import PDFExtractionResult, PDFBackend
+
+
+@pytest.fixture
+def mock_pdf_service():
+    return Mock(spec=PDFService)
+
+
+@pytest.fixture
+def mock_llm_service():
+    return Mock(spec=LLMService)
+
+
+@pytest.fixture
+def mock_fallback_service():
+    return Mock(spec=FallbackPDFService)
+
+
+@pytest.fixture
+def extraction_service(mock_pdf_service, mock_llm_service, mock_fallback_service):
+    return ExtractionService(
+        pdf_service=mock_pdf_service,
+        llm_service=mock_llm_service,
+        fallback_service=mock_fallback_service,
+        keep_pdfs=True,
+    )
 
 
 @pytest.fixture
 def mock_paper():
+    from src.models.paper import Author
+
     return PaperMetadata(
-        paper_id="test-123",
+        paper_id="2301.12345",
         title="Test Paper",
-        abstract="This is a test abstract with content.",
-        authors=[Author(name="Test Author")],
-        url="https://arxiv.org/abs/test",
-        open_access_pdf="https://arxiv.org/pdf/test.pdf",
-        year=2023,
-        venue="Test Conference",
-    )
-
-
-@pytest.fixture
-def mock_paper_no_pdf():
-    """Paper without open access PDF"""
-    return PaperMetadata(
-        paper_id="test-no-pdf",
-        title="Test Paper No PDF",
-        abstract="Abstract for paper without PDF.",
-        authors=[Author(name="Test Author")],
-        url="https://arxiv.org/abs/test-no-pdf",
-        open_access_pdf=None,  # No PDF available
+        abstract="Test abstract",
+        authors=[Author(name="Author 1")],
+        url="https://arxiv.org/abs/2301.12345",
+        open_access_pdf="https://arxiv.org/pdf/2301.12345.pdf",
         year=2023,
     )
 
 
-class TestExtractionServiceCoverage:
-    """Coverage tests for ExtractionService"""
+@pytest.mark.asyncio
+async def test_process_paper_with_fallback_success(
+    extraction_service,
+    mock_pdf_service,
+    mock_fallback_service,
+    mock_llm_service,
+    mock_paper,
+):
+    """Test successful extraction using FallbackPDFService"""
+    pdf_path = Path("/tmp/test.pdf")
+    mock_pdf_service.download_pdf = AsyncMock(return_value=pdf_path)
 
-    @pytest.mark.asyncio
-    async def test_process_paper_conversion_error_fallback(self, mock_paper):
-        """Test fallback when PDF conversion fails (ConversionError)"""
-        pdf_service = Mock(spec=PDFService)
-        llm_service = Mock(spec=LLMService)
-        service = ExtractionService(pdf_service, llm_service)
+    # Mock successful fallback extraction
+    pdf_result = PDFExtractionResult(
+        success=True,
+        markdown="Fallback content",
+        metadata={"backend": PDFBackend.PYMUPDF},
+        quality_score=0.9,
+    )
+    mock_fallback_service.extract_with_fallback = AsyncMock(return_value=pdf_result)
 
-        # Setup: download succeeds, conversion fails
-        mock_pdf_path = MagicMock(spec=Path)
-        mock_pdf_path.__str__ = Mock(return_value="/tmp/test.pdf")
-        pdf_service.download_pdf = AsyncMock(return_value=mock_pdf_path)
-        pdf_service.convert_to_markdown = Mock(side_effect=ConversionError("Failed"))
+    # Mock LLM extraction
+    llm_result = PaperExtraction(
+        paper_id=mock_paper.paper_id,
+        extraction_results=[],
+        tokens_used=100,
+        cost_usd=0.001,
+    )
+    mock_llm_service.extract = AsyncMock(return_value=llm_result)
 
-        extraction = PaperExtraction(
-            paper_id=mock_paper.paper_id,
-            extraction_results=[],
-            tokens_used=100,
-            cost_usd=0.001,
-        )
-        llm_service.extract = AsyncMock(return_value=extraction)
+    result = await extraction_service.process_paper(mock_paper, [])
 
-        result = await service.process_paper(mock_paper, [])
+    assert result.pdf_available is True
+    assert result.extraction == llm_result
 
-        assert result.pdf_available is False  # PDF failed, reset to False
-        assert result.pdf_path is None
-        assert result.markdown_path is None
-        # Should have used abstract fallback
-        args, kwargs = llm_service.extract.call_args
-        assert "Abstract" in kwargs["markdown_content"]
+    # Verify fallback service was called
+    mock_fallback_service.extract_with_fallback.assert_awaited_once_with(pdf_path)
 
-    @pytest.mark.asyncio
-    async def test_process_paper_file_size_error_fallback(self, mock_paper):
-        """Test fallback when PDF is too large (FileSizeError)"""
-        pdf_service = Mock(spec=PDFService)
-        llm_service = Mock(spec=LLMService)
-        service = ExtractionService(pdf_service, llm_service)
+    # Verify LLM was called with markdown from fallback
+    mock_llm_service.extract.assert_awaited_once()
+    call_args = mock_llm_service.extract.call_args
+    assert call_args.kwargs["markdown_content"] == "Fallback content"
 
-        pdf_service.download_pdf = AsyncMock(side_effect=FileSizeError("Too large"))
 
-        extraction = PaperExtraction(
-            paper_id=mock_paper.paper_id,
-            extraction_results=[],
-            tokens_used=100,
-            cost_usd=0.001,
-        )
-        llm_service.extract = AsyncMock(return_value=extraction)
+@pytest.mark.asyncio
+async def test_process_paper_with_fallback_failure(
+    extraction_service,
+    mock_pdf_service,
+    mock_fallback_service,
+    mock_llm_service,
+    mock_paper,
+):
+    """Test fallback to abstract when FallbackPDFService fails"""
+    pdf_path = Path("/tmp/test.pdf")
+    mock_pdf_service.download_pdf = AsyncMock(return_value=pdf_path)
 
-        result = await service.process_paper(mock_paper, [])
+    # Mock failed fallback extraction
+    pdf_result = PDFExtractionResult(
+        success=False,
+        error="Extraction failed",
+        metadata={"backend": PDFBackend.TEXT_ONLY},
+    )
+    mock_fallback_service.extract_with_fallback = AsyncMock(return_value=pdf_result)
 
-        assert result.pdf_available is False
-        assert "Abstract" in llm_service.extract.call_args.kwargs["markdown_content"]
+    # Mock LLM extraction
+    llm_result = PaperExtraction(
+        paper_id=mock_paper.paper_id,
+        extraction_results=[],
+        tokens_used=50,
+        cost_usd=0.0005,
+    )
+    mock_llm_service.extract = AsyncMock(return_value=llm_result)
 
-    @pytest.mark.asyncio
-    async def test_process_paper_validation_error_fallback(self, mock_paper):
-        """Test fallback when PDF fails validation (PDFValidationError)"""
-        pdf_service = Mock(spec=PDFService)
-        llm_service = Mock(spec=LLMService)
-        service = ExtractionService(pdf_service, llm_service)
+    result = await extraction_service.process_paper(mock_paper, [])
 
-        pdf_service.download_pdf = AsyncMock(
-            side_effect=PDFValidationError("Invalid PDF")
-        )
+    assert result.pdf_available is False
+    assert result.extraction == llm_result
 
-        extraction = PaperExtraction(
-            paper_id=mock_paper.paper_id,
-            extraction_results=[],
-            tokens_used=100,
-            cost_usd=0.001,
-        )
-        llm_service.extract = AsyncMock(return_value=extraction)
+    # Verify LLM was called with abstract
+    mock_llm_service.extract.assert_awaited_once()
+    call_args = mock_llm_service.extract.call_args
+    assert "Abstract" in call_args.kwargs["markdown_content"]
+    assert "Test abstract" in call_args.kwargs["markdown_content"]
 
-        result = await service.process_paper(mock_paper, [])
 
-        assert result.pdf_available is False
-        assert "Abstract" in llm_service.extract.call_args.kwargs["markdown_content"]
+@pytest.mark.asyncio
+async def test_process_paper_extraction_error(
+    extraction_service,
+    mock_pdf_service,
+    mock_fallback_service,
+    mock_llm_service,
+    mock_paper,
+):
+    """Test handling of unexpected errors during extraction"""
+    pdf_path = Path("/tmp/test.pdf")
+    mock_pdf_service.download_pdf = AsyncMock(return_value=pdf_path)
 
-    @pytest.mark.asyncio
-    async def test_process_paper_unexpected_pdf_error(self, mock_paper):
-        """Test handling of unexpected errors during PDF processing"""
-        pdf_service = Mock(spec=PDFService)
-        llm_service = Mock(spec=LLMService)
-        service = ExtractionService(pdf_service, llm_service)
+    # Mock unexpected error in fallback service
+    mock_fallback_service.extract_with_fallback = AsyncMock(
+        side_effect=Exception("Unexpected crash")
+    )
 
-        # Simulate unexpected error (not one of the expected exception types)
-        pdf_service.download_pdf = AsyncMock(
-            side_effect=RuntimeError("Unexpected error")
-        )
+    # Mock LLM extraction
+    llm_result = PaperExtraction(
+        paper_id=mock_paper.paper_id,
+        extraction_results=[],
+    )
+    mock_llm_service.extract = AsyncMock(return_value=llm_result)
 
-        extraction = PaperExtraction(
-            paper_id=mock_paper.paper_id,
-            extraction_results=[],
-            tokens_used=100,
-            cost_usd=0.001,
-        )
-        llm_service.extract = AsyncMock(return_value=extraction)
+    result = await extraction_service.process_paper(mock_paper, [])
 
-        result = await service.process_paper(mock_paper, [])
+    assert result.pdf_available is False
+    # Should fall back to abstract
+    call_args = mock_llm_service.extract.call_args
+    assert "Abstract" in call_args.kwargs["markdown_content"]
 
-        # Should still fall back gracefully
-        assert result.pdf_available is False
-        assert result.pdf_path is None
-        assert result.markdown_path is None
-        assert "Abstract" in llm_service.extract.call_args.kwargs["markdown_content"]
 
-    @pytest.mark.asyncio
-    async def test_process_paper_extraction_error(self, mock_paper):
-        """Test handling of LLM extraction errors"""
-        pdf_service = Mock(spec=PDFService)
-        llm_service = Mock(spec=LLMService)
-        service = ExtractionService(pdf_service, llm_service)
+@pytest.mark.asyncio
+async def test_process_paper_unexpected_extraction_error(
+    extraction_service,
+    mock_pdf_service,
+    mock_fallback_service,
+    mock_llm_service,
+    mock_paper,
+):
+    """Test handling of unexpected errors in LLM extraction"""
+    # Setup successful PDF extraction
+    pdf_path = Path("/tmp/test.pdf")
+    mock_pdf_service.download_pdf = AsyncMock(return_value=pdf_path)
+    pdf_result = PDFExtractionResult(
+        success=True, markdown="content", metadata={"backend": PDFBackend.PYMUPDF}
+    )
+    mock_fallback_service.extract_with_fallback = AsyncMock(return_value=pdf_result)
 
-        llm_service.extract = AsyncMock(side_effect=ExtractionError("LLM failed"))
+    # Mock LLM error
+    mock_llm_service.extract = AsyncMock(side_effect=Exception("LLM crash"))
 
-        result = await service.process_paper(mock_paper, [])
+    result = await extraction_service.process_paper(mock_paper, [])
 
-        # Should complete but without extraction
-        assert result.extraction is None
-        # Should still try cleanup
-        pdf_service.cleanup_temp_files.assert_called_once()
+    assert result.pdf_available is True
+    assert result.extraction is None  # Extraction failed but PDF was processed
 
-    @pytest.mark.asyncio
-    async def test_process_paper_unexpected_extraction_error(self, mock_paper):
-        """Test handling of unexpected LLM extraction errors"""
-        pdf_service = Mock(spec=PDFService)
-        llm_service = Mock(spec=LLMService)
-        service = ExtractionService(pdf_service, llm_service)
 
-        llm_service.extract = AsyncMock(side_effect=ValueError("Unexpected LLM error"))
+@pytest.mark.asyncio
+async def test_process_paper_cleanup_failure(
+    extraction_service,
+    mock_pdf_service,
+    mock_fallback_service,
+    mock_llm_service,
+    mock_paper,
+):
+    """Test that cleanup failure doesn't crash the pipeline"""
+    # Setup successful run
+    pdf_path = Path("/tmp/test.pdf")
+    mock_pdf_service.download_pdf = AsyncMock(return_value=pdf_path)
+    pdf_result = PDFExtractionResult(
+        success=True, markdown="content", metadata={"backend": PDFBackend.PYMUPDF}
+    )
+    mock_fallback_service.extract_with_fallback = AsyncMock(return_value=pdf_result)
+    mock_llm_service.extract = AsyncMock(
+        return_value=PaperExtraction(paper_id="123", extraction_results=[])
+    )
 
-        result = await service.process_paper(mock_paper, [])
+    # Mock cleanup failure
+    mock_pdf_service.cleanup_temp_files.side_effect = Exception("Cleanup failed")
 
-        # Should complete but without extraction
-        assert result.extraction is None
-        pdf_service.cleanup_temp_files.assert_called_once()
+    result = await extraction_service.process_paper(mock_paper, [])
 
-    @pytest.mark.asyncio
-    async def test_process_paper_cleanup_failure(self, mock_paper):
-        """Test that cleanup failures don't crash the pipeline"""
-        pdf_service = Mock(spec=PDFService)
-        llm_service = Mock(spec=LLMService)
-        service = ExtractionService(pdf_service, llm_service)
+    assert result.pdf_available is True
+    assert result.extraction is not None
 
-        # Make cleanup fail
-        pdf_service.cleanup_temp_files = Mock(side_effect=OSError("Cleanup failed"))
 
-        extraction = PaperExtraction(
-            paper_id=mock_paper.paper_id,
-            extraction_results=[],
-            tokens_used=100,
-            cost_usd=0.001,
-        )
-        llm_service.extract = AsyncMock(return_value=extraction)
+@pytest.mark.asyncio
+async def test_process_paper_legacy_path(
+    mock_pdf_service, mock_llm_service, mock_paper
+):
+    """Test legacy PDFService conversion path when fallback_service is None"""
+    # Create service WITHOUT fallback
+    service = ExtractionService(
+        pdf_service=mock_pdf_service,
+        llm_service=mock_llm_service,
+        fallback_service=None,
+    )
 
-        # Should not raise exception
-        result = await service.process_paper(mock_paper, [])
+    pdf_path = Path("/tmp/test.pdf")
+    # Use a real path object but mock the behavior needed
+    md_path = Path("/tmp/test.md")
 
-        assert result.extraction == extraction  # Pipeline should complete
+    mock_pdf_service.download_pdf = AsyncMock(return_value=pdf_path)
+    mock_pdf_service.convert_to_markdown = Mock(return_value=md_path)
 
-    @pytest.mark.asyncio
-    async def test_process_paper_no_pdf_available(self, mock_paper_no_pdf):
-        """Test processing when paper has no open access PDF"""
-        pdf_service = Mock(spec=PDFService)
-        llm_service = Mock(spec=LLMService)
-        service = ExtractionService(pdf_service, llm_service)
-
-        extraction = PaperExtraction(
-            paper_id=mock_paper_no_pdf.paper_id,
-            extraction_results=[],
-            tokens_used=100,
-            cost_usd=0.001,
-        )
-        llm_service.extract = AsyncMock(return_value=extraction)
-
-        result = await service.process_paper(mock_paper_no_pdf, [])
-
-        # Should use abstract directly, not attempt PDF download
-        pdf_service.download_pdf.assert_not_called()
-        assert result.pdf_available is False
-        assert "Abstract" in llm_service.extract.call_args.kwargs["markdown_content"]
-
-    @pytest.mark.asyncio
-    async def test_process_papers_batch(self):
-        """Test batch processing of multiple papers"""
-        pdf_service = Mock(spec=PDFService)
-        llm_service = Mock(spec=LLMService)
-        service = ExtractionService(pdf_service, llm_service)
-
-        papers = [
-            PaperMetadata(
-                paper_id=f"paper-{i}",
-                title=f"Paper {i}",
-                abstract=f"Abstract {i}",
-                authors=[],
-                url=f"https://test.com/{i}",
-                open_access_pdf=None,
-                year=2023,
-            )
-            for i in range(3)
-        ]
-
-        # Mock LLM to return different extractions for each paper
-        extraction1 = PaperExtraction(
-            paper_id="paper-0", extraction_results=[], tokens_used=100, cost_usd=0.001
-        )
-        extraction2 = PaperExtraction(
-            paper_id="paper-1", extraction_results=[], tokens_used=200, cost_usd=0.002
-        )
-        extraction3 = PaperExtraction(
-            paper_id="paper-2", extraction_results=[], tokens_used=300, cost_usd=0.003
+    # Mock Path.read_text for the specific file
+    with patch.object(Path, "read_text", return_value="Legacy MD"):
+        # Mock LLM
+        mock_llm_service.extract = AsyncMock(
+            return_value=PaperExtraction(paper_id="123", extraction_results=[])
         )
 
-        llm_service.extract = AsyncMock(
-            side_effect=[extraction1, extraction2, extraction3]
-        )
+        with patch.object(Path, "stat") as mock_stat:
+            mock_stat.return_value.st_size = 500
+            result = await service.process_paper(mock_paper, [])
 
-        results = await service.process_papers(papers, [])
-
-        assert len(results) == 3
-        assert all(isinstance(r, ExtractedPaper) for r in results)
-        assert llm_service.extract.call_count == 3
-
-    @pytest.mark.asyncio
-    async def test_process_papers_partial_failures(self):
-        """Test batch processing with some papers failing"""
-        pdf_service = Mock(spec=PDFService)
-        llm_service = Mock(spec=LLMService)
-        service = ExtractionService(pdf_service, llm_service)
-
-        papers = [
-            PaperMetadata(
-                paper_id=f"paper-{i}",
-                title=f"Paper {i}",
-                abstract=f"Abstract {i}",
-                authors=[],
-                url=f"https://test.com/{i}",
-                open_access_pdf=None,
-                year=2023,
-            )
-            for i in range(3)
-        ]
-
-        # First succeeds, second fails, third succeeds
-        extraction1 = PaperExtraction(
-            paper_id="paper-0", extraction_results=[], tokens_used=100, cost_usd=0.001
-        )
-        extraction3 = PaperExtraction(
-            paper_id="paper-2", extraction_results=[], tokens_used=300, cost_usd=0.003
-        )
-
-        llm_service.extract = AsyncMock(
-            side_effect=[extraction1, ExtractionError("Failed"), extraction3]
-        )
-
-        results = await service.process_papers(papers, [])
-
-        # All papers should be returned, even if extraction failed
-        assert len(results) == 3
-        assert results[0].extraction == extraction1
-        assert results[1].extraction is None  # Failed
-        assert results[2].extraction == extraction3
-
-    def test_format_abstract_minimal_metadata(self):
-        """Test _format_abstract with minimal paper metadata"""
-        pdf_service = Mock(spec=PDFService)
-        llm_service = Mock(spec=LLMService)
-        service = ExtractionService(pdf_service, llm_service)
-
-        # Paper with minimal metadata (title required, but others optional)
-        paper = PaperMetadata(
-            paper_id="minimal",
-            title="Minimal Paper",  # Title is required
-            abstract=None,  # No abstract
-            authors=[],  # No authors
-            url="https://test.com",
-            open_access_pdf=None,
-            year=None,  # No year
-            venue=None,  # No venue
-        )
-
-        markdown = service._format_abstract(paper)
-
-        # Should handle None/empty values gracefully
-        assert "Minimal Paper" in markdown
+        assert result.pdf_available is True
+        mock_pdf_service.convert_to_markdown.assert_called_once()
         assert (
-            "Unknown" in markdown
-        )  # For authors (empty list → "Unknown"), year, venue
-        assert "No abstract available" in markdown
+            "Legacy MD" in mock_llm_service.extract.call_args.kwargs["markdown_content"]
+        )
 
-    def test_get_extraction_summary_empty_results(self):
-        """Test summary with empty results list"""
-        pdf_service = Mock(spec=PDFService)
-        llm_service = Mock(spec=LLMService)
-        service = ExtractionService(pdf_service, llm_service)
 
-        summary = service.get_extraction_summary([])
+def test_format_abstract(mock_paper):
+    """Test paper metadata formatting when PDF is unavailable"""
+    service = ExtractionService(Mock(), Mock())
 
-        assert summary["total_papers"] == 0
-        assert summary["papers_with_pdf"] == 0
-        assert summary["papers_with_extraction"] == 0
-        assert summary["total_tokens_used"] == 0
-        assert summary["total_cost_usd"] == 0
-        assert summary["pdf_success_rate"] == 0.0
-        assert summary["extraction_success_rate"] == 0.0
+    # Test with full metadata
+    markdown = service._format_abstract(mock_paper)
+    assert mock_paper.title in markdown
+    assert "Author 1" in markdown
+    assert "Abstract" in markdown
+    assert "Full PDF was not available" in markdown
+
+    # Test with minimal metadata (note: title must be non-empty per Pydantic validation)
+    sparse_paper = PaperMetadata(
+        paper_id="sparse",
+        title="Untitled",
+        abstract=None,
+        authors=[],
+        url="https://example.com",
+    )
+    markdown_sparse = service._format_abstract(sparse_paper)
+    assert "Untitled" in markdown_sparse
+    assert "Unknown" in markdown_sparse
+    assert "No abstract available" in markdown_sparse

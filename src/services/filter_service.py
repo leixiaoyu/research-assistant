@@ -43,13 +43,11 @@ class FilterService:
             min_year=config.min_year,
             citation_weight=config.citation_weight,
             recency_weight=config.recency_weight,
-            relevance_weight=config.relevance_weight
+            relevance_weight=config.relevance_weight,
         )
 
     def filter_and_rank(
-        self,
-        papers: List[PaperMetadata],
-        query: str
+        self, papers: List[PaperMetadata], query: str
     ) -> List[PaperMetadata]:
         """
         Filter and rank papers by quality and relevance.
@@ -79,7 +77,7 @@ class FilterService:
             "filtering_complete",
             input=len(papers),
             filtered_out=self.stats.papers_filtered_out,
-            output=len(ranked_papers)
+            output=len(ranked_papers),
         )
 
         return ranked_papers
@@ -113,9 +111,7 @@ class FilterService:
         return filtered
 
     def _rank_papers(
-        self,
-        papers: List[PaperMetadata],
-        query: str
+        self, papers: List[PaperMetadata], query: str
     ) -> List[PaperMetadata]:
         """
         Rank papers by relevance score.
@@ -144,7 +140,9 @@ class FilterService:
         if scored_papers:
             self.stats.avg_citation_score = sum(citation_scores) / len(citation_scores)
             self.stats.avg_recency_score = sum(recency_scores) / len(recency_scores)
-            self.stats.avg_relevance_score = sum(relevance_scores) / len(relevance_scores)
+            self.stats.avg_relevance_score = sum(relevance_scores) / len(
+                relevance_scores
+            )
 
         # Sort by total score (descending)
         scored_papers.sort(key=lambda x: x[1].total_score, reverse=True)
@@ -173,9 +171,9 @@ class FilterService:
 
         # Weighted total
         total_score = (
-            self.config.citation_weight * citation_score +
-            self.config.recency_weight * recency_score +
-            self.config.relevance_weight * text_similarity
+            self.config.citation_weight * citation_score
+            + self.config.recency_weight * recency_score
+            + self.config.relevance_weight * text_similarity
         )
 
         return PaperScore(
@@ -183,7 +181,7 @@ class FilterService:
             citation_score=citation_score,
             recency_score=recency_score,
             text_similarity_score=text_similarity,
-            total_score=total_score
+            total_score=total_score,
         )
 
     @staticmethod

@@ -7,6 +7,7 @@ from datetime import datetime
 
 class CheckpointConfig(BaseModel):
     """Checkpoint configuration"""
+
     model_config = ConfigDict(protected_namespaces=())
 
     enabled: bool = True
@@ -16,6 +17,7 @@ class CheckpointConfig(BaseModel):
 
 class Checkpoint(BaseModel):
     """Checkpoint data for a run"""
+
     model_config = ConfigDict(protected_namespaces=())
 
     run_id: str

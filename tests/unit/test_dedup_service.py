@@ -13,7 +13,7 @@ def dedup_service():
         enabled=True,
         title_similarity_threshold=0.90,
         use_doi_matching=True,
-        use_title_matching=True
+        use_title_matching=True,
     )
     return DeduplicationService(config)
 
@@ -29,7 +29,7 @@ def sample_papers():
             url="https://arxiv.org/abs/1706.03762",
             abstract="Transformer architecture paper",
             citation_count=50000,
-            year=2017
+            year=2017,
         ),
         PaperMetadata(
             paper_id="paper2",
@@ -38,7 +38,7 @@ def sample_papers():
             url="https://arxiv.org/abs/1810.04805",
             abstract="BERT paper",
             citation_count=30000,
-            year=2018
+            year=2018,
         ),
         PaperMetadata(
             paper_id="paper3",
@@ -46,7 +46,7 @@ def sample_papers():
             url="https://arxiv.org/abs/2005.14165",
             abstract="GPT-3 paper",
             citation_count=20000,
-            year=2020
+            year=2020,
         ),
     ]
 
@@ -96,13 +96,13 @@ def test_title_similarity_matching(dedup_service):
             paper_id="paper1",
             title="Attention Is All You Need",
             url="https://arxiv.org/abs/1706.03762",
-            year=2017
+            year=2017,
         ),
         PaperMetadata(
             paper_id="paper2",
             title="Attention is all you need!",  # Very similar (punctuation difference)
             url="https://arxiv.org/abs/1706.03762",
-            year=2017
+            year=2017,
         ),
     ]
 
@@ -142,13 +142,13 @@ def test_title_similarity_threshold(dedup_service):
             paper_id="paper1",
             title="Attention Is All You Need",
             url="https://arxiv.org/abs/1",
-            year=2017
+            year=2017,
         ),
         PaperMetadata(
             paper_id="paper2",
             title="Attention Mechanism Survey",  # Different title (<90% similar)
             url="https://arxiv.org/abs/2",
-            year=2018
+            year=2018,
         ),
     ]
 
@@ -224,7 +224,7 @@ def test_disabled_dedup_service():
             paper_id="paper1",
             title="Test Paper",
             url="https://arxiv.org/abs/1",
-            year=2020
+            year=2020,
         )
     ]
 
@@ -243,7 +243,7 @@ def test_doi_matching_can_be_disabled():
     config = DedupConfig(
         enabled=True,
         use_doi_matching=False,  # Disable DOI matching
-        use_title_matching=True
+        use_title_matching=True,
     )
     service = DeduplicationService(config)
 
@@ -253,7 +253,7 @@ def test_doi_matching_can_be_disabled():
             title="Test Paper",
             doi="10.1234/test",
             url="https://arxiv.org/abs/1",
-            year=2020
+            year=2020,
         )
     ]
 
@@ -274,7 +274,7 @@ def test_title_matching_can_be_disabled():
     config = DedupConfig(
         enabled=True,
         use_doi_matching=True,
-        use_title_matching=False  # Disable title matching
+        use_title_matching=False,  # Disable title matching
     )
     service = DeduplicationService(config)
 
@@ -283,7 +283,7 @@ def test_title_matching_can_be_disabled():
             paper_id="paper1",
             title="Test Paper",
             url="https://arxiv.org/abs/1",
-            year=2020
+            year=2020,
         )
     ]
 

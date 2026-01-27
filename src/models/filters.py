@@ -1,11 +1,12 @@
 """Data models for paper filtering and ranking."""
 
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, List
+from typing import Optional
 
 
 class FilterConfig(BaseModel):
     """Paper filtering configuration"""
+
     model_config = ConfigDict(protected_namespaces=())
 
     min_citation_count: int = Field(0, ge=0)
@@ -21,6 +22,7 @@ class FilterConfig(BaseModel):
 
 class PaperScore(BaseModel):
     """Relevance score breakdown for a paper"""
+
     model_config = ConfigDict(protected_namespaces=())
 
     paper_id: str
@@ -32,6 +34,7 @@ class PaperScore(BaseModel):
 
 class FilterStats(BaseModel):
     """Paper filtering statistics"""
+
     model_config = ConfigDict(protected_namespaces=())
 
     total_papers_input: int = 0

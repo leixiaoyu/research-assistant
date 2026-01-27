@@ -1,11 +1,11 @@
 """Data models for deduplication system."""
 
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Set, Dict
 
 
 class DedupConfig(BaseModel):
     """Deduplication configuration"""
+
     model_config = ConfigDict(protected_namespaces=())
 
     enabled: bool = True
@@ -16,6 +16,7 @@ class DedupConfig(BaseModel):
 
 class DedupStats(BaseModel):
     """Deduplication statistics"""
+
     model_config = ConfigDict(protected_namespaces=())
 
     total_papers_checked: int = 0

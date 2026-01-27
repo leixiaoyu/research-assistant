@@ -42,7 +42,7 @@ class CheckpointService:
         logger.info(
             "checkpoint_service_initialized",
             checkpoint_dir=str(self.checkpoint_dir),
-            interval=config.checkpoint_interval
+            interval=config.checkpoint_interval,
         )
 
     def load_checkpoint(self, run_id: str) -> Optional[Checkpoint]:
@@ -65,7 +65,7 @@ class CheckpointService:
             return None
 
         try:
-            with open(checkpoint_file, 'r') as f:
+            with open(checkpoint_file, "r") as f:
                 data = json.load(f)
 
             checkpoint = Checkpoint(**data)
@@ -74,24 +74,17 @@ class CheckpointService:
                 "checkpoint_loaded",
                 run_id=run_id,
                 processed=len(checkpoint.processed_paper_ids),
-                completed=checkpoint.completed
+                completed=checkpoint.completed,
             )
 
             return checkpoint
 
         except Exception as e:
-            logger.error(
-                "checkpoint_load_error",
-                run_id=run_id,
-                error=str(e)
-            )
+            logger.error("checkpoint_load_error", run_id=run_id, error=str(e))
             return None
 
     def save_checkpoint(
-        self,
-        run_id: str,
-        processed_paper_ids: List[str],
-        completed: bool = False
+        self, run_id: str, processed_paper_ids: List[str], completed: bool = False
     ) -> bool:
         """
         Save checkpoint atomically.
@@ -112,16 +105,16 @@ class CheckpointService:
                 run_id=run_id,
                 processed_paper_ids=processed_paper_ids,
                 total_processed=len(processed_paper_ids),
-                completed=completed
+                completed=completed,
             )
 
             checkpoint_file = self._get_checkpoint_path(run_id)
 
             # Atomic write: write to temp file, then rename
-            temp_file = checkpoint_file.with_suffix('.tmp')
+            temp_file = checkpoint_file.with_suffix(".tmp")
 
-            with open(temp_file, 'w') as f:
-                json.dump(checkpoint.model_dump(mode='json'), f, indent=2, default=str)
+            with open(temp_file, "w") as f:
+                json.dump(checkpoint.model_dump(mode="json"), f, indent=2, default=str)
 
             # Atomic rename
             temp_file.rename(checkpoint_file)
@@ -130,17 +123,13 @@ class CheckpointService:
                 "checkpoint_saved",
                 run_id=run_id,
                 processed=len(processed_paper_ids),
-                completed=completed
+                completed=completed,
             )
 
             return True
 
         except Exception as e:
-            logger.error(
-                "checkpoint_save_error",
-                run_id=run_id,
-                error=str(e)
-            )
+            logger.error("checkpoint_save_error", run_id=run_id, error=str(e))
             return False
 
     def get_processed_ids(self, run_id: str) -> Set[str]:
@@ -177,9 +166,7 @@ class CheckpointService:
             return False
 
         return self.save_checkpoint(
-            run_id,
-            checkpoint.processed_paper_ids,
-            completed=True
+            run_id, checkpoint.processed_paper_ids, completed=True
         )
 
     def clear_checkpoint(self, run_id: str) -> bool:
@@ -206,11 +193,7 @@ class CheckpointService:
             return True
 
         except Exception as e:
-            logger.error(
-                "checkpoint_clear_error",
-                run_id=run_id,
-                error=str(e)
-            )
+            logger.error("checkpoint_clear_error", run_id=run_id, error=str(e))
             return False
 
     def list_checkpoints(self) -> List[str]:

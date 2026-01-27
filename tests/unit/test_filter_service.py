@@ -17,7 +17,7 @@ def filter_service():
         min_relevance_score=0.0,
         citation_weight=0.30,
         recency_weight=0.20,
-        relevance_weight=0.50
+        relevance_weight=0.50,
     )
     return FilterService(config)
 
@@ -34,7 +34,7 @@ def sample_papers():
             abstract="Study of attention in transformers",
             url="https://arxiv.org/abs/1",
             citation_count=5000,
-            year=current_year - 1  # Recent
+            year=current_year - 1,  # Recent
         ),
         PaperMetadata(
             paper_id="old_popular",
@@ -42,7 +42,7 @@ def sample_papers():
             abstract="Traditional approaches to neural networks",
             url="https://arxiv.org/abs/2",
             citation_count=10000,
-            year=current_year - 15  # Old
+            year=current_year - 15,  # Old
         ),
         PaperMetadata(
             paper_id="recent_unpopular",
@@ -50,7 +50,7 @@ def sample_papers():
             abstract="New approach to attention mechanisms",
             url="https://arxiv.org/abs/3",
             citation_count=10,
-            year=current_year  # Very recent
+            year=current_year,  # Very recent
         ),
         PaperMetadata(
             paper_id="moderate",
@@ -58,7 +58,7 @@ def sample_papers():
             abstract="Comprehensive survey of transformers and attention",
             url="https://arxiv.org/abs/4",
             citation_count=1000,
-            year=current_year - 3  # Moderate age
+            year=current_year - 3,  # Moderate age
         ),
     ]
 
@@ -77,7 +77,7 @@ def test_filter_by_citation_count(sample_papers):
         min_citation_count=100,  # Filter out papers with <100 citations
         citation_weight=0.30,
         recency_weight=0.20,
-        relevance_weight=0.50
+        relevance_weight=0.50,
     )
     service = FilterService(config)
 
@@ -98,7 +98,7 @@ def test_filter_by_year_range(sample_papers):
         max_year=current_year,
         citation_weight=0.30,
         recency_weight=0.20,
-        relevance_weight=0.50
+        relevance_weight=0.50,
     )
     service = FilterService(config)
 
@@ -162,7 +162,7 @@ def test_text_similarity_word_overlap(filter_service):
         title="Attention Mechanisms in Deep Learning",
         abstract="Study of attention mechanisms",
         url="https://arxiv.org/abs/1",
-        year=2020
+        year=2020,
     )
 
     # High overlap query
@@ -181,9 +181,7 @@ def test_text_similarity_word_overlap(filter_service):
 def test_ranking_order(sample_papers):
     """Test papers are ranked correctly by total score"""
     config = FilterConfig(
-        citation_weight=0.30,
-        recency_weight=0.20,
-        relevance_weight=0.50
+        citation_weight=0.30, recency_weight=0.20, relevance_weight=0.50
     )
     service = FilterService(config)
 
@@ -202,26 +200,20 @@ def test_relevance_weight_affects_ranking(sample_papers):
     """Test that relevance weight affects ranking order"""
     # High relevance weight (50%)
     config_high_relevance = FilterConfig(
-        citation_weight=0.25,
-        recency_weight=0.25,
-        relevance_weight=0.50
+        citation_weight=0.25, recency_weight=0.25, relevance_weight=0.50
     )
     service_high_relevance = FilterService(config_high_relevance)
     ranked_high_relevance = service_high_relevance.filter_and_rank(
-        sample_papers,
-        query="attention mechanisms"
+        sample_papers, query="attention mechanisms"
     )
 
     # High citation weight (50%)
     config_high_citations = FilterConfig(
-        citation_weight=0.50,
-        recency_weight=0.25,
-        relevance_weight=0.25
+        citation_weight=0.50, recency_weight=0.25, relevance_weight=0.25
     )
     service_high_citations = FilterService(config_high_citations)
     ranked_high_citations = service_high_citations.filter_and_rank(
-        sample_papers,
-        query="attention mechanisms"
+        sample_papers, query="attention mechanisms"
     )
 
     # Rankings might differ based on weights
@@ -243,7 +235,7 @@ def test_all_papers_filtered_out(sample_papers):
         min_citation_count=100000,  # Very high threshold
         citation_weight=0.30,
         recency_weight=0.20,
-        relevance_weight=0.50
+        relevance_weight=0.50,
     )
     service = FilterService(config)
 
@@ -275,7 +267,7 @@ def test_paper_with_no_abstract(filter_service):
         abstract=None,  # No abstract
         url="https://arxiv.org/abs/1",
         citation_count=100,
-        year=2020
+        year=2020,
     )
 
     # Should not crash
@@ -291,7 +283,7 @@ def test_paper_with_no_year(filter_service):
         abstract="Test abstract",
         url="https://arxiv.org/abs/1",
         citation_count=100,
-        year=None  # No year
+        year=None,  # No year
     )
 
     # Should not crash, should use neutral recency score

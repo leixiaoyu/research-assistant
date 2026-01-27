@@ -22,9 +22,7 @@ def temp_checkpoint_dir():
 def checkpoint_service(temp_checkpoint_dir):
     """Create checkpoint service with temp directory"""
     config = CheckpointConfig(
-        enabled=True,
-        checkpoint_dir=str(temp_checkpoint_dir),
-        checkpoint_interval=10
+        enabled=True, checkpoint_dir=str(temp_checkpoint_dir), checkpoint_interval=10
     )
     return CheckpointService(config)
 
@@ -32,10 +30,7 @@ def checkpoint_service(temp_checkpoint_dir):
 @pytest.fixture
 def disabled_checkpoint_service(temp_checkpoint_dir):
     """Create disabled checkpoint service"""
-    config = CheckpointConfig(
-        enabled=False,
-        checkpoint_dir=str(temp_checkpoint_dir)
-    )
+    config = CheckpointConfig(enabled=False, checkpoint_dir=str(temp_checkpoint_dir))
     return CheckpointService(config)
 
 
@@ -100,14 +95,14 @@ def test_atomic_save_uses_temp_file(checkpoint_service, temp_checkpoint_dir):
     assert checkpoint_file.exists()
 
     # Verify temp file doesn't exist (was renamed)
-    temp_file = checkpoint_file.with_suffix('.tmp')
+    temp_file = checkpoint_file.with_suffix(".tmp")
     assert not temp_file.exists()
 
     # Verify file content is valid JSON
-    with open(checkpoint_file, 'r') as f:
+    with open(checkpoint_file, "r") as f:
         data = json.load(f)
-        assert data['run_id'] == run_id
-        assert data['processed_paper_ids'] == processed_ids
+        assert data["run_id"] == run_id
+        assert data["processed_paper_ids"] == processed_ids
 
 
 def test_load_nonexistent_checkpoint(checkpoint_service):
@@ -122,7 +117,7 @@ def test_load_corrupted_checkpoint(checkpoint_service, temp_checkpoint_dir):
     checkpoint_file = temp_checkpoint_dir / f"{run_id}.json"
 
     # Create corrupted file
-    with open(checkpoint_file, 'w') as f:
+    with open(checkpoint_file, "w") as f:
         f.write("{ invalid json }")
 
     # Should return None and log error
@@ -244,9 +239,7 @@ def test_disabled_service_operations(disabled_checkpoint_service):
 def test_checkpoint_interval_config(temp_checkpoint_dir):
     """Test checkpoint interval configuration"""
     config = CheckpointConfig(
-        enabled=True,
-        checkpoint_dir=str(temp_checkpoint_dir),
-        checkpoint_interval=25
+        enabled=True, checkpoint_dir=str(temp_checkpoint_dir), checkpoint_interval=25
     )
     service = CheckpointService(config)
 

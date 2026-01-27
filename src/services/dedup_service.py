@@ -42,8 +42,7 @@ class DeduplicationService:
             logger.info("dedup_service_initialized")
 
     def find_duplicates(
-        self,
-        papers: List[PaperMetadata]
+        self, papers: List[PaperMetadata]
     ) -> Tuple[List[PaperMetadata], List[PaperMetadata]]:
         """
         Separate new papers from duplicates.
@@ -69,7 +68,7 @@ class DeduplicationService:
                 logger.debug(
                     "duplicate_detected",
                     paper_id=paper.paper_id,
-                    title=paper.title[:50]
+                    title=paper.title[:50],
                 )
             else:
                 new_papers.append(paper)
@@ -79,7 +78,7 @@ class DeduplicationService:
             total=len(papers),
             new=len(new_papers),
             duplicates=len(duplicates),
-            dedup_rate=f"{self.stats.dedup_rate:.1%}"
+            dedup_rate=f"{self.stats.dedup_rate:.1%}",
         )
 
         return new_papers, duplicates
@@ -106,9 +105,7 @@ class DeduplicationService:
 
             for existing_title in self.title_index.keys():
                 similarity = SequenceMatcher(
-                    None,
-                    normalized_title,
-                    existing_title
+                    None, normalized_title, existing_title
                 ).ratio()
 
                 if similarity >= self.config.title_similarity_threshold:
@@ -116,7 +113,7 @@ class DeduplicationService:
                     logger.debug(
                         "duplicate_by_title",
                         new_title=paper.title[:50],
-                        similarity=f"{similarity:.2f}"
+                        similarity=f"{similarity:.2f}",
                     )
                     return True
 
@@ -137,9 +134,9 @@ class DeduplicationService:
         # Lowercase
         title = title.lower()
         # Remove punctuation
-        title = re.sub(r'[^\w\s]', '', title)
+        title = re.sub(r"[^\w\s]", "", title)
         # Remove extra whitespace
-        title = ' '.join(title.split())
+        title = " ".join(title.split())
         return title
 
     def update_indices(self, papers: List[PaperMetadata]):
@@ -167,7 +164,7 @@ class DeduplicationService:
             new_dois=len([p for p in papers if p.doi]),
             new_titles=len(papers),
             total_dois=self.stats.unique_dois_indexed,
-            total_titles=self.stats.unique_titles_indexed
+            total_titles=self.stats.unique_titles_indexed,
         )
 
     def get_stats(self) -> DedupStats:

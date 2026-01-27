@@ -16,6 +16,7 @@
 
 ## Verification Results
 <!-- Attach evidence of local verification -->
+- [ ] **Verified in isolated git worktree** (Mandatory for complex PRs)
 - **Test Pass Rate**: 100% (X/X tests)
 - **Overall Coverage**: X% (MUST be >= 95%)
 - **Module Coverage**: All modules >= 95%

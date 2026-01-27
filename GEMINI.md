@@ -39,11 +39,40 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
 2. **Requirements Verification:**
    - **Functional:** Ensure 100% of the features specified in the relevant `PHASE_X_SPEC.md` are implemented and function correctly.
    - **Non-Functional:** Verify performance, observability (logging), and resilience (error handling) meet project standards.
-3. **Local Verification:** Reviewers SHOULD fetch the branch and verify results locally:
-   - Confirm **100% Pass Rate** for automated tests.
-   - Verify **≥95% Coverage** per module. **Test coverage is non-negotiable.**
-   - Run **Flake8**, **Black**, and **Mypy** to ensure zero regressions.
-   - Check alignment with `ci.yml` enforcement rules.
+3. **Local Verification (Mandatory Isolated Review):** Reviewers MUST fetch the branch and verify results locally in an isolated environment to prevent workspace pollution and ensure binary accuracy.
+
+   **Scope:** This is **MANDATORY** for "Complex PRs" (involving code changes in `src/` or `tests/`, configuration updates, or architectural docs) and **RECOMMENDED** for all others.
+
+   **Workflow:**
+   1. **Isolate:** Create a clean worktree:
+      ```bash
+      git fetch origin pull/ID/head:pr-ID
+      git worktree add ../pr-review-ID pr-ID
+      cd ../pr-review-ID
+      ```
+   2. **Initialize:** Set up the environment (crucial for accurate testing):
+      ```bash
+      python3 -m venv venv
+      source venv/bin/activate
+      pip install -r requirements.txt
+      cp .env.template .env
+      # Add dummy keys to .env if needed for non-integration tests
+      ```
+   3. **Verify:** Run the verification suite:
+      ```bash
+      ./verify.sh
+      ```
+      - **100% Pass Rate** for automated tests.
+      - **≥95% Coverage** per module.
+      - **Zero Formatting/Linting/Type Issues.**
+   4. **Cleanup:** Safely remove the worktree:
+      ```bash
+      cd ..
+      git worktree remove pr-review-ID
+      # Only if directory remains: rm -rf pr-review-ID
+      ```
+
+   **Environment Integrity:** Ensure the PR does not inherit or introduce environmental dependencies (e.g., hardcoded paths, local secrets) that bypass CI checks.
 4. **Technical Assessment & Rigor:**
    - **Engineering Best Practices:** Adherence to SOLID, DRY, and KISS principles is mandatory.
    - **API Implementation:** Verify protocol security (HTTPS), parameter accuracy, and graceful error handling.

@@ -39,11 +39,14 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
 2. **Requirements Verification:**
    - **Functional:** Ensure 100% of the features specified in the relevant `PHASE_X_SPEC.md` are implemented and function correctly.
    - **Non-Functional:** Verify performance, observability (logging), and resilience (error handling) meet project standards.
-3. **Local Verification:** Reviewers SHOULD fetch the branch and verify results locally:
-   - Confirm **100% Pass Rate** for automated tests.
-   - Verify **≥95% Coverage** per module. **Test coverage is non-negotiable.**
-   - Run **`./verify.sh`** to ensure zero regressions.
-   - Check alignment with `ci.yml` enforcement rules.
+3. **Local Verification (Mandatory Isolated Review):** Reviewers MUST fetch the branch and verify results locally in an isolated environment to prevent workspace pollution.
+   - **Isolate:** Use `git worktree add ../pr-review-ID pr-ID` to create a clean directory.
+   - **Initialize:** Set up a fresh `venv` and install dependencies (`pip install -r requirements.txt`).
+   - **Verify:** Run `./verify.sh` to confirm:
+     - **100% Pass Rate** for automated tests.
+     - **≥95% Coverage** per module.
+     - **Zero Formatting/Linting/Type Issues.**
+   - **Cleanup:** Use `git worktree remove` to clean up.
 4. **Technical Assessment & Rigor:**
    - **Engineering Best Practices:** Adherence to SOLID, DRY, and KISS principles is mandatory.
    - **API Implementation:** Verify protocol security (HTTPS), parameter accuracy, and graceful error handling.

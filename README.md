@@ -197,6 +197,7 @@ output/
 - [Phase 2.5: PDF Reliability](docs/specs/PHASE_2.5_SPEC.md) - ✅ Complete (Multi-Backend Fallback Chain)
 - [Phase 3: Intelligence Layer](docs/specs/PHASE_3_SPEC.md) - ⏳ Next (Cache, Dedup, Filters)
 - [Phase 3.1: Concurrent Orchestration](docs/specs/PHASE_3.1_SPEC.md) - 📋 Planned (Performance & Concurrency)
+- [Phase 3.2: Semantic Scholar Activation](docs/specs/PHASE_3.2_SPEC.md) - 🎯 Ready (Multi-Provider Intelligence)
 - [Phase 4: Hardening](docs/specs/PHASE_4_SPEC.md) - 📋 Planned (Production Readiness)
 
 ### Proposals

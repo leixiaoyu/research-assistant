@@ -15,7 +15,7 @@ ARISP automates the research process by:
 - 🤖 **Extracting** prompts, code, and insights using LLM (Claude/Gemini)
 - 📝 **Synthesizing** Obsidian-ready markdown briefs for engineering teams
 
-**✨ Phase 2 Complete:** Full PDF processing and LLM extraction pipeline now production-ready with 100% test coverage!
+**✨ Phase 2.5 Complete:** Production-hardened PDF extraction with multi-backend fallback chain and 97% test coverage!
 
 ## ✨ Key Features
 
@@ -26,12 +26,13 @@ ARISP automates the research process by:
 - **Intelligent Cataloging**: Automatic deduplication and topic organization
 - **100% PDF Access**: ArXiv guarantees open access PDFs for all papers
 
-### Extraction (Phase 2) ✅ Complete
+### Extraction (Phase 2 + 2.5) ✅ Complete
 - **LLM-Powered Analysis**: Claude 3.5 Sonnet or Gemini 3 Flash Preview
 - **Configurable Targets**: Extract prompts, code, metrics, summaries per topic
 - **Cost Controls**: Budget limits, usage tracking, smart filtering
-- **Fallback Strategies**: Abstract-only mode when PDFs unavailable
-- **PDF Processing**: marker-pdf integration with graceful fallback
+- **Multi-Backend PDF Processing**: PyMuPDF (fast) → PDFPlumber (tables) → Pandoc (fallback)
+- **Quality-Based Selection**: Automatic backend selection using heuristic scoring
+- **Reliability-First**: 100% test coverage on all extractors, production-hardened
 - **Enhanced Output**: Token/cost tracking, confidence scores, extraction summaries
 
 ### Intelligence (Phase 3)
@@ -193,11 +194,14 @@ output/
 - [Phase 1: Foundation](docs/specs/PHASE_1_SPEC.md) - ✅ Complete (Discovery, Catalog, Config)
 - [Phase 1.5: Provider Abstraction](docs/specs/PHASE_1_5_SPEC.md) - ✅ Complete (ArXiv Integration)
 - [Phase 2: Extraction](docs/specs/PHASE_2_SPEC.md) - ✅ Complete (PDF & LLM Extraction)
-- [Phase 3: Optimization](docs/specs/PHASE_3_SPEC.md) - ⏳ Next (Performance & Intelligence)
+- [Phase 2.5: PDF Reliability](docs/specs/PHASE_2.5_SPEC.md) - ✅ Complete (Multi-Backend Fallback Chain)
+- [Phase 3: Intelligence Layer](docs/specs/PHASE_3_SPEC.md) - ⏳ Next (Cache, Dedup, Filters)
+- [Phase 3.1: Concurrent Orchestration](docs/specs/PHASE_3.1_SPEC.md) - 📋 Planned (Performance & Concurrency)
 - [Phase 4: Hardening](docs/specs/PHASE_4_SPEC.md) - 📋 Planned (Production Readiness)
 
 ### Proposals
-- [Proposal 001: Discovery Provider Strategy](docs/proposals/001_DISCOVERY_PROVIDER_STRATEGY.md) - ✅ Approved
+- [Proposal 001: Discovery Provider Strategy](docs/proposals/001_DISCOVERY_PROVIDER_STRATEGY.md) - ✅ Approved & Implemented
+- [Proposal 002: PDF Extraction Reliability](docs/proposals/002_PDF_EXTRACTION_RELIABILITY.md) - ✅ Approved & Implemented
 
 ### Development
 - [CLAUDE.md](CLAUDE.md) - Development guide for Claude Code integration
@@ -206,7 +210,7 @@ output/
 
 ## 🏗️ Project Status
 
-**Current Phase**: Phase 2 Complete / Phase 3 Ready to Start
+**Current Phase**: Phase 2.5 Complete / Phase 3 Ready to Start
 
 **Timeline**:
 ```
@@ -445,4 +449,4 @@ timeframe:
 
 **Built with ❤️ for research teams who want to stay ahead**
 
-**Status**: Phase 2 Complete - Production-ready LLM extraction pipeline 🚀
+**Status**: Phase 2.5 Complete - Production-hardened multi-backend PDF extraction with 97% coverage 🚀

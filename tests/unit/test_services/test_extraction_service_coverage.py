@@ -1,7 +1,7 @@
 """Unit tests for ExtractionService with FallbackPDFService integration."""
 
 import pytest
-from unittest.mock import Mock, AsyncMock
+from unittest.mock import Mock, AsyncMock, patch
 from pathlib import Path
 
 from src.services.extraction_service import ExtractionService
@@ -40,11 +40,13 @@ def extraction_service(mock_pdf_service, mock_llm_service, mock_fallback_service
 
 @pytest.fixture
 def mock_paper():
+    from src.models.paper import Author
+
     return PaperMetadata(
         paper_id="2301.12345",
         title="Test Paper",
         abstract="Test abstract",
-        authors=[],
+        authors=[Author(name="Author 1")],
         url="https://arxiv.org/abs/2301.12345",
         open_access_pdf="https://arxiv.org/pdf/2301.12345.pdf",
         year=2023,
@@ -221,3 +223,65 @@ async def test_process_paper_cleanup_failure(
 
     assert result.pdf_available is True
     assert result.extraction is not None
+
+
+@pytest.mark.asyncio
+async def test_process_paper_legacy_path(
+    mock_pdf_service, mock_llm_service, mock_paper
+):
+    """Test legacy PDFService conversion path when fallback_service is None"""
+    # Create service WITHOUT fallback
+    service = ExtractionService(
+        pdf_service=mock_pdf_service,
+        llm_service=mock_llm_service,
+        fallback_service=None,
+    )
+
+    pdf_path = Path("/tmp/test.pdf")
+    # Use a real path object but mock the behavior needed
+    md_path = Path("/tmp/test.md")
+
+    mock_pdf_service.download_pdf = AsyncMock(return_value=pdf_path)
+    mock_pdf_service.convert_to_markdown = Mock(return_value=md_path)
+
+    # Mock Path.read_text for the specific file
+    with patch.object(Path, "read_text", return_value="Legacy MD"):
+        # Mock LLM
+        mock_llm_service.extract = AsyncMock(
+            return_value=PaperExtraction(paper_id="123", extraction_results=[])
+        )
+
+        with patch.object(Path, "stat") as mock_stat:
+            mock_stat.return_value.st_size = 500
+            result = await service.process_paper(mock_paper, [])
+
+        assert result.pdf_available is True
+        mock_pdf_service.convert_to_markdown.assert_called_once()
+        assert (
+            "Legacy MD" in mock_llm_service.extract.call_args.kwargs["markdown_content"]
+        )
+
+
+def test_format_abstract(mock_paper):
+    """Test paper metadata formatting when PDF is unavailable"""
+    service = ExtractionService(Mock(), Mock())
+
+    # Test with full metadata
+    markdown = service._format_abstract(mock_paper)
+    assert mock_paper.title in markdown
+    assert "Author 1" in markdown
+    assert "Abstract" in markdown
+    assert "Full PDF was not available" in markdown
+
+    # Test with minimal metadata
+    sparse_paper = PaperMetadata(
+        paper_id="sparse",
+        title="",
+        abstract="",
+        authors=[],
+        url="https://example.com",
+    )
+    markdown_sparse = service._format_abstract(sparse_paper)
+    assert "Untitled Paper" in markdown_sparse
+    assert "Unknown" in markdown_sparse
+    assert "No abstract available" in markdown_sparse

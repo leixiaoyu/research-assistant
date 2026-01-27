@@ -2,7 +2,7 @@
 
 import pytest
 import subprocess
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
 from pathlib import Path
 from src.services.pdf_extractors.pandoc_extractor import PandocExtractor
 from src.models.pdf_extraction import PDFBackend
@@ -20,7 +20,7 @@ def test_name(extractor):
 def test_validate_setup(extractor):
     with patch("shutil.which", return_value="/usr/bin/pandoc"):
         assert extractor.validate_setup() is True
-    
+
     with patch("shutil.which", return_value=None):
         assert extractor.validate_setup() is False
 
@@ -37,16 +37,18 @@ async def test_extract_pandoc_not_found(extractor):
 async def test_extract_success(extractor):
     with patch("shutil.which", return_value="/usr/bin/pandoc"):
         # Mock Path stats and operations
-        with patch.object(Path, "stat") as mock_stat, \
-             patch.object(Path, "exists", return_value=True), \
-             patch.object(Path, "read_text", return_value="Pandoc output"), \
-             patch.object(Path, "unlink") as mock_unlink:
-            
+        with patch.object(Path, "stat") as mock_stat, patch.object(
+            Path, "exists", return_value=True
+        ), patch.object(Path, "read_text", return_value="Pandoc output"), patch.object(
+            Path, "unlink"
+        ):
+
             mock_stat.return_value.st_size = 1024
 
             # Mock subprocess and temp file
-            with patch("subprocess.run") as mock_run, \
-                 patch("tempfile.NamedTemporaryFile") as mock_temp:
+            with patch("subprocess.run") as mock_run, patch(
+                "tempfile.NamedTemporaryFile"
+            ) as mock_temp:
 
                 mock_temp.return_value.__enter__.return_value.name = "/tmp/fake.md"
                 mock_run.return_value.returncode = 0
@@ -62,7 +64,10 @@ async def test_extract_success(extractor):
 async def test_extract_timeout(extractor):
     with patch("shutil.which", return_value="/usr/bin/pandoc"):
         with patch.object(Path, "exists", return_value=True):
-            with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="pandoc", timeout=60)):
+            with patch(
+                "subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd="pandoc", timeout=60),
+            ):
                 result = await extractor.extract(Path("test.pdf"))
                 assert result.success is False
                 assert "timed out" in result.error
@@ -75,7 +80,7 @@ async def test_extract_error(extractor):
             # Mock CalledProcessError
             mock_error = subprocess.CalledProcessError(1, "pandoc")
             mock_error.stderr = b"Pandoc error message"
-            
+
             with patch("subprocess.run", side_effect=mock_error):
                 result = await extractor.extract(Path("test.pdf"))
                 assert result.success is False

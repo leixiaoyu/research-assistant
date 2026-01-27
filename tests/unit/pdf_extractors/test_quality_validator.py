@@ -1,6 +1,5 @@
 """Unit tests for quality validator."""
 
-import sys
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -129,7 +128,7 @@ def test_get_page_count_mock(validator):
     mock_doc.__len__.return_value = 5
     mock_fitz.open.return_value = mock_doc
 
-    with patch.dict('sys.modules', {'fitz': mock_fitz}):
+    with patch.dict("sys.modules", {"fitz": mock_fitz}):
         assert validator._get_page_count(Path("test.pdf")) == 5
         mock_doc.close.assert_called_once()
 
@@ -137,7 +136,7 @@ def test_get_page_count_mock(validator):
     mock_fitz_error = MagicMock()
     mock_fitz_error.open.side_effect = Exception("Failed")
 
-    with patch.dict('sys.modules', {'fitz': mock_fitz_error}):
+    with patch.dict("sys.modules", {"fitz": mock_fitz_error}):
         assert validator._get_page_count(Path("test.pdf")) == 0
 
 

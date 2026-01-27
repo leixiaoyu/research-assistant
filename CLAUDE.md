@@ -387,6 +387,89 @@ The project includes a comprehensive verification script that runs all required 
 - If legitimately uncoverable: Document in verification report
 - If uncertain: Ask for clarification, do NOT push
 
+### Pull Request Quality Checklist
+
+**⚠️ CRITICAL: Run `./verify.sh` BEFORE creating a Pull Request**
+
+**This checklist must be completed 100% before creating or updating any PR:**
+
+1. **✅ Format Check (Black)**
+   ```bash
+   black .  # Format all files
+   black --check .  # Verify no changes needed
+   ```
+   - Status: MUST show "All done! ✨ 🍰 ✨ ... files would be left unchanged"
+   - If fails: Run `black .` and commit the formatting changes
+
+2. **✅ Linting Check (Flake8)**
+   ```bash
+   flake8 src/ tests/
+   ```
+   - Status: MUST show 0 errors
+   - Common issues to fix:
+     - Unused imports (F401)
+     - Line too long (E501) - max 88 characters
+     - Undefined names (F821)
+
+3. **✅ Type Check (Mypy)**
+   ```bash
+   mypy src/
+   ```
+   - Status: MUST show "Success: no issues found"
+   - If fails: Fix all type errors before proceeding
+
+4. **✅ Module-Level Coverage Check**
+   ```bash
+   pytest --cov=src --cov-report=term-missing
+   ```
+   - **CRITICAL:** Check coverage for EVERY modified module
+   - **Minimum per module:** ≥95% (hard requirement)
+   - **Overall project:** ≥95% (hard requirement)
+   - If any module < 95%:
+     - Add comprehensive tests for uncovered lines
+     - Test exception handling, error paths, edge cases
+     - Do NOT create PR until all modules ≥95%
+
+5. **✅ Test Pass Rate**
+   ```bash
+   pytest tests/
+   ```
+   - Status: MUST show "X passed, 0 failed"
+   - 100% pass rate required (zero failures allowed)
+
+6. **✅ Verification Script**
+   ```bash
+   ./verify.sh
+   ```
+   - Status: MUST show "✅ All checks passed!"
+   - This runs all checks above in one command
+   - **If this fails, do NOT create PR**
+
+7. **✅ Dependency Pinning**
+   - All dependencies in `requirements.txt` use exact versions (`==`)
+   - No loose version constraints (`>=`, `~=`, `^`)
+   - Example: `diskcache==5.6.3` ✅, NOT `diskcache>=5.6.0` ❌
+
+**After completing checklist:**
+- Review the PR description to ensure it clearly explains what was changed and why
+- Ensure all commits have clear, descriptive messages
+- Link to relevant issues or documentation
+- If addressing review feedback, respond to all comments
+
+**Common Quality Gate Failures and Fixes:**
+
+| Issue | Fix |
+|-------|-----|
+| Black formatting fails | Run `black .` and commit changes |
+| Module coverage < 95% | Add tests for uncovered lines (exception handling, edge cases) |
+| Flake8 unused imports | Remove unused imports |
+| Flake8 line too long | Break line into multiple lines (max 88 chars) |
+| Mypy type errors | Add proper type hints or use `# type: ignore` with justification |
+| Test failures | Fix the code or test logic causing failure |
+| Dependency not pinned | Change `>=X.Y.Z` to `==X.Y.Z` in requirements.txt |
+
+**Remember: Quality gates exist to maintain code quality and prevent regressions. Running `./verify.sh` before creating a PR saves everyone time and ensures smooth reviews.**
+
 ### CI/CD Enforcement
 
 **The CI pipeline enforces all quality gates automatically.**

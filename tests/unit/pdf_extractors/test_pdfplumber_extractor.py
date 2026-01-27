@@ -95,3 +95,81 @@ async def test_extract_with_table(extractor):
                 assert "| Header1 | Header2 |" in result.markdown
                 assert "| Val1 | Val2 |" in result.markdown
                 assert result.metadata.tables_found == 1
+
+
+@pytest.mark.asyncio
+async def test_extract_file_not_found(extractor):
+    """Test extraction when PDF file doesn't exist"""
+    with patch.object(extractor, "validate_setup", return_value=True):
+        with patch.object(Path, "exists", return_value=False):
+            result = await extractor.extract(Path("nonexistent.pdf"))
+            assert result.success is False
+            assert "not found" in result.error
+
+
+@pytest.mark.asyncio
+async def test_extract_general_exception(extractor):
+    """Test handling of unexpected exceptions during extraction"""
+    with patch.object(Path, "exists", return_value=True):
+        with patch.dict(
+            "sys.modules",
+            {
+                "pdfplumber": Mock(
+                    open=Mock(side_effect=RuntimeError("Unexpected error"))
+                )
+            },
+        ):
+            result = await extractor.extract(Path("test.pdf"))
+            assert result.success is False
+            assert "Unexpected error" in result.error
+
+
+@pytest.mark.asyncio
+async def test_extract_empty_table(extractor):
+    """Test handling of empty tables"""
+    mock_pdf = MagicMock()
+    mock_page = Mock()
+    mock_page.extract_text.return_value = "Text"
+    # Empty table (less than 2 rows)
+    mock_page.extract_tables.return_value = [[["Header1"]]]
+
+    mock_pdf.pages = [mock_page]
+    mock_pdf.__enter__.return_value = mock_pdf
+
+    with patch.dict(
+        "sys.modules", {"pdfplumber": Mock(open=Mock(return_value=mock_pdf))}
+    ):
+        with patch.object(Path, "exists", return_value=True):
+            with patch.object(Path, "stat") as mock_stat:
+                mock_stat.return_value.st_size = 1024
+
+                result = await extractor.extract(Path("test.pdf"))
+
+                # Should succeed but skip the invalid table
+                assert result.success is True
+                assert "Text" in result.markdown
+
+
+@pytest.mark.asyncio
+async def test_extract_malformed_table(extractor):
+    """Test handling of malformed tables that raise exceptions during conversion"""
+    mock_pdf = MagicMock()
+    mock_page = Mock()
+    mock_page.extract_text.return_value = "Text"
+    # Malformed table that will cause exception in _table_to_markdown
+    mock_page.extract_tables.return_value = [[None, None]]
+
+    mock_pdf.pages = [mock_page]
+    mock_pdf.__enter__.return_value = mock_pdf
+
+    with patch.dict(
+        "sys.modules", {"pdfplumber": Mock(open=Mock(return_value=mock_pdf))}
+    ):
+        with patch.object(Path, "exists", return_value=True):
+            with patch.object(Path, "stat") as mock_stat:
+                mock_stat.return_value.st_size = 1024
+
+                result = await extractor.extract(Path("test.pdf"))
+
+                # Should succeed, table conversion error is caught
+                assert result.success is True

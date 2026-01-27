@@ -86,3 +86,24 @@ async def test_extract_error(extractor):
                 assert result.success is False
                 assert "Pandoc failed" in result.error
                 assert "Pandoc error message" in result.error
+
+
+@pytest.mark.asyncio
+async def test_extract_file_not_found(extractor):
+    """Test extraction when PDF file doesn't exist"""
+    with patch("shutil.which", return_value="/usr/bin/pandoc"):
+        with patch.object(Path, "exists", return_value=False):
+            result = await extractor.extract(Path("nonexistent.pdf"))
+            assert result.success is False
+            assert "not found" in result.error
+
+
+@pytest.mark.asyncio
+async def test_extract_general_exception(extractor):
+    """Test handling of unexpected exceptions during extraction"""
+    with patch("shutil.which", return_value="/usr/bin/pandoc"):
+        with patch.object(Path, "exists", return_value=True):
+            with patch("subprocess.run", side_effect=RuntimeError("Unexpected error")):
+                result = await extractor.extract(Path("test.pdf"))
+                assert result.success is False
+                assert "Unexpected error" in result.error

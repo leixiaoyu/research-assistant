@@ -138,3 +138,31 @@ async def test_all_backends_fail(service, mock_extractors):
 
     assert result.success is False
     assert result.backend == PDFBackend.TEXT_ONLY
+
+
+@pytest.mark.asyncio
+async def test_multiple_successful_backends_picks_best(service, mock_extractors):
+    """Test multiple backends - picks one with highest quality"""
+    result1 = PDFExtractionResult(
+        success=True,
+        markdown="Content 1",
+        metadata=ExtractionMetadata(backend=PDFBackend.PYMUPDF),
+    )
+    result2 = PDFExtractionResult(
+        success=True,
+        markdown="Content 2",
+        metadata=ExtractionMetadata(backend=PDFBackend.PDFPLUMBER),
+    )
+
+    mock_extractors["pymupdf"].extract = AsyncMock(return_value=result1)
+    mock_extractors["pdfplumber"].extract = AsyncMock(return_value=result2)
+
+    # First scores 0.6, second scores 0.9 (both pass threshold)
+    # stop_on_success=True means we still try both to compare
+    service.config.stop_on_success = False  # Force trying both
+    with patch.object(service.validator, "score_extraction", side_effect=[0.6, 0.9]):
+        result = await service.extract_with_fallback(Path("test.pdf"))
+
+        assert result.success is True
+        assert result.backend == PDFBackend.PDFPLUMBER
+        assert result.quality_score == 0.9  # Higher quality selected

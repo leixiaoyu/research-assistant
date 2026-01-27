@@ -39,11 +39,14 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
 2. **Requirements Verification:**
    - **Functional:** Ensure 100% of the features specified in the relevant `PHASE_X_SPEC.md` are implemented and function correctly.
    - **Non-Functional:** Verify performance, observability (logging), and resilience (error handling) meet project standards.
-3. **Local Verification:** Reviewers SHOULD fetch the branch and verify results locally:
-   - Confirm **100% Pass Rate** for automated tests.
-   - Verify **≥95% Coverage** per module. **Test coverage is non-negotiable.**
-   - Run **Flake8**, **Black**, and **Mypy** to ensure zero regressions.
-   - Check alignment with `ci.yml` enforcement rules.
+3. **Local Verification (Mandatory Isolated Review):** Reviewers MUST fetch the branch and verify results locally in an isolated environment to prevent workspace pollution and ensure binary accuracy:
+   - **Isolated Worktree:** Use `git worktree add ../pr-review-X pr-branch` to create a dedicated, clean directory for the review. **NEVER** review complex PRs in a dirty or shared workspace.
+   - **Verification Script:** Run `./verify.sh` in the clean worktree to confirm:
+     - **100% Pass Rate** for automated tests.
+     - **≥95% Coverage** per module. **Test coverage is non-negotiable.**
+     - **Formatting & Types:** Zero issues from Black, Flake8, and Mypy.
+   - **Environment Integrity:** Ensure the PR does not inherit or introduce environmental dependencies that bypass CI checks.
+   - **Cleanup:** Remove the worktree only after the final assessment is posted.
 4. **Technical Assessment & Rigor:**
    - **Engineering Best Practices:** Adherence to SOLID, DRY, and KISS principles is mandatory.
    - **API Implementation:** Verify protocol security (HTTPS), parameter accuracy, and graceful error handling.

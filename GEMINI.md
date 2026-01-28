@@ -58,6 +58,7 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
       cp .env.template .env
       # Add dummy keys to .env if needed for non-integration tests
       ```
+      *Note: This setup adds ~1-2 minutes per review but is essential to prevent false positives/negatives caused by dirty environments.*
    3. **Verify:** Run the verification suite:
       ```bash
       ./verify.sh

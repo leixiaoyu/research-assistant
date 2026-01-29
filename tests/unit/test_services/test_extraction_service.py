@@ -7,7 +7,7 @@ from src.services.pdf_service import PDFService
 from src.services.llm_service import LLMService
 from src.models.paper import PaperMetadata, Author
 from src.models.extraction import PaperExtraction, ExtractedPaper
-from src.utils.exceptions import PDFDownloadError
+from src.utils.exceptions import PDFDownloadError, ExtractionError
 
 
 @pytest.fixture
@@ -120,3 +120,123 @@ class TestExtractionService:
         assert summary["total_tokens_used"] == 2000
         assert summary["total_cost_usd"] == 0.02
         assert summary["pdf_success_rate"] == 50.0
+
+    @pytest.mark.asyncio
+    async def test_process_paper_no_pdf_url(self, extraction_service, mock_llm_service):
+        """Test processing paper with no open_access_pdf URL (lines 176-177)"""
+        # Create paper without PDF URL
+        paper_no_pdf = PaperMetadata(
+            paper_id="2301.99999",
+            title="No PDF Paper",
+            abstract="This paper has no open access PDF",
+            authors=[Author(name="Author 1")],
+            url="https://arxiv.org/abs/2301.99999",
+            open_access_pdf=None,  # No PDF URL
+            year=2023,
+        )
+
+        extraction = PaperExtraction(
+            paper_id=paper_no_pdf.paper_id,
+            extraction_results=[],
+            tokens_used=500,
+            cost_usd=0.005,
+        )
+        mock_llm_service.extract = AsyncMock(return_value=extraction)
+
+        result = await extraction_service.process_paper(paper_no_pdf, [])
+
+        # Should use abstract-only path (lines 176-177)
+        assert result.pdf_available is False
+        assert result.pdf_path is None
+        assert result.markdown_path is None
+        assert result.extraction == extraction
+
+        # Verify LLM was called with abstract-based markdown
+        args, kwargs = mock_llm_service.extract.call_args
+        assert "Abstract" in kwargs["markdown_content"]
+        assert "No PDF Paper" in kwargs["markdown_content"]
+
+    @pytest.mark.asyncio
+    async def test_process_paper_extraction_error(
+        self, extraction_service, mock_pdf_service, mock_llm_service, mock_paper
+    ):
+        """Test graceful handling of LLM extraction errors (line 194)"""
+        # Setup PDF service to succeed
+        mock_pdf_path = MagicMock(spec=Path)
+        mock_pdf_path.__str__ = Mock(return_value="/tmp/test.pdf")
+        mock_pdf_path.stat.return_value.st_size = 1024
+
+        mock_md_path = MagicMock(spec=Path)
+        mock_md_path.__str__ = Mock(return_value="/tmp/test.md")
+        mock_md_path.read_text.return_value = "# Test Paper\n\nMarkdown content"
+
+        mock_pdf_service.download_pdf = AsyncMock(return_value=mock_pdf_path)
+        mock_pdf_service.convert_to_markdown = Mock(return_value=mock_md_path)
+
+        # LLM extraction raises ExtractionError
+        mock_llm_service.extract = AsyncMock(
+            side_effect=ExtractionError("LLM API failed")
+        )
+
+        # Should not raise - gracefully handle error (line 194)
+        result = await extraction_service.process_paper(mock_paper, [])
+
+        assert result.pdf_available is True
+        assert result.extraction is None  # Extraction failed but paper still returned
+        mock_pdf_service.cleanup_temp_files.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_process_papers_batch(
+        self, extraction_service, mock_pdf_service, mock_llm_service
+    ):
+        """Test batch processing of multiple papers (lines 228-254)"""
+        # Create test papers
+        papers = [
+            PaperMetadata(
+                paper_id=f"2301.{i:05d}",
+                title=f"Paper {i}",
+                abstract=f"Abstract {i}",
+                authors=[Author(name=f"Author {i}")],
+                url=f"https://arxiv.org/abs/2301.{i:05d}",
+                open_access_pdf=f"https://arxiv.org/pdf/2301.{i:05d}.pdf",
+                year=2023,
+            )
+            for i in range(3)
+        ]
+
+        # Setup mocks for successful processing
+        mock_pdf_path = MagicMock(spec=Path)
+        mock_pdf_path.__str__ = Mock(return_value="/tmp/test.pdf")
+        mock_pdf_path.stat.return_value.st_size = 1024
+
+        mock_md_path = MagicMock(spec=Path)
+        mock_md_path.__str__ = Mock(return_value="/tmp/test.md")
+        mock_md_path.read_text.return_value = "# Test Paper\n\nMarkdown content"
+
+        mock_pdf_service.download_pdf = AsyncMock(return_value=mock_pdf_path)
+        mock_pdf_service.convert_to_markdown = Mock(return_value=mock_md_path)
+
+        # Mock LLM extraction
+        def create_extraction(paper_id):
+            return PaperExtraction(
+                paper_id=paper_id,
+                extraction_results=[],
+                tokens_used=1000,
+                cost_usd=0.01,
+            )
+
+        mock_llm_service.extract = AsyncMock(
+            side_effect=[create_extraction(p.paper_id) for p in papers]
+        )
+
+        # Test batch processing (lines 228-254)
+        results = await extraction_service.process_papers(papers, [])
+
+        # Verify results
+        assert len(results) == 3
+        assert all(r.pdf_available is True for r in results)
+        assert all(r.extraction is not None for r in results)
+
+        # Verify all papers were processed
+        assert mock_llm_service.extract.call_count == 3
+        assert mock_pdf_service.cleanup_temp_files.call_count == 3

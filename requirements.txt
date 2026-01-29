@@ -23,7 +23,7 @@ marker-pdf>=1.0.0  # PDF to Markdown conversion with code preservation
 tenacity>=8.2.0
 
 # Caching
-diskcache>=5.6.0
+diskcache==5.6.3
 
 # Logging & Observability
 structlog>=23.1.0

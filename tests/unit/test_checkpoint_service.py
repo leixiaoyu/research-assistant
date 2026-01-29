@@ -277,3 +277,76 @@ def test_processed_set_property(checkpoint_service):
     # Verify O(1) lookup
     assert "paper1" in checkpoint.processed_set
     assert "paper999" not in checkpoint.processed_set
+
+
+def test_save_checkpoint_file_write_error(
+    checkpoint_service, temp_checkpoint_dir, monkeypatch
+):
+    """Test save_checkpoint handles file write errors gracefully"""
+    import builtins
+
+    def mock_open_failure(*args, **kwargs):
+        raise PermissionError("Mocked permission denied")
+
+    # Mock open() to raise PermissionError during write
+    monkeypatch.setattr(builtins, "open", mock_open_failure)
+
+    # Attempt to save checkpoint - should return False, not raise
+    result = checkpoint_service.save_checkpoint("write_error_test", ["paper1"])
+
+    assert result is False
+    # Checkpoint file should not exist
+    checkpoint_file = temp_checkpoint_dir / "write_error_test.json"
+    assert not checkpoint_file.exists()
+
+
+def test_clear_checkpoint_file_deletion_error(
+    checkpoint_service, temp_checkpoint_dir, monkeypatch
+):
+    """Test clear_checkpoint handles file deletion errors gracefully"""
+    from pathlib import Path
+
+    # First create a checkpoint
+    run_id = "deletion_test"
+    checkpoint_service.save_checkpoint(run_id, ["paper1"])
+    checkpoint_file = temp_checkpoint_dir / f"{run_id}.json"
+    assert checkpoint_file.exists()
+
+    # Mock unlink() to raise OSError
+    original_unlink = Path.unlink
+
+    def mock_unlink_failure(self, *args, **kwargs):
+        if self.name == f"{run_id}.json":
+            raise OSError("Mocked file deletion error")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", mock_unlink_failure)
+
+    # Attempt to clear checkpoint - should return False, not raise
+    result = checkpoint_service.clear_checkpoint(run_id)
+
+    assert result is False
+    # File should still exist since deletion failed
+    assert checkpoint_file.exists()
+
+
+def test_list_checkpoints_directory_access_error(
+    checkpoint_service, temp_checkpoint_dir, monkeypatch
+):
+    """Test list_checkpoints handles directory access errors gracefully"""
+    from pathlib import Path
+
+    # First create some checkpoints
+    checkpoint_service.save_checkpoint("run1", ["paper1"])
+    checkpoint_service.save_checkpoint("run2", ["paper2"])
+
+    # Mock glob() to raise PermissionError
+    def mock_glob_failure(*args, **kwargs):
+        raise PermissionError("Mocked directory access denied")
+
+    monkeypatch.setattr(Path, "glob", mock_glob_failure)
+
+    # Attempt to list checkpoints - should return empty list, not raise
+    result = checkpoint_service.list_checkpoints()
+
+    assert result == []

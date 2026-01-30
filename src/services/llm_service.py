@@ -411,8 +411,10 @@ extracting structured information from academic papers.
         Returns:
             Cost in USD
         """
-        input_cost = (usage.input_tokens / 1_000_000) * self.CLAUDE_INPUT_COST_PER_MTOK
-        output_cost = (
+        input_cost: float = (
+            usage.input_tokens / 1_000_000
+        ) * self.CLAUDE_INPUT_COST_PER_MTOK
+        output_cost: float = (
             usage.output_tokens / 1_000_000
         ) * self.CLAUDE_OUTPUT_COST_PER_MTOK
         return input_cost + output_cost

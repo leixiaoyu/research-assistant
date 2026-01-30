@@ -9,7 +9,7 @@ Implements 3-tier caching:
 
 import hashlib
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import diskcache
 import structlog
@@ -89,7 +89,7 @@ class CacheService:
         cache_key = self.hash_query(query, timeframe)
 
         try:
-            response = self.api_cache.get(cache_key)
+            response = cast(Optional[Dict[Any, Any]], self.api_cache.get(cache_key))
 
             if response is not None:
                 logger.info("api_cache_hit", query=query[:50], cache_key=cache_key[:8])

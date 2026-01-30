@@ -52,7 +52,7 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
       ```
    2. **Initialize:** Set up the environment (crucial for accurate testing):
       ```bash
-      python3 -m venv venv
+      python3.10 -m venv venv
       source venv/bin/activate
       pip install -r requirements.txt
       cp .env.template .env

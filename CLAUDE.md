@@ -52,7 +52,7 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
       ```
    2. **Initialize:** Set up the environment (crucial for accurate testing):
       ```bash
-      python3 -m venv venv
+      python3.10 -m venv venv
       source venv/bin/activate
       pip install -r requirements.txt
       cp .env.template .env
@@ -240,8 +240,8 @@ Every feature must function **100% of the time** according to its specification 
 ## Development Setup
 
 ```bash
-# Create virtual environment
-python3 -m venv venv
+# Create virtual environment (requires Python 3.10+)
+python3.10 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies

@@ -65,8 +65,8 @@ ARISP automates the research process by:
 git clone https://github.com/leixiaoyu/research-assistant.git
 cd research-assistant
 
-# Create virtual environment
-python3 -m venv venv
+# Create virtual environment (requires Python 3.10+)
+python3.10 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies

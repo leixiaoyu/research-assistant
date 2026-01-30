@@ -39,15 +39,19 @@ def mock_extractors():
 
 @pytest.fixture
 def service(pdf_settings, mock_extractors):
-    with patch(
-        "src.services.pdf_extractors.fallback_service.PyMuPDFExtractor",
-        return_value=mock_extractors["pymupdf"],
-    ), patch(
-        "src.services.pdf_extractors.fallback_service.PDFPlumberExtractor",
-        return_value=mock_extractors["pdfplumber"],
-    ), patch(
-        "src.services.pdf_extractors.fallback_service.PandocExtractor",
-        return_value=Mock(validate_setup=Mock(return_value=False)),
+    with (
+        patch(
+            "src.services.pdf_extractors.fallback_service.PyMuPDFExtractor",
+            return_value=mock_extractors["pymupdf"],
+        ),
+        patch(
+            "src.services.pdf_extractors.fallback_service.PDFPlumberExtractor",
+            return_value=mock_extractors["pdfplumber"],
+        ),
+        patch(
+            "src.services.pdf_extractors.fallback_service.PandocExtractor",
+            return_value=Mock(validate_setup=Mock(return_value=False)),
+        ),
     ):
 
         return FallbackPDFService(pdf_settings)

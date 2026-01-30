@@ -86,3 +86,43 @@ async def test_fallback_service_exception_in_loop():
 
         assert result.success is False
         assert "All extraction backends failed" in result.error
+
+
+@pytest.mark.asyncio
+async def test_base_abstract_methods_raise_not_implemented():
+    """Test that base abstract methods raise NotImplementedError."""
+
+    # Create an extractor that calls super() to trigger NotImplementedError
+    class ExtractorThatCallsSuper(PDFExtractor):
+        @property
+        def name(self) -> PDFBackend:
+            # Call base implementation to trigger NotImplementedError (line 59)
+            try:
+                return super().name
+            except NotImplementedError:
+                return PDFBackend.TEXT_ONLY
+
+        async def extract(self, pdf_path: Path) -> PDFExtractionResult:
+            # Call base implementation to trigger NotImplementedError (line 43)
+            try:
+                return await super().extract(pdf_path)
+            except NotImplementedError:
+                return PDFExtractionResult(
+                    success=True, metadata=ExtractionMetadata(backend=self.name)
+                )
+
+        def validate_setup(self) -> bool:
+            # Call base implementation to trigger NotImplementedError (line 53)
+            try:
+                return super().validate_setup()
+            except NotImplementedError:
+                return True
+
+    # Instantiate and call methods to trigger coverage of NotImplementedError lines
+    extractor = ExtractorThatCallsSuper()
+
+    # These calls trigger the base class NotImplementedError
+    assert extractor.name == PDFBackend.TEXT_ONLY
+    assert extractor.validate_setup() is True
+    result = await extractor.extract(Path("test.pdf"))
+    assert result.success is True

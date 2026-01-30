@@ -84,15 +84,14 @@ class TestCLICoverage:
             mock_cm.return_value.load_config.return_value = mock_config
             mock_cm.return_value.get_output_path.return_value = Path("/tmp")
 
-            with patch("src.cli.DiscoveryService") as mock_ds, patch(
-                "src.cli.CatalogService"
-            ) as mock_cs, patch("src.cli.PDFService"), patch(
-                "src.cli.LLMService"
-            ), patch(
-                "src.cli.ExtractionService"
-            ) as mock_es, patch(
-                "src.cli.EnhancedMarkdownGenerator"
-            ) as mock_emg:
+            with (
+                patch("src.cli.DiscoveryService") as mock_ds,
+                patch("src.cli.CatalogService") as mock_cs,
+                patch("src.cli.PDFService"),
+                patch("src.cli.LLMService"),
+                patch("src.cli.ExtractionService") as mock_es,
+                patch("src.cli.EnhancedMarkdownGenerator") as mock_emg,
+            ):
 
                 mock_ds.return_value.search = AsyncMock(return_value=[Mock()])
                 mock_cs.return_value.get_or_create_topic.return_value = Mock(

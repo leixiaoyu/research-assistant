@@ -37,18 +37,20 @@ async def test_extract_pandoc_not_found(extractor):
 async def test_extract_success(extractor):
     with patch("shutil.which", return_value="/usr/bin/pandoc"):
         # Mock Path stats and operations
-        with patch.object(Path, "stat") as mock_stat, patch.object(
-            Path, "exists", return_value=True
-        ), patch.object(Path, "read_text", return_value="Pandoc output"), patch.object(
-            Path, "unlink"
+        with (
+            patch.object(Path, "stat") as mock_stat,
+            patch.object(Path, "exists", return_value=True),
+            patch.object(Path, "read_text", return_value="Pandoc output"),
+            patch.object(Path, "unlink"),
         ):
 
             mock_stat.return_value.st_size = 1024
 
             # Mock subprocess and temp file
-            with patch("subprocess.run") as mock_run, patch(
-                "tempfile.NamedTemporaryFile"
-            ) as mock_temp:
+            with (
+                patch("subprocess.run") as mock_run,
+                patch("tempfile.NamedTemporaryFile") as mock_temp,
+            ):
 
                 mock_temp.return_value.__enter__.return_value.name = "/tmp/fake.md"
                 mock_run.return_value.returncode = 0

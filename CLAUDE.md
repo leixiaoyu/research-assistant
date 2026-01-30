@@ -39,11 +39,46 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
 2. **Requirements Verification:**
    - **Functional:** Ensure 100% of the features specified in the relevant `PHASE_X_SPEC.md` are implemented and function correctly.
    - **Non-Functional:** Verify performance, observability (logging), and resilience (error handling) meet project standards.
-3. **Local Verification:** Reviewers SHOULD fetch the branch and verify results locally:
-   - Confirm **100% Pass Rate** for automated tests.
-   - Verify **≥95% Coverage** per module. **Test coverage is non-negotiable.**
-   - Run **`./verify.sh`** to ensure zero regressions.
-   - Check alignment with `ci.yml` enforcement rules.
+3. **Local Verification (Mandatory Isolated Review):** Reviewers MUST fetch the branch and verify results locally in an isolated environment to prevent workspace pollution and ensure reproducible verification that matches CI results.
+
+   **Scope:** This is **MANDATORY** for "Complex PRs" (involving code changes in `src/` or `tests/`, configuration updates, or architectural docs) and **RECOMMENDED** for all others.
+
+   **Workflow:**
+   1. **Isolate:** Create a clean worktree:
+      ```bash
+      git fetch origin pull/ID/head:pr-ID
+      git worktree add ../pr-review-ID pr-ID
+      cd ../pr-review-ID
+      ```
+   2. **Initialize:** Set up the environment (crucial for accurate testing):
+      ```bash
+      python3.10 -m venv venv
+      source venv/bin/activate
+      pip install -r requirements.txt
+      cp .env.template .env
+      # Add dummy keys to .env if needed for non-integration tests
+      ```
+      *Note: This setup adds ~1-2 minutes per review but is essential to prevent false positives/negatives caused by dirty environments.*
+   3. **Verify:** Run the verification suite:
+      ```bash
+      ./verify.sh
+      ```
+      - **100% Pass Rate** for automated tests.
+      - **≥95% Coverage** per module.
+      - **Zero Formatting/Linting/Type Issues.**
+   4. **Cleanup:** Safely remove the worktree:
+      ```bash
+      cd ..
+      git worktree remove pr-review-ID
+      # Only if directory remains: rm -rf pr-review-ID
+      ```
+
+   **Environment Integrity Checks:**
+   - [ ] No hardcoded paths (e.g., `/Users/username/...`)
+   - [ ] No environment-specific imports (e.g., local-only packages)
+   - [ ] No reliance on files outside repository (e.g., `~/config.yaml`)
+   - [ ] All dependencies listed in `requirements.txt`
+   - [ ] No OS-specific commands without cross-platform fallbacks
 4. **Technical Assessment & Rigor:**
    - **Engineering Best Practices:** Adherence to SOLID, DRY, and KISS principles is mandatory.
    - **API Implementation:** Verify protocol security (HTTPS), parameter accuracy, and graceful error handling.
@@ -205,8 +240,8 @@ Every feature must function **100% of the time** according to its specification 
 ## Development Setup
 
 ```bash
-# Create virtual environment
-python3 -m venv venv
+# Create virtual environment (requires Python 3.10+)
+python3.10 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies

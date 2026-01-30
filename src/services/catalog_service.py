@@ -32,6 +32,7 @@ class CatalogService:
         # 1. Check if topic already exists with this EXACT query (normalized)
         # Normalize: strip spaces, lowercase
         norm_query = " ".join(query.lower().split())
+        topic: TopicCatalogEntry
         for topic in self.catalog.topics.values():
             existing_norm = " ".join(topic.query.lower().split())
             if existing_norm == norm_query:
@@ -46,7 +47,10 @@ class CatalogService:
             counter += 1
 
         logger.info("creating_new_topic", query=query, slug=topic_slug)
-        return self.catalog.get_or_create_topic(topic_slug, query)
+        new_topic: TopicCatalogEntry = self.catalog.get_or_create_topic(
+            topic_slug, query
+        )
+        return new_topic
 
     def add_run(self, topic_slug: str, run: CatalogRun) -> None:
         """Add a run to a topic and save"""
@@ -72,4 +76,5 @@ class CatalogService:
         if topic_slug not in self.catalog.topics:
             return False
 
-        return self.catalog.topics[topic_slug].has_paper(paper_id, doi)
+        topic_entry: TopicCatalogEntry = self.catalog.topics[topic_slug]
+        return topic_entry.has_paper(paper_id, doi)

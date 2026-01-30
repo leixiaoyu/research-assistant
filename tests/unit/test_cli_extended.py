@@ -10,13 +10,13 @@ runner = CliRunner()
 
 @pytest.fixture
 def mock_components():
-    with patch("src.cli.ConfigManager") as MockConfig, patch(
-        "src.cli.DiscoveryService"
-    ) as MockDiscovery, patch("src.cli.CatalogService") as MockCatalog, patch(
-        "src.cli.MarkdownGenerator"
-    ) as MockGen, patch(
-        "src.cli.open", new_callable=MagicMock
-    ) as mock_open:  # Mock file writing
+    with (
+        patch("src.cli.ConfigManager") as MockConfig,
+        patch("src.cli.DiscoveryService") as MockDiscovery,
+        patch("src.cli.CatalogService") as MockCatalog,
+        patch("src.cli.MarkdownGenerator") as MockGen,
+        patch("src.cli.open", new_callable=MagicMock) as mock_open,
+    ):  # Mock file writing
 
         # Setup Config
         config_instance = MockConfig.return_value

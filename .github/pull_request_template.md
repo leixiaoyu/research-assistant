@@ -2,8 +2,9 @@
 <!-- Concise overview of the PR's purpose and impact -->
 
 ## Changes
-- [ ] Feature 1
-- [ ] Feature 2
+<!-- Replace items below with actual changes made in this PR -->
+- [ ] Change description 1
+- [ ] Change description 2
 
 ## Security Checklist (Mandatory)
 <!-- All items must be checked before merging -->

@@ -7,7 +7,12 @@ from src.models.extraction import (
     ExtractedPaper,
 )
 from src.models.paper import PaperMetadata, Author
-from src.models.config import ResearchTopic, TimeframeRecent
+from src.models.config import (
+    ResearchTopic,
+    TimeframeRecent,
+    TimeframeDateRange,
+)
+from datetime import date
 
 
 @pytest.fixture
@@ -124,3 +129,89 @@ class TestEnhancedMarkdownGenerator:
         extracted = ExtractedPaper(metadata=mock_paper, pdf_available=False)
         markdown = generator.generate_enhanced([extracted], mock_topic, "run-long")
         assert "A1, A2, A3, et al." in markdown
+
+    def test_timeframe_without_value_attribute(self, generator, mock_paper):
+        """Test timeframe handling when object doesn't have value attribute (line 53)"""
+        # TimeframeDateRange doesn't have a value attribute
+        topic = ResearchTopic(
+            query="test",
+            timeframe=TimeframeDateRange(
+                type="date_range",
+                start_date=date(2023, 1, 1),
+                end_date=date(2023, 12, 31),
+            ),
+        )
+        extracted = ExtractedPaper(metadata=mock_paper, pdf_available=True)
+        markdown = generator.generate_enhanced([extracted], topic, "run-custom")
+        # Should use "custom" as fallback when no value attribute
+        assert "timeframe: custom" in markdown
+
+    def test_paper_with_venue(self, generator, mock_topic):
+        """Test paper formatting with venue field (line 168)"""
+        paper = PaperMetadata(
+            paper_id="123",
+            title="Test",
+            abstract="Abstract",
+            authors=[Author(name="Author")],
+            url="https://test.com",
+            year=2023,
+            citation_count=5,
+            venue="NeurIPS 2023",  # Add venue
+        )
+        extracted = ExtractedPaper(metadata=paper, pdf_available=True)
+        markdown = generator.generate_enhanced([extracted], mock_topic, "run-venue")
+        assert "**Venue:** NeurIPS 2023" in markdown
+
+    def test_format_extraction_result_complex_dict(self, generator):
+        """Test formatting complex nested dict as JSON (lines 240-242)"""
+        result = ExtractionResult(
+            target_name="config",
+            success=True,
+            content={
+                "model": {"name": "GPT-4", "params": {"temp": 0.7}},
+                "layers": [1, 2, 3],
+            },
+            confidence=0.9,
+        )
+        formatted = generator._format_extraction_result(result)
+        # Complex dict should be JSON-formatted
+        assert "```json" in formatted
+        assert '"model"' in formatted
+
+    def test_format_extraction_result_javascript_code(self, generator):
+        """Test JavaScript language detection (line 262)"""
+        result = ExtractionResult(
+            target_name="code",
+            success=True,
+            content="function hello() { const x = 5; }",
+            confidence=0.9,
+        )
+        formatted = generator._format_extraction_result(result)
+        assert "```javascript" in formatted
+
+    def test_format_extraction_result_java_code(self, generator):
+        """Test Java language detection (line 264)"""
+        result = ExtractionResult(
+            target_name="code",
+            success=True,
+            content="public class HelloWorld { private int x; }",
+            confidence=0.9,
+        )
+        formatted = generator._format_extraction_result(result)
+        assert "```java" in formatted
+
+    def test_format_extraction_result_fallback_type(self, generator):
+        """Test fallback formatting for non-dict/list/str types (lines 276-277)"""
+        # Test with a number
+        result = ExtractionResult(
+            target_name="score", success=True, content=42, confidence=0.9
+        )
+        formatted = generator._format_extraction_result(result)
+        assert "42" in formatted
+
+        # Test with a boolean
+        result2 = ExtractionResult(
+            target_name="flag", success=True, content=True, confidence=0.9
+        )
+        formatted2 = generator._format_extraction_result(result2)
+        assert "True" in formatted2

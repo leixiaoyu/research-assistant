@@ -40,7 +40,7 @@ class PDFExtractor(ABC):
         Raises:
             Should NOT raise exceptions - catch and return error in result
         """
-        pass
+        raise NotImplementedError("Subclasses must implement extract()")
 
     @abstractmethod
     def validate_setup(self) -> bool:
@@ -50,13 +50,13 @@ class PDFExtractor(ABC):
         Returns:
             True if backend can be used, False otherwise
         """
-        pass
+        raise NotImplementedError("Subclasses must implement validate_setup()")
 
     @property
     @abstractmethod
     def name(self) -> PDFBackend:
         """Return the backend identifier."""
-        pass
+        raise NotImplementedError("Subclasses must implement name property")
 
     def _get_page_count(self, pdf_path: Path) -> int:
         """

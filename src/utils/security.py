@@ -66,9 +66,11 @@ class PathSanitizer:
             raise SecurityError(f"Path traversal attempt detected: {user_input}")
 
         # Check if symlink points outside base (symlink attack)
-        if requested.is_symlink():
-            real_path = requested.resolve()
-            try:
+        # NOTE: This check is currently unreachable because line 54 calls .resolve()
+        # which already follows symlinks. Kept for defensive programming.
+        if requested.is_symlink():  # pragma: no cover
+            real_path = requested.resolve()  # pragma: no cover
+            try:  # pragma: no cover
                 real_path.relative_to(base_dir)
             except ValueError:  # pragma: no cover
                 raise SecurityError(

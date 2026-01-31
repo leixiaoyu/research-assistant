@@ -5,17 +5,18 @@
 [![Python 3.10.19](https://img.shields.io/badge/python-3.10.19-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Security: High](https://img.shields.io/badge/security-high-green.svg)](docs/security/)
-[![Test Coverage: 99%](https://img.shields.io/badge/coverage-99%25-brightgreen.svg)](tests/)
+[![Test Coverage: 98%](https://img.shields.io/badge/coverage-98%25-brightgreen.svg)](tests/)
 
 ## 🎯 Overview
 
 ARISP automates the research process by:
 - 🔍 **Discovering** papers from multiple sources (ArXiv, Semantic Scholar)
-- 📄 **Processing** PDFs with code-preserving markdown conversion
+- 📄 **Processing** PDFs with concurrent multi-backend extraction
 - 🤖 **Extracting** prompts, code, and insights using LLM (Claude/Gemini)
 - 📝 **Synthesizing** Obsidian-ready markdown briefs for engineering teams
+- ⚡ **Accelerating** with intelligent concurrency and resource management
 
-**✨ Phase 3 Complete:** Intelligence layer with multi-level caching, deduplication, filtering, and checkpoint/resume - 99% test coverage!
+**✨ Phase 3.1 Complete:** Concurrent orchestration with async worker pools, semaphore-based resource limiting, and intelligent backpressure handling - 98% test coverage, 408 tests!
 
 ## ✨ Key Features
 
@@ -35,11 +36,13 @@ ARISP automates the research process by:
 - **Reliability-First**: 100% test coverage on all extractors, production-hardened
 - **Enhanced Output**: Token/cost tracking, confidence scores, extraction summaries
 
-### Intelligence (Phase 3) ✅ Complete
+### Intelligence (Phase 3 + 3.1) ✅ Complete
 - **Multi-Level Caching**: API responses, PDFs, extractions with 99% hit rates
 - **Smart Deduplication**: Two-stage (DOI + fuzzy title) matching with 90%+ accuracy
 - **Quality Filtering**: Weighted ranking (citations + recency + relevance)
 - **Checkpoint/Resume**: Atomic saves for crash-safe pipeline resumption
+- **Concurrent Orchestration**: Async worker pools with semaphore-based resource limiting
+- **Intelligent Backpressure**: Dynamic queue management and graceful degradation
 - **100% Service Coverage**: All Phase 3 services at 100% test coverage
 
 ### Production (Phase 4)
@@ -154,6 +157,12 @@ settings:
   cost_limits:
     max_daily_spend_usd: 50.0
     max_total_spend_usd: 500.0
+
+  # Phase 3.1: Concurrency settings (optional)
+  concurrency:
+    max_concurrent_papers: 3        # Parallel paper processing
+    max_concurrent_downloads: 2     # Parallel PDF downloads
+    max_concurrent_extractions: 2   # Parallel LLM extractions
 ```
 
 ### Usage
@@ -197,7 +206,7 @@ output/
 - [Phase 2: Extraction](docs/specs/PHASE_2_SPEC.md) - ✅ Complete (PDF & LLM Extraction)
 - [Phase 2.5: PDF Reliability](docs/specs/PHASE_2.5_SPEC.md) - ✅ Complete (Multi-Backend Fallback Chain)
 - [Phase 3: Intelligence Layer](docs/specs/PHASE_3_SPEC.md) - ✅ Complete (Cache, Dedup, Filters, Checkpoint)
-- [Phase 3.1: Concurrent Orchestration](docs/specs/PHASE_3.1_SPEC.md) - 📋 Planned (Performance & Concurrency)
+- [Phase 3.1: Concurrent Orchestration](docs/specs/PHASE_3.1_SPEC.md) - ✅ Complete (Async Workers, Resource Limiting, Backpressure)
 - [Phase 3.2: Semantic Scholar Activation](docs/specs/PHASE_3.2_SPEC.md) - 🎯 Ready (Multi-Provider Intelligence)
 - [Phase 4: Hardening](docs/specs/PHASE_4_SPEC.md) - 📋 Planned (Production Readiness)
 
@@ -212,9 +221,9 @@ output/
 
 ## 🏗️ Project Status
 
-**Current Status:** ✅ **Phase 3 Complete** - Intelligence layer operational with caching, deduplication, filtering, and checkpoint/resume.
+**Current Status:** ✅ **Phase 3.1 Complete** - Concurrent orchestration operational with async worker pools, semaphore-based resource limiting, and intelligent backpressure handling. Full intelligence layer with caching, deduplication, filtering, and checkpoint/resume.
 
-**Next Phase:** 📋 **Phase 4: Production Hardening** (1 week) - Observability, monitoring, deployment automation.
+**Next Phase:** 🎯 **Phase 3.2: Semantic Scholar Activation** (3-5 days) - Multi-provider intelligence with Semantic Scholar integration, or **Phase 4: Production Hardening** (1 week) - Observability, monitoring, deployment automation.
 
 📊 **For detailed progress tracking, timelines, and phase-by-phase completion status, see:**
 → **[Phased Delivery Plan](docs/PHASED_DELIVERY_PLAN.md)** (Single Source of Truth)
@@ -247,7 +256,8 @@ output/
 ## 📊 Performance & Quality
 
 ### Current Metrics
-- ✅ **Test Coverage**: 99% (384 automated tests, 100% pass rate)
+- ✅ **Test Coverage**: 98.12% (408 automated tests, 100% pass rate)
+- ✅ **Concurrency**: Async worker pools with configurable parallelism limits
 - ✅ **Security**: 22/22 requirements met across all layers
 - ✅ **Quality Gates**: Automated enforcement (Flake8, Black, Mypy, Pytest)
 - ✅ **Configuration Validation**: <1s
@@ -406,4 +416,4 @@ timeframe:
 
 **Built with ❤️ for research teams who want to stay ahead**
 
-**Status**: Phase 3 Complete - Intelligence layer with caching, deduplication, filtering, and checkpointing. 99% coverage, 384 tests 🚀
+**Status**: Phase 3.1 Complete - Concurrent orchestration with async worker pools, resource limiting, and intelligent backpressure. Full intelligence layer operational. 98.12% coverage, 408 tests 🚀

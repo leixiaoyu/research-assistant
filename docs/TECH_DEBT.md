@@ -4,13 +4,14 @@ This document tracks technical debt identified during code reviews and developme
 
 ## Active Debt Items
 
-### 1. ExtractionService Coverage Gap (Phase 3.1)
+### 1. ExtractionService Coverage Gap (Deferred from Phase 3.1)
 
-**Priority:** High
+**Priority:** Medium
 **Identified:** PR #9 Review (2026-01-26)
-**Current Coverage:** 85%
+**Current Coverage:** 83.78% (as of Phase 3.1 completion)
 **Target Coverage:** ≥95%
-**Planned Resolution:** Phase 3.1 - Final Orchestration
+**Planned Resolution:** Phase 3.2 or Phase 4
+**Status Update (2026-01-31):** Phase 3.1 focused on concurrent orchestration infrastructure. This coverage gap remains active and should be addressed in next phase.
 
 **Description:**
 The `src/services/extraction_service.py` module is at 85% test coverage, below the project's 95% requirement. The missing coverage primarily affects error handling paths in the LLM extraction orchestration logic.

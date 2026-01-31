@@ -86,12 +86,16 @@ settings:
     max_daily_spend_usd: 50.0
     max_total_spend_usd: 500.0
 
-  # Concurrency Settings (Phase 3)
+  # Concurrency Settings (Phase 3.1)
   concurrency:
     max_concurrent_downloads: 5
     max_concurrent_conversions: 3
     max_concurrent_llm: 2
+    queue_size: 100
     checkpoint_interval: 10
+    worker_timeout_seconds: 600
+    enable_backpressure: true
+    backpressure_threshold: 0.8
 
   # Cache Settings (Phase 3)
   cache:

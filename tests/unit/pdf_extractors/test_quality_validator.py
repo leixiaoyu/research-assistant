@@ -42,7 +42,9 @@ def code():
 |--------|-------|
 | Score  | 0.95  |
 
-""" + ("Text content. " * 300)
+""" + (
+        "Text content. " * 300
+    )
 
     score = validator.score_extraction(markdown, Path("dummy.pdf"), page_count=2)
     # With 5+ headers/lists and good density, it should be above 0.65

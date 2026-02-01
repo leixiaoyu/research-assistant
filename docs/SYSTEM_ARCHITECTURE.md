@@ -1,7 +1,7 @@
 # ARISP System Architecture
-**Version:** 2.0
-**Status:** Phase 2.5 Complete - Production-Hardened with Multi-Backend PDF Extraction
-**Last Updated:** 2026-01-25
+**Version:** 2.1
+**Status:** Phase 3.1 Complete - Concurrent Orchestration with Intelligence Layer
+**Last Updated:** 2026-02-01
 
 ---
 

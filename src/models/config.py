@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 from src.utils.security import InputValidation
 from src.models.extraction import ExtractionTarget
+from src.models.concurrency import ConcurrencyConfig
 
 
 class TimeframeType(str, Enum):
@@ -180,6 +181,11 @@ class GlobalSettings(BaseModel):
     )
     cost_limits: Optional[CostLimitSettings] = Field(
         default=None, description="Cost control settings (Phase 2)"
+    )
+    # Phase 3.1: Concurrency configuration
+    concurrency: ConcurrencyConfig = Field(
+        default_factory=lambda: ConcurrencyConfig(),
+        description="Concurrent processing settings (Phase 3.1)",
     )
 
 

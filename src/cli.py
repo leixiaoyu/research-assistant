@@ -21,6 +21,16 @@ from src.services.extraction_service import ExtractionService
 from src.services.pdf_extractors.fallback_service import FallbackPDFService
 from src.models.llm import LLMConfig, CostLimits
 
+# Phase 3 imports
+from src.services.cache_service import CacheService
+from src.services.dedup_service import DeduplicationService
+from src.services.filter_service import FilterService
+from src.services.checkpoint_service import CheckpointService
+from src.models.cache import CacheConfig
+from src.models.dedup import DedupConfig
+from src.models.filters import FilterConfig
+from src.models.checkpoint import CheckpointConfig
+
 # Configure structured logging
 configure_logging()
 logger = structlog.get_logger()
@@ -149,18 +159,40 @@ def run(
             # Fallback PDF Service (Phase 2.5)
             fallback_service = FallbackPDFService(config=config.settings.pdf_settings)
 
-            # Extraction Service
+            # Phase 3 Services (concurrent processing support)
+            # Note: Pydantic models have Field() defaults that Mypy doesn't recognize
+            cache_service = CacheService(config=CacheConfig())  # type: ignore[call-arg]
+            dedup_service = DeduplicationService(
+                config=DedupConfig()  # type: ignore[call-arg]
+            )
+            filter_service = FilterService(
+                config=FilterConfig()  # type: ignore[call-arg]
+            )
+            checkpoint_service = CheckpointService(
+                config=CheckpointConfig()  # type: ignore[call-arg]
+            )
+
+            # Extraction Service with Phase 3 services for concurrent processing
             extraction_service = ExtractionService(
                 pdf_service=pdf_service,
                 llm_service=llm_service,
                 fallback_service=fallback_service,
                 keep_pdfs=config.settings.pdf_settings.keep_pdfs,
+                # Phase 3 services for concurrent processing
+                cache_service=cache_service,
+                dedup_service=dedup_service,
+                filter_service=filter_service,
+                checkpoint_service=checkpoint_service,
+                concurrency_config=config.settings.concurrency,
             )
 
             # Enhanced Markdown Generator
             md_generator = EnhancedMarkdownGenerator()
 
             typer.secho("✓ Phase 2 services initialized", fg=typer.colors.GREEN)
+            typer.secho(
+                "✓ Phase 3 concurrent processing enabled", fg=typer.colors.GREEN
+            )
         else:
             # Phase 1 only - basic markdown generator
             md_generator = MarkdownGenerator()
@@ -237,8 +269,12 @@ async def _process_topics(
                 )
 
                 # Process papers through extraction pipeline
+                # Phase 3.1: process_papers() uses concurrent processing when available
                 extracted_papers = await extraction_svc.process_papers(
-                    papers=papers, targets=topic.extraction_targets
+                    papers=papers,
+                    targets=topic.extraction_targets,
+                    run_id=run_id,
+                    query=topic.query,
                 )
 
                 # Get summary statistics

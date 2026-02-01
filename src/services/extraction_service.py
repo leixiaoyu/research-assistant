@@ -1,4 +1,4 @@
-"""Extraction Service for Phase 2: PDF Processing & LLM Extraction
+"""Extraction Service for Phase 2 & Phase 3.1: PDF Processing & LLM Extraction
 
 This service orchestrates the complete extraction pipeline:
 1. PDF Download → 2. PDF Conversion (with Fallback) → 3. LLM Extraction
@@ -9,10 +9,12 @@ Implements fallback strategies:
 - If PDF conversion fails → Use abstract only
 - Continue pipeline even if individual papers fail
 
+Phase 3.1: Adds concurrent processing support via ConcurrentPipeline integration.
+
 This service ties together PDFService, FallbackPDFService, and LLMService.
 """
 
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 import structlog
 
 from src.models.paper import PaperMetadata
@@ -29,6 +31,15 @@ from src.utils.exceptions import (
     PDFValidationError,
 )
 
+# Phase 3.1: Concurrent pipeline (optional dependency)
+if TYPE_CHECKING:
+    from src.services.cache_service import CacheService
+    from src.services.dedup_service import DeduplicationService
+    from src.services.filter_service import FilterService
+    from src.services.checkpoint_service import CheckpointService
+    from src.models.concurrency import ConcurrencyConfig
+    from src.orchestration.concurrent_pipeline import ConcurrentPipeline  # noqa: F401
+
 logger = structlog.get_logger()
 
 
@@ -39,6 +50,8 @@ class ExtractionService:
     - Prefers full PDF extraction
     - Falls back to abstract-only if PDF unavailable
     - Continues processing even if individual papers fail
+
+    Phase 3.1: Supports concurrent processing when Phase 3 services are provided.
     """
 
     def __init__(
@@ -47,6 +60,12 @@ class ExtractionService:
         llm_service: LLMService,
         fallback_service: Optional[FallbackPDFService] = None,
         keep_pdfs: bool = True,
+        # Phase 3.1: Optional concurrent processing dependencies
+        cache_service: Optional["CacheService"] = None,
+        dedup_service: Optional["DeduplicationService"] = None,
+        filter_service: Optional["FilterService"] = None,
+        checkpoint_service: Optional["CheckpointService"] = None,
+        concurrency_config: Optional["ConcurrencyConfig"] = None,
     ):
         """Initialize extraction service
 
@@ -55,16 +74,69 @@ class ExtractionService:
             llm_service: Service for LLM extraction
             fallback_service: Service for multi-backend PDF extraction
             keep_pdfs: Whether to keep PDFs after processing
+            cache_service: Phase 3 caching service (optional)
+            dedup_service: Phase 3 deduplication service (optional)
+            filter_service: Phase 3 filtering service (optional)
+            checkpoint_service: Phase 3 checkpoint service (optional)
+            concurrency_config: Phase 3.1 concurrency configuration (optional)
         """
         self.pdf_service = pdf_service
         self.llm_service = llm_service
         self.fallback_service = fallback_service
         self.keep_pdfs = keep_pdfs
 
+        # Phase 3 services (optional)
+        self.cache_service = cache_service
+        self.dedup_service = dedup_service
+        self.filter_service = filter_service
+        self.checkpoint_service = checkpoint_service
+        self.concurrency_config = concurrency_config
+
+        # Phase 3.1: Eagerly initialize concurrent pipeline when all services available
+        self._concurrent_pipeline: Optional["ConcurrentPipeline"] = None
+        self._concurrent_enabled = False
+
+        if all(
+            [
+                fallback_service,
+                cache_service,
+                dedup_service,
+                filter_service,
+                checkpoint_service,
+                concurrency_config,
+            ]
+        ):
+            from src.orchestration.concurrent_pipeline import (  # noqa: F811
+                ConcurrentPipeline,
+            )
+
+            # Type narrowing assertions - we've already checked these are not None
+            assert fallback_service is not None
+            assert concurrency_config is not None
+            assert cache_service is not None
+            assert dedup_service is not None
+            assert filter_service is not None
+            assert checkpoint_service is not None
+
+            self._concurrent_pipeline = ConcurrentPipeline(
+                config=concurrency_config,
+                fallback_pdf_service=fallback_service,
+                llm_service=llm_service,
+                cache_service=cache_service,
+                dedup_service=dedup_service,
+                filter_service=filter_service,
+                checkpoint_service=checkpoint_service,
+            )
+            self._concurrent_enabled = True
+
         logger.info(
             "extraction_service_initialized",
             keep_pdfs=keep_pdfs,
             has_fallback_service=fallback_service is not None,
+            has_phase3_services=all(
+                [cache_service, dedup_service, filter_service, checkpoint_service]
+            ),
+            concurrent_enabled=self._concurrent_enabled,
         )
 
     async def process_paper(
@@ -210,23 +282,42 @@ class ExtractionService:
         return extracted
 
     async def process_papers(
-        self, papers: List[PaperMetadata], targets: List[ExtractionTarget]
+        self,
+        papers: List[PaperMetadata],
+        targets: List[ExtractionTarget],
+        run_id: Optional[str] = None,
+        query: Optional[str] = None,
     ) -> List[ExtractedPaper]:
-        """Process multiple papers sequentially
+        """Process multiple papers with concurrent or sequential processing.
+
+        When Phase 3.1 concurrent pipeline is available and run_id/query are
+        provided, uses concurrent processing for better performance.
+        Otherwise, falls back to sequential processing.
 
         Args:
             papers: List of papers to process
             targets: Extraction targets
+            run_id: Unique run identifier for checkpointing (required for concurrent)
+            query: Search query for relevance filtering (required for concurrent)
 
         Returns:
             List of ExtractedPaper objects
-
-        Note:
-            Papers are processed sequentially to control costs and
-            comply with rate limits. Phase 3 will add concurrent processing.
         """
+        # Use concurrent processing if available and parameters provided
+        if self._concurrent_pipeline is not None and run_id and query:
+            return await self._process_papers_concurrent(
+                papers=papers,
+                targets=targets,
+                run_id=run_id,
+                query=query,
+            )
+
+        # Fall back to sequential processing
         logger.info(
-            "batch_processing_started", total_papers=len(papers), targets=len(targets)
+            "batch_processing_started",
+            total_papers=len(papers),
+            targets=len(targets),
+            mode="sequential",
         )
 
         results = []
@@ -249,6 +340,7 @@ class ExtractionService:
             total_papers=len(papers),
             successful_extractions=successful,
             papers_with_pdf=with_pdf,
+            mode="sequential",
         )
 
         return results
@@ -329,3 +421,54 @@ Extraction is based on abstract only.
                 round(total_cost / with_extraction, 3) if with_extraction > 0 else 0.0
             ),
         }
+
+    async def _process_papers_concurrent(
+        self,
+        papers: List[PaperMetadata],
+        targets: List[ExtractionTarget],
+        run_id: str,
+        query: str,
+    ) -> List[ExtractedPaper]:
+        """Internal method for concurrent paper processing.
+
+        Called by process_papers() when concurrent pipeline is available.
+        The pipeline is eagerly initialized in __init__.
+
+        Args:
+            papers: Papers to process
+            targets: Extraction targets
+            run_id: Unique run identifier for checkpointing
+            query: Search query for relevance filtering
+
+        Returns:
+            List of ExtractedPaper objects
+        """
+        assert self._concurrent_pipeline is not None
+        assert self.concurrency_config is not None
+
+        logger.info(
+            "concurrent_processing_started",
+            run_id=run_id,
+            total_papers=len(papers),
+            num_workers=self.concurrency_config.max_concurrent_downloads,
+            mode="concurrent",
+        )
+
+        # Process concurrently
+        results: List[ExtractedPaper] = []
+        async for (
+            extracted_paper
+        ) in self._concurrent_pipeline.process_papers_concurrent(
+            papers=papers, targets=targets, run_id=run_id, query=query
+        ):
+            results.append(extracted_paper)
+
+        logger.info(
+            "concurrent_processing_complete",
+            run_id=run_id,
+            total_papers=len(papers),
+            successful=len(results),
+            mode="concurrent",
+        )
+
+        return results

@@ -4,43 +4,7 @@ This document tracks technical debt identified during code reviews and developme
 
 ## Active Debt Items
 
-### 1. ExtractionService Coverage Gap (Phase 3.1)
-
-**Priority:** High
-**Identified:** PR #9 Review (2026-01-26)
-**Current Coverage:** 85%
-**Target Coverage:** ≥95%
-**Planned Resolution:** Phase 3.1 - Final Orchestration
-
-**Description:**
-The `src/services/extraction_service.py` module is at 85% test coverage, below the project's 95% requirement. The missing coverage primarily affects error handling paths in the LLM extraction orchestration logic.
-
-**Uncovered Areas:**
-- Lines 176-177: Error handling for invalid extraction results
-- Line 194: Fallback logic when extraction fails
-- Lines 228-254: Complex orchestration error scenarios
-
-**Impact:**
-- Medium risk: Core functionality is tested, but error paths are not fully verified
-- Could lead to unhandled exceptions in production under edge cases
-- Blocks achieving 100% coverage goal for Phase 3
-
-**Resolution Plan:**
-Add comprehensive error handling tests in Phase 3.1:
-1. Mock LLM service failures (timeout, rate limit, invalid response)
-2. Test extraction result validation failures
-3. Test partial extraction scenarios
-4. Test retry logic under various failure modes
-
-**Acceptance Criteria:**
-- `extraction_service.py` coverage ≥95%
-- All error paths tested with mocked failures
-- Integration tests verify end-to-end error handling
-- Documentation updated with error handling patterns
-
----
-
-### 2. Base Extractor Abstract Method Coverage (Acceptable)
+### 1. Base Extractor Abstract Method Coverage (Acceptable)
 
 **Priority:** Low (False Positive)
 **Identified:** PR #9 Review (2026-01-26)
@@ -65,6 +29,24 @@ No action required. This is acceptable architectural debt inherent to abstract b
 ---
 
 ## Resolved Debt Items
+
+### ✅ ExtractionService Coverage Gap (Resolved in PR #15 & #17)
+
+**Resolved:** 2026-02-01
+**Original Coverage:** 85%
+**Final Coverage:** 100%
+
+**Description:**
+The `src/services/extraction_service.py` module had coverage gaps in error handling paths and the concurrent processing integration. This was tracked as high-priority debt blocking Phase 3.1 completion.
+
+**Resolution:**
+- PR #15: Integrated ConcurrentPipeline into `process_papers()` method
+- PR #15: Added tests for concurrent/sequential processing paths
+- PR #17: Added edge case tests for batch processing
+- All error paths now tested with comprehensive mocked failures
+- Achieved 100% coverage on ExtractionService
+
+---
 
 ### ✅ Cache Service Coverage Regression (Resolved in PR #9)
 

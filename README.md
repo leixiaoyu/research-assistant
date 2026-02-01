@@ -15,7 +15,7 @@ ARISP automates the research process by:
 - 🤖 **Extracting** prompts, code, and insights using LLM (Claude/Gemini)
 - 📝 **Synthesizing** Obsidian-ready markdown briefs for engineering teams
 
-**✨ Phase 3 Complete:** Intelligence layer with multi-level caching, deduplication, filtering, and checkpoint/resume - 99% test coverage!
+**✨ Phase 3.1 Complete:** Concurrent orchestration pipeline with async producer-consumer pattern, semaphore-based resource limiting, and intelligent parallel processing - 99% test coverage!
 
 ## ✨ Key Features
 
@@ -41,6 +41,13 @@ ARISP automates the research process by:
 - **Quality Filtering**: Weighted ranking (citations + recency + relevance)
 - **Checkpoint/Resume**: Atomic saves for crash-safe pipeline resumption
 - **100% Service Coverage**: All Phase 3 services at 100% test coverage
+
+### Concurrent Processing (Phase 3.1) ✅ Complete
+- **Async Producer-Consumer**: Bounded queues with backpressure handling
+- **Semaphore Resource Limiting**: Configurable limits for downloads, conversions, LLM requests
+- **Worker Pool Management**: Parallel PDF extraction, conversion, and LLM processing
+- **Graceful Degradation**: Continues processing despite individual failures
+- **Pipeline Statistics**: Real-time tracking of worker and pipeline metrics
 
 ### Production (Phase 4)
 - **Observable**: Structured logging, Prometheus metrics, Grafana dashboards
@@ -154,6 +161,14 @@ settings:
   cost_limits:
     max_daily_spend_usd: 50.0
     max_total_spend_usd: 500.0
+
+  # Phase 3.1: Concurrency settings (optional)
+  concurrency:
+    max_concurrent_downloads: 5     # Parallel PDF downloads
+    max_concurrent_conversions: 3   # Parallel PDF conversions
+    max_concurrent_llm: 2           # Parallel LLM extractions
+    queue_size: 100                 # Bounded queue size
+    checkpoint_interval: 10         # Papers per checkpoint
 ```
 
 ### Usage
@@ -197,7 +212,7 @@ output/
 - [Phase 2: Extraction](docs/specs/PHASE_2_SPEC.md) - ✅ Complete (PDF & LLM Extraction)
 - [Phase 2.5: PDF Reliability](docs/specs/PHASE_2.5_SPEC.md) - ✅ Complete (Multi-Backend Fallback Chain)
 - [Phase 3: Intelligence Layer](docs/specs/PHASE_3_SPEC.md) - ✅ Complete (Cache, Dedup, Filters, Checkpoint)
-- [Phase 3.1: Concurrent Orchestration](docs/specs/PHASE_3.1_SPEC.md) - 📋 Planned (Performance & Concurrency)
+- [Phase 3.1: Concurrent Orchestration](docs/specs/PHASE_3.1_SPEC.md) - ✅ Complete (Performance & Concurrency)
 - [Phase 3.2: Semantic Scholar Activation](docs/specs/PHASE_3.2_SPEC.md) - 🎯 Ready (Multi-Provider Intelligence)
 - [Phase 4: Hardening](docs/specs/PHASE_4_SPEC.md) - 📋 Planned (Production Readiness)
 
@@ -212,9 +227,9 @@ output/
 
 ## 🏗️ Project Status
 
-**Current Status:** ✅ **Phase 3 Complete** - Intelligence layer operational with caching, deduplication, filtering, and checkpoint/resume.
+**Current Status:** ✅ **Phase 3.1 Complete** - Concurrent orchestration pipeline with async producer-consumer architecture, semaphore-based resource limiting, and intelligent parallel processing.
 
-**Next Phase:** 📋 **Phase 4: Production Hardening** (1 week) - Observability, monitoring, deployment automation.
+**Next Phase:** 📋 **Phase 3.2: Semantic Scholar Activation** or **Phase 4: Production Hardening** - Multi-provider intelligence or observability/monitoring.
 
 📊 **For detailed progress tracking, timelines, and phase-by-phase completion status, see:**
 → **[Phased Delivery Plan](docs/PHASED_DELIVERY_PLAN.md)** (Single Source of Truth)
@@ -247,7 +262,7 @@ output/
 ## 📊 Performance & Quality
 
 ### Current Metrics
-- ✅ **Test Coverage**: 99% (384 automated tests, 100% pass rate)
+- ✅ **Test Coverage**: 99% (416 automated tests, 100% pass rate)
 - ✅ **Security**: 22/22 requirements met across all layers
 - ✅ **Quality Gates**: Automated enforcement (Flake8, Black, Mypy, Pytest)
 - ✅ **Configuration Validation**: <1s
@@ -406,4 +421,4 @@ timeframe:
 
 **Built with ❤️ for research teams who want to stay ahead**
 
-**Status**: Phase 3 Complete - Intelligence layer with caching, deduplication, filtering, and checkpointing. 99% coverage, 384 tests 🚀
+**Status**: Phase 3.1 Complete - Concurrent orchestration with async processing, resource limiting, and intelligent parallelization. 99% coverage, 416 tests 🚀

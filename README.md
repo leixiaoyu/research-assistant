@@ -15,7 +15,7 @@ ARISP automates the research process by:
 - 🤖 **Extracting** prompts, code, and insights using LLM (Claude/Gemini)
 - 📝 **Synthesizing** Obsidian-ready markdown briefs for engineering teams
 
-**✨ Phase 3 Complete:** Intelligence layer with multi-level caching, deduplication, filtering, and checkpoint/resume - 99% test coverage!
+**✨ Phase 3.1 Complete:** Concurrent orchestration with async worker pools, intelligent resource limiting, and full integration with intelligence layer - 99% test coverage, 442 tests!
 
 ## ✨ Key Features
 
@@ -41,6 +41,13 @@ ARISP automates the research process by:
 - **Quality Filtering**: Weighted ranking (citations + recency + relevance)
 - **Checkpoint/Resume**: Atomic saves for crash-safe pipeline resumption
 - **100% Service Coverage**: All Phase 3 services at 100% test coverage
+
+### Concurrent Orchestration (Phase 3.1) ✅ Complete
+- **Async Worker Pools**: Producer-consumer pattern with configurable workers
+- **Resource Limiting**: Semaphore-based control for downloads, conversions, LLM calls
+- **Backpressure Handling**: Bounded queues prevent memory exhaustion
+- **Graceful Degradation**: Individual paper failures don't block pipeline
+- **Full Integration**: Works with cache, dedup, filter, and checkpoint services
 
 ### Production (Phase 4)
 - **Observable**: Structured logging, Prometheus metrics, Grafana dashboards
@@ -197,7 +204,7 @@ output/
 - [Phase 2: Extraction](docs/specs/PHASE_2_SPEC.md) - ✅ Complete (PDF & LLM Extraction)
 - [Phase 2.5: PDF Reliability](docs/specs/PHASE_2.5_SPEC.md) - ✅ Complete (Multi-Backend Fallback Chain)
 - [Phase 3: Intelligence Layer](docs/specs/PHASE_3_SPEC.md) - ✅ Complete (Cache, Dedup, Filters, Checkpoint)
-- [Phase 3.1: Concurrent Orchestration](docs/specs/PHASE_3.1_SPEC.md) - 📋 Planned (Performance & Concurrency)
+- [Phase 3.1: Concurrent Orchestration](docs/specs/PHASE_3.1_SPEC.md) - ✅ Complete (Async Workers & Resource Limiting)
 - [Phase 3.2: Semantic Scholar Activation](docs/specs/PHASE_3.2_SPEC.md) - 🎯 Ready (Multi-Provider Intelligence)
 - [Phase 4: Hardening](docs/specs/PHASE_4_SPEC.md) - 📋 Planned (Production Readiness)
 
@@ -212,9 +219,9 @@ output/
 
 ## 🏗️ Project Status
 
-**Current Status:** ✅ **Phase 3 Complete** - Intelligence layer operational with caching, deduplication, filtering, and checkpoint/resume.
+**Current Status:** ✅ **Phase 3.1 Complete** - Concurrent orchestration with async worker pools, resource limiting, and full integration with intelligence layer.
 
-**Next Phase:** 📋 **Phase 4: Production Hardening** (1 week) - Observability, monitoring, deployment automation.
+**Next Phase:** 📋 **Phase 3.2: Semantic Scholar Activation** or **Phase 4: Production Hardening** - Multi-provider intelligence or observability/monitoring.
 
 📊 **For detailed progress tracking, timelines, and phase-by-phase completion status, see:**
 → **[Phased Delivery Plan](docs/PHASED_DELIVERY_PLAN.md)** (Single Source of Truth)
@@ -247,7 +254,7 @@ output/
 ## 📊 Performance & Quality
 
 ### Current Metrics
-- ✅ **Test Coverage**: 99% (384 automated tests, 100% pass rate)
+- ✅ **Test Coverage**: 99.1% (442 automated tests, 100% pass rate)
 - ✅ **Security**: 22/22 requirements met across all layers
 - ✅ **Quality Gates**: Automated enforcement (Flake8, Black, Mypy, Pytest)
 - ✅ **Configuration Validation**: <1s
@@ -406,4 +413,4 @@ timeframe:
 
 **Built with ❤️ for research teams who want to stay ahead**
 
-**Status**: Phase 3 Complete - Intelligence layer with caching, deduplication, filtering, and checkpointing. 99% coverage, 384 tests 🚀
+**Status**: Phase 3.1 Complete - Concurrent orchestration with async workers, resource limiting, and full intelligence integration. 99.1% coverage, 442 tests 🚀

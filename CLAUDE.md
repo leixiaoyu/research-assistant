@@ -345,10 +345,21 @@ The pipeline consists of five main modules:
 - **`src/services/extraction_service.py`**: Pipeline orchestration (PDF → conversion → LLM extraction)
 - **`src/output/enhanced_generator.py`**: Enhanced markdown with extraction results and statistics
 
+**Phase 3 Modules (✅ Complete - Intelligence Layer):**
+- **`src/services/cache_service.py`**: Multi-level caching (API, PDF, extraction results)
+- **`src/services/dedup_service.py`**: Two-stage deduplication (DOI + fuzzy title matching)
+- **`src/services/filter_service.py`**: Quality filtering and weighted ranking
+- **`src/services/checkpoint_service.py`**: Atomic checkpoint saves for crash-safe resumption
+
+**Phase 3.1 Modules (✅ Complete - Concurrent Orchestration):**
+- **`src/orchestration/concurrent_pipeline.py`**: Async producer-consumer pattern with worker pools
+- **`src/models/concurrency.py`**: Resource limiting and backpressure configuration models
+
 **Test Coverage:**
-- **252 automated tests** (100% pass rate)
-- **98.35% overall coverage** (exceeds ≥95% requirement)
+- **442 automated tests** (100% pass rate)
+- **99.10% overall coverage** (exceeds ≥95% requirement)
 - **Production E2E verified** with real ArXiv papers and live Gemini LLM
+- **Concurrent orchestration verified** with async worker pools and resource limiting
 
 ## Development Workflow
 

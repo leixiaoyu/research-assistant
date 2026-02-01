@@ -287,11 +287,11 @@ def test_format_abstract(mock_paper):
     assert "No abstract available" in markdown_sparse
 
 
-# Tests for process_papers_concurrent (Phase 3.1 integration)
+# Tests for process_papers with concurrent/sequential integration (Phase 3.1)
 
 
 @pytest.mark.asyncio
-async def test_process_papers_concurrent_fallback_to_sequential(
+async def test_process_papers_fallback_to_sequential_when_phase3_missing(
     mock_pdf_service, mock_llm_service, mock_fallback_service, mock_paper
 ):
     """Test fallback to sequential when Phase 3 services missing."""
@@ -321,8 +321,9 @@ async def test_process_papers_concurrent_fallback_to_sequential(
     )
     mock_pdf_service.cleanup_temp_files = Mock()
 
-    # Call process_papers_concurrent - should fallback to sequential
-    results = await service.process_papers_concurrent(
+    # Call process_papers with run_id and query - should fallback to sequential
+    # since Phase 3 services are not available
+    results = await service.process_papers(
         papers=[mock_paper],
         targets=[],
         run_id="test-run",
@@ -331,10 +332,12 @@ async def test_process_papers_concurrent_fallback_to_sequential(
 
     # Should have processed the paper using sequential path
     assert len(results) == 1
+    # Concurrent pipeline should NOT be initialized
+    assert service._concurrent_pipeline is None
 
 
 @pytest.mark.asyncio
-async def test_process_papers_concurrent_with_phase3_services(
+async def test_process_papers_uses_concurrent_when_phase3_available(
     mock_pdf_service, mock_llm_service, mock_fallback_service, mock_paper
 ):
     """Test concurrent pipeline is used when Phase 3 services available."""
@@ -368,6 +371,10 @@ async def test_process_papers_concurrent_with_phase3_services(
         concurrency_config=concurrency_config,
     )
 
+    # Verify concurrent pipeline was eagerly initialized
+    assert service._concurrent_pipeline is not None
+    assert service._concurrent_enabled is True
+
     # Configure Phase 3 mocks
     mock_dedup.find_duplicates.return_value = ([mock_paper], [])
     mock_filter.filter_and_rank.return_value = [mock_paper]
@@ -396,21 +403,20 @@ async def test_process_papers_concurrent_with_phase3_services(
     )
     mock_llm_service.extract = AsyncMock(return_value=llm_result)
 
-    # Call process_papers_concurrent
-    results = await service.process_papers_concurrent(
+    # Call process_papers with run_id and query - should use concurrent
+    results = await service.process_papers(
         papers=[mock_paper],
         targets=[],
         run_id="test-concurrent-run",
         query="test query",
     )
 
-    # Verify concurrent processing was used
+    # Verify results
     assert len(results) == 1
-    assert service._concurrent_pipeline is not None  # Pipeline was initialized
 
 
 @pytest.mark.asyncio
-async def test_process_papers_concurrent_partial_services_fallback(
+async def test_process_papers_partial_services_uses_sequential(
     mock_pdf_service, mock_llm_service, mock_fallback_service, mock_paper
 ):
     """Test fallback when only some Phase 3 services available."""
@@ -432,6 +438,10 @@ async def test_process_papers_concurrent_partial_services_fallback(
         concurrency_config=None,  # Missing
     )
 
+    # Concurrent pipeline should NOT be initialized (partial services)
+    assert service._concurrent_pipeline is None
+    assert service._concurrent_enabled is False
+
     # Setup mocks for sequential fallback
     pdf_path = Path("/tmp/test.pdf")
     mock_pdf_service.download_pdf = AsyncMock(return_value=pdf_path)
@@ -444,8 +454,8 @@ async def test_process_papers_concurrent_partial_services_fallback(
     )
     mock_pdf_service.cleanup_temp_files = Mock()
 
-    # Call process_papers_concurrent - should fallback to sequential
-    results = await service.process_papers_concurrent(
+    # Call process_papers with run_id and query - should fallback to sequential
+    results = await service.process_papers(
         papers=[mock_paper],
         targets=[],
         run_id="test-run",
@@ -455,3 +465,63 @@ async def test_process_papers_concurrent_partial_services_fallback(
     # Should process via sequential path (no concurrent pipeline initialized)
     assert len(results) == 1
     assert service._concurrent_pipeline is None  # Pipeline was NOT initialized
+
+
+@pytest.mark.asyncio
+async def test_process_papers_sequential_when_no_run_id(
+    mock_pdf_service, mock_llm_service, mock_fallback_service, mock_paper
+):
+    """Test sequential processing when run_id/query not provided."""
+    from unittest.mock import MagicMock
+    from src.models.concurrency import ConcurrencyConfig
+
+    # Create mock Phase 3 services
+    mock_cache = MagicMock()
+    mock_dedup = MagicMock()
+    mock_filter = MagicMock()
+    mock_checkpoint = MagicMock()
+
+    concurrency_config = ConcurrencyConfig(
+        max_concurrent_downloads=2,
+        max_concurrent_llm=1,
+        queue_size=10,
+        checkpoint_interval=5,
+    )
+
+    # Create service WITH Phase 3 services
+    service = ExtractionService(
+        pdf_service=mock_pdf_service,
+        llm_service=mock_llm_service,
+        fallback_service=mock_fallback_service,
+        keep_pdfs=True,
+        cache_service=mock_cache,
+        dedup_service=mock_dedup,
+        filter_service=mock_filter,
+        checkpoint_service=mock_checkpoint,
+        concurrency_config=concurrency_config,
+    )
+
+    # Pipeline should be initialized
+    assert service._concurrent_pipeline is not None
+
+    # Setup mocks
+    pdf_path = Path("/tmp/test.pdf")
+    mock_pdf_service.download_pdf = AsyncMock(return_value=pdf_path)
+    pdf_result = PDFExtractionResult(
+        success=True, markdown="content", metadata={"backend": PDFBackend.PYMUPDF}
+    )
+    mock_fallback_service.extract_with_fallback = AsyncMock(return_value=pdf_result)
+    mock_llm_service.extract = AsyncMock(
+        return_value=PaperExtraction(paper_id="123", extraction_results=[])
+    )
+    mock_pdf_service.cleanup_temp_files = Mock()
+
+    # Call process_papers WITHOUT run_id and query - should use sequential
+    results = await service.process_papers(
+        papers=[mock_paper],
+        targets=[],
+        # No run_id or query provided
+    )
+
+    # Should have processed the paper using sequential path
+    assert len(results) == 1

@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from src.services.filter_service import FilterService
     from src.services.checkpoint_service import CheckpointService
     from src.models.concurrency import ConcurrencyConfig
-    from src.orchestration.concurrent_pipeline import ConcurrentPipeline
+    from src.orchestration.concurrent_pipeline import ConcurrentPipeline  # noqa: F401
 
 logger = structlog.get_logger()
 
@@ -92,8 +92,42 @@ class ExtractionService:
         self.checkpoint_service = checkpoint_service
         self.concurrency_config = concurrency_config
 
-        # Phase 3.1: Concurrent pipeline (initialized on demand)
+        # Phase 3.1: Eagerly initialize concurrent pipeline when all services available
         self._concurrent_pipeline: Optional["ConcurrentPipeline"] = None
+        self._concurrent_enabled = False
+
+        if all(
+            [
+                fallback_service,
+                cache_service,
+                dedup_service,
+                filter_service,
+                checkpoint_service,
+                concurrency_config,
+            ]
+        ):
+            from src.orchestration.concurrent_pipeline import (  # noqa: F811
+                ConcurrentPipeline,
+            )
+
+            # Type narrowing assertions - we've already checked these are not None
+            assert fallback_service is not None
+            assert concurrency_config is not None
+            assert cache_service is not None
+            assert dedup_service is not None
+            assert filter_service is not None
+            assert checkpoint_service is not None
+
+            self._concurrent_pipeline = ConcurrentPipeline(
+                config=concurrency_config,
+                fallback_pdf_service=fallback_service,
+                llm_service=llm_service,
+                cache_service=cache_service,
+                dedup_service=dedup_service,
+                filter_service=filter_service,
+                checkpoint_service=checkpoint_service,
+            )
+            self._concurrent_enabled = True
 
         logger.info(
             "extraction_service_initialized",
@@ -102,7 +136,7 @@ class ExtractionService:
             has_phase3_services=all(
                 [cache_service, dedup_service, filter_service, checkpoint_service]
             ),
-            concurrent_enabled=concurrency_config is not None,
+            concurrent_enabled=self._concurrent_enabled,
         )
 
     async def process_paper(
@@ -248,23 +282,42 @@ class ExtractionService:
         return extracted
 
     async def process_papers(
-        self, papers: List[PaperMetadata], targets: List[ExtractionTarget]
+        self,
+        papers: List[PaperMetadata],
+        targets: List[ExtractionTarget],
+        run_id: Optional[str] = None,
+        query: Optional[str] = None,
     ) -> List[ExtractedPaper]:
-        """Process multiple papers sequentially
+        """Process multiple papers with concurrent or sequential processing.
+
+        When Phase 3.1 concurrent pipeline is available and run_id/query are
+        provided, uses concurrent processing for better performance.
+        Otherwise, falls back to sequential processing.
 
         Args:
             papers: List of papers to process
             targets: Extraction targets
+            run_id: Unique run identifier for checkpointing (required for concurrent)
+            query: Search query for relevance filtering (required for concurrent)
 
         Returns:
             List of ExtractedPaper objects
-
-        Note:
-            Papers are processed sequentially to control costs and
-            comply with rate limits. Phase 3 will add concurrent processing.
         """
+        # Use concurrent processing if available and parameters provided
+        if self._concurrent_pipeline is not None and run_id and query:
+            return await self._process_papers_concurrent(
+                papers=papers,
+                targets=targets,
+                run_id=run_id,
+                query=query,
+            )
+
+        # Fall back to sequential processing
         logger.info(
-            "batch_processing_started", total_papers=len(papers), targets=len(targets)
+            "batch_processing_started",
+            total_papers=len(papers),
+            targets=len(targets),
+            mode="sequential",
         )
 
         results = []
@@ -287,6 +340,7 @@ class ExtractionService:
             total_papers=len(papers),
             successful_extractions=successful,
             papers_with_pdf=with_pdf,
+            mode="sequential",
         )
 
         return results
@@ -368,17 +422,17 @@ Extraction is based on abstract only.
             ),
         }
 
-    async def process_papers_concurrent(
+    async def _process_papers_concurrent(
         self,
         papers: List[PaperMetadata],
         targets: List[ExtractionTarget],
         run_id: str,
         query: str,
     ) -> List[ExtractedPaper]:
-        """Process papers concurrently using Phase 3.1 concurrent pipeline.
+        """Internal method for concurrent paper processing.
 
-        This method requires Phase 3 services to be initialized.
-        If Phase 3 services are not available, falls back to sequential processing.
+        Called by process_papers() when concurrent pipeline is available.
+        The pipeline is eagerly initialized in __init__.
 
         Args:
             papers: Papers to process
@@ -388,63 +442,16 @@ Extraction is based on abstract only.
 
         Returns:
             List of ExtractedPaper objects
-
-        Raises:
-            ValueError: If concurrent processing requested but Phase 3
-                services unavailable
         """
-        # Check if Phase 3 services are available
-        if not all(
-            [
-                self.cache_service,
-                self.dedup_service,
-                self.filter_service,
-                self.checkpoint_service,
-                self.concurrency_config,
-                self.fallback_service,
-            ]
-        ):
-            logger.warning(
-                "concurrent_processing_unavailable_falling_back_to_sequential",
-                missing_services={
-                    "cache": self.cache_service is None,
-                    "dedup": self.dedup_service is None,
-                    "filter": self.filter_service is None,
-                    "checkpoint": self.checkpoint_service is None,
-                    "concurrency_config": (self.concurrency_config is None),
-                    "fallback_pdf": self.fallback_service is None,
-                },
-            )
-            # Fallback to sequential processing
-            return await self.process_papers(papers, targets)
-
-        # Lazy initialization of concurrent pipeline
-        if self._concurrent_pipeline is None:
-            from src.orchestration.concurrent_pipeline import ConcurrentPipeline
-
-            # Type narrowing assertions - we've already checked these are not None
-            assert self.fallback_service is not None
-            assert self.concurrency_config is not None
-            assert self.cache_service is not None
-            assert self.dedup_service is not None
-            assert self.filter_service is not None
-            assert self.checkpoint_service is not None
-
-            self._concurrent_pipeline = ConcurrentPipeline(
-                config=self.concurrency_config,
-                fallback_pdf_service=self.fallback_service,
-                llm_service=self.llm_service,
-                cache_service=self.cache_service,
-                dedup_service=self.dedup_service,
-                filter_service=self.filter_service,
-                checkpoint_service=self.checkpoint_service,
-            )
+        assert self._concurrent_pipeline is not None
+        assert self.concurrency_config is not None
 
         logger.info(
             "concurrent_processing_started",
             run_id=run_id,
             total_papers=len(papers),
-            num_workers=self.concurrency_config.max_concurrent_downloads,  # type: ignore  # noqa: E501
+            num_workers=self.concurrency_config.max_concurrent_downloads,
+            mode="concurrent",
         )
 
         # Process concurrently
@@ -461,6 +468,7 @@ Extraction is based on abstract only.
             run_id=run_id,
             total_papers=len(papers),
             successful=len(results),
+            mode="concurrent",
         )
 
         return results

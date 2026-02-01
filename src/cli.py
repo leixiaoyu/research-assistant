@@ -269,8 +269,8 @@ async def _process_topics(
                 )
 
                 # Process papers through extraction pipeline
-                # Phase 3.1: Use concurrent processing when available
-                extracted_papers = await extraction_svc.process_papers_concurrent(
+                # Phase 3.1: process_papers() uses concurrent processing when available
+                extracted_papers = await extraction_svc.process_papers(
                     papers=papers,
                     targets=topic.extraction_targets,
                     run_id=run_id,

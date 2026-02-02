@@ -24,6 +24,67 @@ The following requirements are **absolute** and **block all commits and pushes**
 
 **Direct pushes to `main` are disabled and strictly forbidden.**
 
+### 🌳 Git Worktree Protocol (Mandatory)
+
+**All development work MUST be performed in isolated git worktrees.**
+
+This ensures:
+- Clean separation between concurrent tasks
+- No accidental pollution of the main working directory
+- Safe experimentation without affecting other work in progress
+- Easy cleanup when work is complete
+
+**Worktree Rules:**
+
+1. **Always Create a Worktree for New Work:**
+   ```bash
+   # Standard location: ../.zcf/{project-name}/{feature-name}
+   git worktree add -b feature/my-feature ../.zcf/research-assist/my-feature main
+   ```
+
+2. **Check Existing Worktrees Before Any Worktree Operation:**
+   ```bash
+   git worktree list
+   ```
+
+3. **Never Force-Remove Worktrees:**
+   - Other processes may be using them
+   - Always verify with `git worktree list` first
+   - Ask user for confirmation before any removal
+
+4. **Cleanup After PR Merge:**
+   ```bash
+   git worktree remove <path>  # Safe removal (will fail if dirty)
+   git branch -d <branch>       # Delete merged branch
+   ```
+
+### ⚠️ Dangerous Operations - User Confirmation Required
+
+**NEVER execute the following commands without EXPLICIT user confirmation:**
+
+| Command | Risk | Confirmation Required |
+|---------|------|----------------------|
+| `git worktree remove --force` | May destroy uncommitted work | ✅ ALWAYS |
+| `git reset --hard` | Destroys uncommitted changes | ✅ ALWAYS |
+| `git clean -f` / `git clean -fd` | Deletes untracked files | ✅ ALWAYS |
+| `git checkout -- .` | Discards all changes | ✅ ALWAYS |
+| `git branch -D` (uppercase D) | Force deletes branch | ✅ ALWAYS |
+| `git push --force` | Rewrites remote history | ✅ ALWAYS |
+| `git stash drop` | Permanently deletes stash | ✅ ALWAYS |
+| `rm -rf` on any git directory | Destroys repository data | ✅ ALWAYS |
+
+**Before ANY destructive operation:**
+1. List what will be affected (`git status`, `git worktree list`, `git stash list`)
+2. Explain the impact to the user
+3. Wait for explicit "yes", "confirm", or "proceed" response
+4. Never assume silence or ambiguous responses as confirmation
+
+**Safe Alternatives:**
+- Use `git worktree remove` (without --force) - fails safely if worktree is dirty
+- Use `git branch -d` (lowercase d) - fails safely if branch is not merged
+- Use `git stash` instead of discarding changes
+- Use `git checkout -b backup/branch` before destructive operations
+
 ### PR Requirements (Non-Negotiable)
 Before a Pull Request can be merged into `main`:
 1. **CI Status:** The "test (3.10)" workflow must pass with **100% success rate**.

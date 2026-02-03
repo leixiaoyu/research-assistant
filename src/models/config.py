@@ -75,6 +75,20 @@ class ResearchTopic(BaseModel):
     extraction_targets: Optional[List[ExtractionTarget]] = Field(
         default=None, description="List of extraction targets for this topic (Phase 2)"
     )
+    # Phase 3.2: Provider selection enhancements
+    min_citations: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Minimum citation count (requires Semantic Scholar)",
+    )
+    benchmark: bool = Field(
+        default=False,
+        description="Enable provider comparison mode for this topic",
+    )
+    auto_select_provider: bool = Field(
+        default=True,
+        description="Allow automatic provider selection when not explicitly set",
+    )
 
     @field_validator("query")
     @classmethod
@@ -162,6 +176,33 @@ class CostLimitSettings(BaseModel):
     )
 
 
+class ProviderSelectionConfig(BaseModel):
+    """Configuration for intelligent provider selection (Phase 3.2)"""
+
+    auto_select: bool = Field(
+        default=True,
+        description="Automatically select optimal provider based on query",
+    )
+    fallback_enabled: bool = Field(
+        default=True,
+        description="Enable automatic fallback to alternate providers on failure",
+    )
+    benchmark_mode: bool = Field(
+        default=False,
+        description="Query all providers for comparison",
+    )
+    preference_order: List[ProviderType] = Field(
+        default_factory=lambda: [ProviderType.ARXIV, ProviderType.SEMANTIC_SCHOLAR],
+        description="Provider preference order for auto-selection",
+    )
+    fallback_timeout_seconds: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=120.0,
+        description="Timeout before triggering fallback",
+    )
+
+
 class GlobalSettings(BaseModel):
     """Global pipeline settings"""
 
@@ -186,6 +227,11 @@ class GlobalSettings(BaseModel):
     concurrency: ConcurrencyConfig = Field(
         default_factory=lambda: ConcurrencyConfig(),
         description="Concurrent processing settings (Phase 3.1)",
+    )
+    # Phase 3.2: Provider selection configuration
+    provider_selection: ProviderSelectionConfig = Field(
+        default_factory=lambda: ProviderSelectionConfig(),
+        description="Provider selection settings (Phase 3.2)",
     )
 
 

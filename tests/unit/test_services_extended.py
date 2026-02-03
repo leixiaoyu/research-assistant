@@ -3,13 +3,15 @@ from unittest.mock import MagicMock, patch, AsyncMock
 from datetime import datetime
 from pathlib import Path
 
-from src.services.discovery_service import DiscoveryService, APIError
+from src.services.discovery_service import DiscoveryService
+from src.services.providers.base import APIError
 from src.services.catalog_service import CatalogService
 from src.services.config_manager import ConfigManager, ConfigValidationError
 from src.models.config import (
     ResearchTopic,
     TimeframeRecent,
     ProviderType,
+    ProviderSelectionConfig,
 )
 from src.models.catalog import Catalog, TopicCatalogEntry
 
@@ -18,7 +20,9 @@ from src.models.catalog import Catalog, TopicCatalogEntry
 
 @pytest.fixture
 def discovery_service():
-    return DiscoveryService("key")
+    # Disable auto-select for explicit provider tests
+    config = ProviderSelectionConfig(auto_select=False, fallback_enabled=False)
+    return DiscoveryService("test_key_1234567890", config=config)
 
 
 @pytest.fixture
@@ -28,6 +32,7 @@ def topic_recent():
         provider=ProviderType.SEMANTIC_SCHOLAR,
         timeframe=TimeframeRecent(value="48h"),
         max_papers=5,
+        auto_select_provider=False,  # Disable auto-selection for explicit tests
     )
 
 
@@ -44,35 +49,54 @@ async def test_search_delegation(discovery_service, topic_recent):
 
 @pytest.mark.asyncio
 async def test_search_api_errors(discovery_service, topic_recent):
-    """Test handling of API errors"""
-    with patch("aiohttp.ClientSession.get") as mock_get:
-        mock_resp = AsyncMock()
-        mock_get.return_value.__aenter__.return_value = mock_resp
+    """Test handling of API errors with fallback disabled"""
+    with patch(
+        "src.services.providers.semantic_scholar.SemanticScholarProvider.search",
+        new_callable=AsyncMock,
+    ) as mock_search:
+        # Simulate API error
+        mock_search.side_effect = APIError("API Error")
 
-        # 400 Error (Non-retriable in SemanticScholarProvider)
-        mock_resp.status = 400
-        mock_resp.text = AsyncMock(return_value="Bad Request")
-
-        with patch("src.services.providers.semantic_scholar.logger"):
-            # Can be APIError or RetryError depending on implementation
-            with pytest.raises(Exception):
+        with patch("src.services.discovery_service.logger"):
+            # With fallback disabled, API errors propagate up
+            with pytest.raises(APIError, match="API Error"):
                 await discovery_service.search(topic_recent)
 
 
 @pytest.mark.asyncio
-async def test_search_provider_unavailable(discovery_service, topic_recent):
+async def test_search_provider_unavailable():
     """Test error when provider is requested but not configured"""
-    ds = DiscoveryService(api_key="")  # No key for Semantic Scholar
+    # No API key, and disable auto-select so it doesn't fallback to ArXiv
+    config = ProviderSelectionConfig(auto_select=False, fallback_enabled=False)
+    ds = DiscoveryService(api_key="", config=config)
+
+    topic = ResearchTopic(
+        query="test",
+        provider=ProviderType.SEMANTIC_SCHOLAR,
+        timeframe=TimeframeRecent(value="48h"),
+        auto_select_provider=False,
+    )
     with pytest.raises(APIError, match="not available"):
-        await ds.search(topic_recent)
+        await ds.search(topic)
 
 
 @pytest.mark.asyncio
-async def test_search_unknown_provider(discovery_service, topic_recent):
+async def test_search_unknown_provider():
     """Test error for unknown provider type"""
-    topic_recent.provider = "unknown"  # type: ignore
+    config = ProviderSelectionConfig(auto_select=False, fallback_enabled=False)
+    ds = DiscoveryService(api_key="test_key_1234567890", config=config)
+
+    topic = ResearchTopic(
+        query="test",
+        provider=ProviderType.ARXIV,
+        timeframe=TimeframeRecent(value="48h"),
+        auto_select_provider=False,
+    )
+    # Remove ArXiv from providers to trigger unknown provider error
+    del ds.providers[ProviderType.ARXIV]
+
     with pytest.raises(ValueError, match="Unknown provider type"):
-        await discovery_service.search(topic_recent)
+        await ds.search(topic)
 
 
 # --- Catalog Service Tests ---

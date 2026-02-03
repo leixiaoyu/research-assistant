@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The following requirements are **absolute** and **block all commits and pushes** without exception:
 
 1. **🔒 Security:** All security checklist items must pass
-2. **🧪 Test Coverage:** ≥95% coverage for all modules (target 100%)
+2. **🧪 Test Coverage:** ≥99% coverage for all modules (target 100%)
 3. **✅ Tests Passing:** 100% pass rate (0 failures)
 4. **📋 Completeness:** All feature requirements fully implemented
 5. **🔏 Branch Protection:** No direct pushes to `main`. All changes via PR only.
@@ -89,7 +89,7 @@ This ensures:
 Before a Pull Request can be merged into `main`:
 1. **CI Status:** The "test (3.10)" workflow must pass with **100% success rate**.
 2. **Linting & Types:** **Flake8**, **Black** (formatting), and **Mypy** (static analysis) must pass with zero issues.
-3. **Coverage:** The "test (3.10)" workflow must verify **≥95% test coverage per module**.
+3. **Coverage:** The "test (3.10)" workflow must verify **≥99% test coverage per module**.
 4. **Approval:** At least **one approving review** from a human teammate is required.
 5. **Admin Enforcement:** These rules apply to **all users**, including administrators. No bypasses.
 
@@ -125,7 +125,7 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
       ./verify.sh
       ```
       - **100% Pass Rate** for automated tests.
-      - **≥95% Coverage** per module.
+      - **≥99% Coverage** per module.
       - **Zero Formatting/Linting/Type Issues.**
    4. **Cleanup:** Safely remove the worktree:
       ```bash
@@ -183,13 +183,13 @@ See [SYSTEM_ARCHITECTURE.md §9 Security](docs/SYSTEM_ARCHITECTURE.md#security) 
 
 **Coverage Requirements:**
 - **Target:** 100% test coverage for all new code
-- **Minimum Acceptable:** 95% coverage per module
-- **Overall Project:** Must maintain ≥95% coverage at all times
+- **Minimum Acceptable:** 99% coverage per module
+- **Overall Project:** Must maintain ≥99% coverage at all times
 
-**If coverage falls below 95%, you MUST NOT commit or push. No exceptions.**
+**If coverage falls below 99%, you MUST NOT commit or push. No exceptions.**
 
 **Pragmatic Approach:**
-- Aim for 100%, accept 95%+ with clear justification
+- Aim for 100%, accept 99%+ with clear justification
 - Every uncovered line must be documented with reason (e.g., "unreachable defensive code", "external library limitation")
 - Coverage gaps must be tracked as technical debt and resolved within 1 sprint
 
@@ -198,7 +198,7 @@ See [SYSTEM_ARCHITECTURE.md §9 Security](docs/SYSTEM_ARCHITECTURE.md#security) 
 - [ ] Integration tests cover all service interactions
 - [ ] Edge cases have dedicated tests
 - [ ] Error paths are fully tested
-- [ ] `pytest --cov=src --cov-report=term-missing` shows ≥95%
+- [ ] `pytest --cov=src --cov-report=term-missing` shows ≥99%
 - [ ] Any uncovered lines documented in verification report
 
 ### 🧪 Test-Driven Development (Required)
@@ -210,7 +210,7 @@ Every feature must have:
    - Unit tests for all functions
    - Integration tests for service interactions
    - End-to-end tests for critical workflows
-   - **Test coverage ≥95% (see Test Coverage section above)**
+   - **Test coverage ≥99% (see Test Coverage section above)**
    - **100% pass rate required for all CI pipelines**
 
 2. **Manual Verification** (when automated tests insufficient):
@@ -242,7 +242,7 @@ Every feature must have:
    - Status: PASS ✅
 
 ### Coverage
-- **Overall Coverage:** X% (MUST be ≥95%)
+- **Overall Coverage:** X% (MUST be ≥99%)
 - Unit Tests: X%
 - Integration Tests: Y%
 - Manual Tests: Z test cases
@@ -251,7 +251,7 @@ Every feature must have:
 - `file.py:123` - Reason: [Defensive code for impossible state]
 - `file.py:456` - Reason: [External library error handling]
 
-**Coverage Status:** [PASS ✅ if ≥95%, FAIL ❌ if <95%]
+**Coverage Status:** [PASS ✅ if ≥99%, FAIL ❌ if <99%]
 
 ### Security Verification
 - [ ] All security checklist items verified
@@ -273,7 +273,7 @@ Every feature must function **100% of the time** according to its specification 
 - All inputs validated
 - All security requirements met
 - **All tests passing (100% pass rate)**
-- **Test coverage ≥95% for all modified modules**
+- **Test coverage ≥99% for all modified modules**
 - All documentation updated
 - Verification report generated with coverage proof
 
@@ -418,7 +418,7 @@ The pipeline consists of five main modules:
 
 **Test Coverage:**
 - **442 automated tests** (100% pass rate)
-- **99.10% overall coverage** (exceeds ≥95% requirement)
+- **99.10% overall coverage** (meets ≥99% requirement)
 - **Production E2E verified** with real ArXiv papers and live Gemini LLM
 - **Concurrent orchestration verified** with async worker pools and resource limiting
 
@@ -452,7 +452,7 @@ The project includes a comprehensive verification script that runs all required 
 1. ✅ **Black** - Code formatting (zero changes required)
 2. ✅ **Flake8** - Linting (zero issues)
 3. ✅ **Mypy** - Type checking (zero errors)
-4. ✅ **Pytest** - All tests pass with ≥95% coverage
+4. ✅ **Pytest** - All tests pass with ≥99% coverage
 
 **This script MUST pass 100% before:**
 - Committing code
@@ -476,10 +476,10 @@ The project includes a comprehensive verification script that runs all required 
 
 1. **`./verify.sh` must pass 100%** (Formatting, Linting, Types, Tests)
 2. **All tests must pass** (100% pass rate, 0 failures)
-3. **Coverage must be ≥95%** for all modified modules
-   - Run: `pytest --cov=src --cov-report=term-missing --cov-fail-under=95`
-   - Any module below 95% BLOCKS the push
-   - Overall project coverage must remain ≥95%
+3. **Coverage must be ≥99%** for all modified modules
+   - Run: `pytest --cov=src --cov-report=term-missing --cov-fail-under=99`
+   - Any module below 99% BLOCKS the push
+   - Overall project coverage must remain ≥99%
 4. **No linting errors** (Flake8 clean)
 5. **No type errors** (Mypy clean)
 6. **No formatting issues** (Black clean)
@@ -490,7 +490,7 @@ The project includes a comprehensive verification script that runs all required 
 **If ANY requirement fails, you MUST NOT push. Fix issues first. No exceptions.**
 
 **Coverage Enforcement:**
-- If coverage < 95%: Add tests until ≥95%
+- If coverage < 99%: Add tests until ≥99%
 - If legitimately uncoverable: Document in verification report
 - If uncertain: Ask for clarification, do NOT push
 
@@ -530,12 +530,12 @@ The project includes a comprehensive verification script that runs all required 
    pytest --cov=src --cov-report=term-missing
    ```
    - **CRITICAL:** Check coverage for EVERY modified module
-   - **Minimum per module:** ≥95% (hard requirement)
-   - **Overall project:** ≥95% (hard requirement)
-   - If any module < 95%:
+   - **Minimum per module:** ≥99% (hard requirement)
+   - **Overall project:** ≥99% (hard requirement)
+   - If any module < 99%:
      - Add comprehensive tests for uncovered lines
      - Test exception handling, error paths, edge cases
-     - Do NOT create PR until all modules ≥95%
+     - Do NOT create PR until all modules ≥99%
 
 5. **✅ Test Pass Rate**
    ```bash
@@ -568,7 +568,7 @@ The project includes a comprehensive verification script that runs all required 
 | Issue | Fix |
 |-------|-----|
 | Black formatting fails | Run `black .` and commit changes |
-| Module coverage < 95% | Add tests for uncovered lines (exception handling, edge cases) |
+| Module coverage < 99% | Add tests for uncovered lines (exception handling, edge cases) |
 | Flake8 unused imports | Remove unused imports |
 | Flake8 line too long | Break line into multiple lines (max 88 chars) |
 | Mypy type errors | Add proper type hints or use `# type: ignore` with justification |
@@ -588,7 +588,7 @@ The project includes a comprehensive verification script that runs all required 
   1. Black formatting
   2. Flake8 linting
   3. Mypy type checking
-  4. Pytest with ≥95% coverage
+  4. Pytest with ≥99% coverage
 
 **If CI fails, the PR cannot be merged.**
 
@@ -619,9 +619,9 @@ The project includes a comprehensive verification script that runs all required 
 
 ### Testing Standards
 * **Coverage Requirements (BLOCKING):**
-  - **Minimum:** ≥95% for all modules (hard requirement)
+  - **Minimum:** ≥99% for all modules (hard requirement)
   - **Target:** 100% for all new code
-  - **Project-wide:** Must maintain ≥95% at all times
+  - **Project-wide:** Must maintain ≥99% at all times
   - **Verification:** Use `pytest --cov=src --cov-report=term-missing`
   - **Documentation:** Any line below 100% must be justified in verification report
 
@@ -642,8 +642,8 @@ The project includes a comprehensive verification script that runs all required 
 * **Test Naming:** `test_<function>_<scenario>` (e.g., `test_validate_query_rejects_injection`)
 
 * **Coverage Enforcement:**
-  - Pre-commit hook should reject commits with coverage <95%
-  - CI/CD pipeline must fail on coverage <95%
+  - Pre-commit hook should reject commits with coverage <99%
+  - CI/CD pipeline must fail on coverage <99%
   - Pull requests require coverage proof in description
 
 ## Key Implementation Details

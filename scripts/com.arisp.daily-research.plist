@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.arisp.daily-research.plist
+
+  launchd configuration for daily ARISP research pipeline execution.
+
+  INSTALLATION:
+  1. Copy this file to ~/Library/LaunchAgents/
+  2. Edit the file and replace ${PROJECT_ROOT} with actual path
+     (e.g., /Users/yourname/Documents/research-assist)
+  3. Load: launchctl load ~/Library/LaunchAgents/com.arisp.daily-research.plist
+
+  MANAGEMENT:
+  - Load:   launchctl load ~/Library/LaunchAgents/com.arisp.daily-research.plist
+  - Unload: launchctl unload ~/Library/LaunchAgents/com.arisp.daily-research.plist
+  - Status: launchctl list | grep arisp
+  - Run:    launchctl start com.arisp.daily-research
+
+  BEHAVIOR:
+  - Runs daily at 3:00 AM local time
+  - If machine is asleep at 3 AM, runs when machine wakes
+  - Logs to ${PROJECT_ROOT}/logs/launchd_*.log
+-->
+<plist version="1.0">
+<dict>
+    <!-- Unique identifier for this service -->
+    <key>Label</key>
+    <string>com.arisp.daily-research</string>
+
+    <!-- Command to execute -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>${PROJECT_ROOT}/scripts/daily_run.sh</string>
+    </array>
+
+    <!-- Schedule: Daily at 3:00 AM -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>${PROJECT_ROOT}</string>
+
+    <!-- Standard output log -->
+    <key>StandardOutPath</key>
+    <string>${PROJECT_ROOT}/logs/launchd_stdout.log</string>
+
+    <!-- Standard error log -->
+    <key>StandardErrorPath</key>
+    <string>${PROJECT_ROOT}/logs/launchd_stderr.log</string>
+
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>${HOME}</string>
+    </dict>
+
+    <!-- Run at load (for testing - set to false for production) -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Keep alive settings -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Nice value (lower priority) -->
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <!-- Process type -->
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

@@ -110,7 +110,7 @@ Pipeline can be safely re-run; checkpoints enable resume.
 ### 11. **Test-Driven Development**
 No code pushed without complete verification (automated tests or manual validation).
 - **Target**: 100% test coverage for all modules.
-- **Minimum**: 95% test coverage per module (Non-negotiable blocking gate).
+- **Minimum**: 99% test coverage per module (Non-negotiable blocking gate).
 - **CI Enforcement**: Automated coverage checks, linting (Flake8/Black), and type checking (Mypy).
 
 ---

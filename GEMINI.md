@@ -11,7 +11,7 @@ This file provides guidance to Gemini CLI when working with code in this reposit
 The following requirements are **absolute** and **block all commits and pushes** without exception:
 
 1. **🔒 Security:** All security checklist items must pass
-2. **🧪 Test Coverage:** ≥95% coverage for all modules (target 100%)
+2. **🧪 Test Coverage:** ≥99% coverage for all modules (target 100%)
 3. **✅ Tests Passing:** 100% pass rate (0 failures)
 4. **📋 Completeness:** All feature requirements fully implemented
 5. **🔏 Branch Protection:** No direct pushes to `main`. All changes via PR only.
@@ -89,7 +89,7 @@ This ensures:
 Before a Pull Request can be merged into `main`:
 1. **CI Status:** The "test (3.10)" workflow must pass with **100% success rate**.
 2. **Linting & Types:** **Flake8**, **Black** (formatting), and **Mypy** (static analysis) must pass with zero issues.
-3. **Coverage:** The "test (3.10)" workflow must verify **≥95% test coverage per module**.
+3. **Coverage:** The "test (3.10)" workflow must verify **≥99% test coverage per module**.
 4. **Approval:** At least **one approving review** from a human teammate is required.
 5. **Admin Enforcement:** These rules apply to **all users**, including administrators. No bypasses.
 
@@ -125,7 +125,7 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
       ./verify.sh
       ```
       - **100% Pass Rate** for automated tests.
-      - **≥95% Coverage** per module.
+      - **≥99% Coverage** per module.
       - **Zero Formatting/Linting/Type Issues.**
    4. **Cleanup:** Safely remove the worktree:
       ```bash
@@ -183,13 +183,13 @@ See [SYSTEM_ARCHITECTURE.md §9 Security](docs/SYSTEM_ARCHITECTURE.md#security) 
 
 **Coverage Requirements:**
 - **Target:** 100% test coverage for all new code
-- **Minimum Acceptable:** 95% coverage per module
-- **Overall Project:** Must maintain ≥95% coverage at all times
+- **Minimum Acceptable:** 99% coverage per module
+- **Overall Project:** Must maintain ≥99% coverage at all times
 
 **If coverage falls below 95%, you MUST NOT commit or push. No exceptions.**
 
 **Pragmatic Approach:**
-- Aim for 100%, accept 95%+ with clear justification
+- Aim for 100%, accept 99%+ with clear justification
 - Every uncovered line must be documented with reason (e.g., "unreachable defensive code", "external library limitation")
 - Coverage gaps must be tracked as technical debt and resolved within 1 sprint
 
@@ -198,7 +198,7 @@ See [SYSTEM_ARCHITECTURE.md §9 Security](docs/SYSTEM_ARCHITECTURE.md#security) 
 - [ ] Integration tests cover all service interactions
 - [ ] Edge cases have dedicated tests
 - [ ] Error paths are fully tested
-- [ ] `pytest --cov=src --cov-report=term-missing` shows ≥95%
+- [ ] `pytest --cov=src --cov-report=term-missing` shows ≥99%
 - [ ] Any uncovered lines documented in verification report
 
 ### 🧪 Test-Driven Development (Required)
@@ -210,7 +210,7 @@ Every feature must have:
    - Unit tests for all functions
    - Integration tests for service interactions
    - End-to-end tests for critical workflows
-   - **Test coverage ≥95% (see Test Coverage section above)**
+   - **Test coverage ≥99% (see Test Coverage section above)**
    - **100% pass rate required for all CI pipelines**
 
 2. **Manual Verification** (when automated tests insufficient):
@@ -242,7 +242,7 @@ Every feature must have:
    - Status: PASS ✅
 
 ### Coverage
-- **Overall Coverage:** X% (MUST be ≥95%)
+- **Overall Coverage:** X% (MUST be ≥99%)
 - Unit Tests: X%
 - Integration Tests: Y%
 - Manual Tests: Z test cases
@@ -251,7 +251,7 @@ Every feature must have:
 - `file.py:123` - Reason: [Defensive code for impossible state]
 - `file.py:456` - Reason: [External library error handling]
 
-**Coverage Status:** [PASS ✅ if ≥95%, FAIL ❌ if <95%]
+**Coverage Status:** [PASS ✅ if ≥99%, FAIL ❌ if <99%]
 
 ### Security Verification
 - [ ] All security checklist items verified
@@ -273,7 +273,7 @@ Every feature must function **100% of the time** according to its specification 
 - All inputs validated
 - All security requirements met
 - **All tests passing (100% pass rate)**
-- **Test coverage ≥95% for all modified modules**
+- **Test coverage ≥99% for all modified modules**
 - All documentation updated
 - Verification report generated with coverage proof
 

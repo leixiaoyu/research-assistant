@@ -248,7 +248,7 @@ output/
 | Metrics | Prometheus | Time-series metrics |
 | Dashboards | Grafana | Visualization |
 | Scheduling | APScheduler | Automated runs |
-| Testing | pytest | >95% coverage |
+| Testing | pytest | >99% coverage |
 | Security | pre-commit hooks | Secret scanning, linting |
 
 ## 📊 Performance & Quality

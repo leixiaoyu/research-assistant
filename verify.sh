@@ -35,8 +35,8 @@ $PYTHON_CMD -m flake8 src/ tests/
 echo "🔍 Running Mypy (type checking)..."
 $PYTHON_CMD -m mypy src/
 
-echo "🧪 Running Tests with Coverage (>=95% required)..."
+echo "🧪 Running Tests with Coverage (>=99% required)..."
 # Use absolute path for coverage to ensure consistency
-$PYTHON_CMD -m pytest --cov=src --cov-report=term-missing --cov-fail-under=95 tests/
+$PYTHON_CMD -m pytest --cov=src --cov-report=term-missing --cov-fail-under=99 tests/
 
 echo "✅ All checks passed!"

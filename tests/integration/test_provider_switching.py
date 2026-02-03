@@ -1,18 +1,27 @@
 import pytest
 from unittest.mock import patch, AsyncMock
 from src.services.discovery_service import DiscoveryService
-from src.models.config import ResearchTopic, TimeframeRecent, ProviderType
+from src.models.config import (
+    ResearchTopic,
+    TimeframeRecent,
+    ProviderType,
+    ProviderSelectionConfig,
+)
 
 
 @pytest.mark.asyncio
 async def test_provider_switching():
     """Test switching between providers"""
+    # Disable auto-select to test explicit provider switching
+    config = ProviderSelectionConfig(auto_select=False)
+
     # 1. Test ArXiv (Default)
-    ds = DiscoveryService()
+    ds = DiscoveryService(config=config)
     topic_arxiv = ResearchTopic(
         query="test",
         provider=ProviderType.ARXIV,
         timeframe=TimeframeRecent(value="48h"),
+        auto_select_provider=False,  # Disable auto-selection for explicit test
     )
 
     with patch(
@@ -23,11 +32,12 @@ async def test_provider_switching():
         mock_arxiv.assert_called_once()
 
     # 2. Test Semantic Scholar
-    ds_ss = DiscoveryService(api_key="test_key_1234567890")
+    ds_ss = DiscoveryService(api_key="test_key_1234567890", config=config)
     topic_ss = ResearchTopic(
         query="test",
         provider=ProviderType.SEMANTIC_SCHOLAR,
         timeframe=TimeframeRecent(value="48h"),
+        auto_select_provider=False,  # Disable auto-selection for explicit test
     )
 
     with patch(

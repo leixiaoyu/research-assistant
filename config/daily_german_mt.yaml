@@ -1,0 +1,166 @@
+# Daily German MT Research Configuration
+# ========================================
+#
+# Optimized for automated daily runs via launchd.
+# Focus: German machine translation challenges
+#
+# Topics covered:
+#   1. Formality and Register (Sie/du, politeness)
+#   2. Long-form and Literary Translation
+#   3. Prompt Engineering for Translation
+#   4. Context-Aware Translation
+#   5. Style Preservation in Translation
+#
+# Cost estimate: ~$0.10-0.50/day with Gemini Flash
+# Execution time: ~15-30 minutes
+#
+# Usage:
+#   python -m src.cli run --config config/daily_german_mt.yaml
+
+research_topics:
+  # -------------------------------------------------------------------------
+  # Topic 1: Formality and Register
+  # -------------------------------------------------------------------------
+  # German has distinct formal (Sie) and informal (du) address forms.
+  # This topic tracks research on handling register/formality in MT.
+  - query: 'neural machine translation low-resource language'
+    provider: "semantic_scholar"
+    auto_select_provider: false  # Force Semantic Scholar
+    timeframe:
+      type: "recent"
+      value: "30d"
+    max_papers: 20
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "2-paragraph summary focusing on practical applications for handling German formality in translation systems"
+        output_format: "text"
+        required: true
+
+  # -------------------------------------------------------------------------
+  # Topic 2: Long-form and Literary Translation
+  # -------------------------------------------------------------------------
+  # Challenges in translating long documents: coherence, consistency,
+  # literary style preservation, discourse-level phenomena.
+  - query: 'document-level machine translation German'
+    provider: "semantic_scholar"
+    auto_select_provider: false  # Force Semantic Scholar
+    timeframe:
+      type: "recent"
+      value: "30d"
+    max_papers: 20
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on techniques for handling long context, maintaining coherence, and preserving literary style in German translation"
+        output_format: "text"
+        required: true
+
+  # -------------------------------------------------------------------------
+  # Topic 3: Prompt Engineering for Translation
+  # -------------------------------------------------------------------------
+  # Using prompts and in-context learning to improve translation quality,
+  # especially for German-specific challenges.
+  - query: 'prompt engineering machine translation multilingual'
+    provider: "semantic_scholar"
+    auto_select_provider: false  # Force Semantic Scholar
+    timeframe:
+      type: "recent"
+      value: "30d"
+    max_papers: 25
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on prompt design patterns, few-shot examples, and techniques for improving German translation quality through prompting"
+        output_format: "text"
+        required: true
+
+  # -------------------------------------------------------------------------
+  # Topic 4: Context-Aware Translation
+  # -------------------------------------------------------------------------
+  # Using context beyond the sentence level: document context,
+  # discourse markers, anaphora resolution, topic consistency.
+  - query: 'context-aware neural machine translation discourse'
+    provider: "semantic_scholar"
+    auto_select_provider: false  # Force Semantic Scholar
+    timeframe:
+      type: "recent"
+      value: "30d"
+    max_papers: 20
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on context modeling techniques, discourse-aware translation, and handling German discourse phenomena"
+        output_format: "text"
+        required: true
+
+  # -------------------------------------------------------------------------
+  # Topic 5: Style Preservation in Translation
+  # -------------------------------------------------------------------------
+  # Maintaining authorial voice, tone, and stylistic features
+  # in translation, especially for creative and literary texts.
+  - query: 'large language model translation style coherence'
+    provider: "semantic_scholar"
+    auto_select_provider: false  # Force Semantic Scholar
+    timeframe:
+      type: "recent"
+      value: "30d"
+    max_papers: 20
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on maintaining style consistency, authorial voice, and coherence in long-form translation"
+        output_format: "text"
+        required: true
+
+# =============================================================================
+# Global Settings
+# =============================================================================
+settings:
+  # Output configuration
+  output_base_dir: "./output"
+  enable_duplicate_detection: true
+
+  # Semantic Scholar API Key (loaded from .env)
+  semantic_scholar_api_key: "${SEMANTIC_SCHOLAR_API_KEY}"
+
+  # PDF Processing
+  # Note: keep_pdfs=false to save disk space for daily runs
+  pdf_settings:
+    temp_dir: "./temp"
+    keep_pdfs: false
+    max_file_size_mb: 50
+    timeout_seconds: 300
+
+  # LLM Configuration
+  # API keys are loaded from .env file
+  llm_settings:
+    provider: "${LLM_PROVIDER}"
+    model: "${LLM_MODEL}"
+    api_key: "${LLM_API_KEY}"
+    max_tokens: 50000      # Reduced for cost efficiency
+    temperature: 0.0       # Deterministic output
+    timeout: 300
+
+  # Cost Controls
+  # Conservative limits for daily automated runs
+  cost_limits:
+    max_tokens_per_paper: 50000
+    max_daily_spend_usd: 5.0      # Daily safety limit
+    max_total_spend_usd: 50.0     # Monthly safety limit
+
+  # Concurrency Settings
+  # Conservative for background execution to avoid rate limits
+  concurrency:
+    max_concurrent_downloads: 3
+    max_concurrent_conversions: 2
+    max_concurrent_llm: 1         # Single LLM call at a time
+    queue_size: 50
+    checkpoint_interval: 5
+    worker_timeout_seconds: 600
+    enable_backpressure: true
+    backpressure_threshold: 0.8
+
+  # Cache Settings
+  # Longer TTLs for daily runs to maximize cache hits
+  cache:
+    enabled: true
+    cache_dir: "./cache"
+    ttl_api_hours: 24             # 24h for daily runs
+    ttl_pdf_days: 7
+    ttl_extraction_days: 30

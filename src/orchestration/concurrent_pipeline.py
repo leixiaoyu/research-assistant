@@ -6,6 +6,7 @@ Implements async producer-consumer pattern with:
 - Worker pool management
 - Integration with Phase 2.5 FallbackPDFService
 - Integration with Phase 3 intelligence services
+- Prometheus metrics export (Phase 4)
 """
 
 import asyncio
@@ -27,6 +28,18 @@ from src.services.dedup_service import DeduplicationService
 from src.services.filter_service import FilterService
 from src.services.checkpoint_service import CheckpointService
 from src.services.llm_service import LLMService
+
+# Phase 4: Prometheus metrics
+from src.observability.metrics import (
+    PAPERS_PROCESSED,
+    ACTIVE_WORKERS,
+    QUEUE_SIZE,
+    PAPERS_IN_QUEUE,
+    PAPER_PROCESSING_DURATION,
+    PDF_DOWNLOADS,
+    PDF_CONVERSIONS,
+    EXTRACTION_ERRORS,
+)
 
 logger = structlog.get_logger()
 
@@ -173,6 +186,10 @@ class ConcurrentPipeline:
 
         self.stats.active_workers = num_workers
 
+        # Update metrics
+        ACTIVE_WORKERS.labels(worker_type="pipeline").set(num_workers)
+        PAPERS_IN_QUEUE.set(len(pending_papers))
+
         logger.info(
             "workers_started",
             num_workers=num_workers,
@@ -195,6 +212,10 @@ class ConcurrentPipeline:
             self.stats.papers_completed = completed
             processed_paper_ids.append(result.metadata.paper_id)
 
+            # Update metrics
+            PAPERS_PROCESSED.labels(status="success").inc()
+            PAPERS_IN_QUEUE.dec()
+
             # Checkpoint periodically with accumulated IDs
             if completed % self.config.checkpoint_interval == 0:
                 self.checkpoint_service.save_checkpoint(
@@ -205,6 +226,8 @@ class ConcurrentPipeline:
 
             # Update stats
             self.stats.queue_size = input_queue.qsize()
+            QUEUE_SIZE.labels(queue_name="input").set(input_queue.qsize())
+            QUEUE_SIZE.labels(queue_name="results").set(results_queue.qsize())
 
             logger.info(
                 "progress_update",
@@ -217,6 +240,9 @@ class ConcurrentPipeline:
         # Wait for producer and workers to finish
         await producer
         await asyncio.gather(*workers, return_exceptions=True)
+
+        # Reset worker metrics
+        ACTIVE_WORKERS.labels(worker_type="pipeline").set(0)
 
         # Final checkpoint save
         if processed_paper_ids:
@@ -237,6 +263,9 @@ class ConcurrentPipeline:
 
         # Final statistics
         self.stats.total_duration_seconds = time.time() - start_time
+
+        # Track skipped/failed papers
+        PAPERS_PROCESSED.labels(status="skipped").inc(self.stats.papers_deduplicated)
 
         logger.info(
             "concurrent_processing_complete",
@@ -303,7 +332,7 @@ class ConcurrentPipeline:
                 # Get paper from queue (with timeout to check for shutdown)
                 try:
                     paper = await asyncio.wait_for(input_queue.get(), timeout=1.0)
-                except asyncio.TimeoutError:
+                except asyncio.TimeoutError:  # pragma: no cover (worker timeout loop)
                     continue
 
                 # Sentinel value = shutdown signal
@@ -323,6 +352,7 @@ class ConcurrentPipeline:
                     else:
                         worker_stats.papers_failed += 1
                         self.stats.papers_failed += 1
+                        PAPERS_PROCESSED.labels(status="failed").inc()
 
                 except Exception as e:
                     logger.error(
@@ -334,13 +364,14 @@ class ConcurrentPipeline:
                     )
                     worker_stats.papers_failed += 1
                     self.stats.papers_failed += 1
+                    PAPERS_PROCESSED.labels(status="failed").inc()
 
                 finally:
                     duration = time.time() - start_time
                     worker_stats.total_duration_seconds += duration
                     input_queue.task_done()
 
-            except Exception as e:
+            except Exception as e:  # pragma: no cover (defensive catch-all)
                 logger.error(
                     "worker_error", worker_id=worker_id, error=str(e), exc_info=True
                 )
@@ -410,6 +441,7 @@ class ConcurrentPipeline:
 
         if paper.open_access_pdf:
             async with self.download_sem:
+                pdf_start = time.time()
                 try:
                     # Phase 2.5 FallbackPDFService automatically tries:
                     # PyMuPDF → pdfplumber → marker → pandoc
@@ -420,20 +452,37 @@ class ConcurrentPipeline:
                     if pdf_result and pdf_result.success and pdf_result.markdown:
                         markdown_content = pdf_result.markdown
 
+                        # Track successful PDF conversion
+                        backend_name = (
+                            pdf_result.backend.value
+                            if pdf_result.backend
+                            else "unknown"
+                        )
+                        PDF_CONVERSIONS.labels(
+                            backend=backend_name, status="success"
+                        ).inc()
+                        PDF_DOWNLOADS.labels(status="success").inc()
+
+                        # Track processing duration
+                        PAPER_PROCESSING_DURATION.labels(stage="conversion").observe(
+                            time.time() - pdf_start
+                        )
+
                         logger.info(
                             "pdf_extraction_complete",
                             worker_id=worker_id,
                             paper_id=paper.paper_id,
-                            backend=(
-                                pdf_result.backend.value if pdf_result.backend else None
-                            ),
+                            backend=backend_name,
                             quality_score=pdf_result.quality_score or 0.0,
                         )
                     else:
                         error_msg = pdf_result.error if pdf_result else "Unknown error"
+                        PDF_DOWNLOADS.labels(status="failed").inc()
+                        PDF_CONVERSIONS.labels(backend="unknown", status="failed").inc()
                         raise Exception(f"PDF extraction failed: {error_msg}")
 
                 except Exception as e:
+                    EXTRACTION_ERRORS.labels(error_type="conversion").inc()
                     logger.error(
                         "pdf_extraction_failed",
                         worker_id=worker_id,
@@ -514,7 +563,7 @@ class ConcurrentPipeline:
                     # Valid result - yield to caller
                     yield result
 
-            except Exception as e:
+            except Exception as e:  # pragma: no cover (defensive catch-all)
                 logger.error("result_collection_error", error=str(e), exc_info=True)
 
     def get_stats(self) -> PipelineStats:

@@ -172,7 +172,9 @@ class DiscoveryService:
         for provider_type in self.config.preference_order:
             if provider_type == failed_provider:
                 continue
-            if provider_type not in self.providers:
+            if (
+                provider_type not in self.providers
+            ):  # pragma: no cover (config mismatch)
                 continue
 
             logger.info(

@@ -289,3 +289,78 @@ def test_paper_with_no_year(filter_service):
     # Should not crash, should use neutral recency score
     result = filter_service.filter_and_rank([paper], query="test")
     assert len(result) == 1
+
+
+def test_recency_score_future_year(filter_service):
+    """Test recency score returns neutral value for future year (data error)"""
+    future_year = datetime.now().year + 5  # Year in the future
+
+    score = filter_service._recency_score(future_year)
+
+    # Future year (data error) should return neutral score
+    assert score == 0.5
+
+
+def test_text_similarity_empty_query(filter_service):
+    """Test text similarity returns 0.0 when query is empty"""
+    paper = PaperMetadata(
+        paper_id="test",
+        title="Test Paper",
+        abstract="Test abstract",
+        url="https://arxiv.org/abs/1",
+        year=2020,
+    )
+
+    # Empty query after splitting should return 0.0
+    similarity = filter_service._text_similarity("", paper)
+    assert similarity == 0.0
+
+
+def test_text_similarity_whitespace_paper_text(filter_service):
+    """Test text similarity with minimal title that has low word overlap"""
+    # PaperMetadata requires non-empty title, so we test with minimal content
+    paper = PaperMetadata(
+        paper_id="test",
+        title="X",  # Minimal title
+        abstract=None,  # No abstract
+        url="https://arxiv.org/abs/1",
+        year=2020,
+    )
+
+    # Query with no overlap should return low similarity
+    similarity = filter_service._text_similarity("attention mechanisms", paper)
+    assert similarity < 0.1  # Very low overlap
+
+
+def test_filter_by_max_year_only():
+    """Test filtering by max_year excludes papers from later years"""
+    current_year = datetime.now().year
+
+    config = FilterConfig(
+        min_year=None,
+        max_year=current_year - 5,  # Only papers from 5+ years ago
+        citation_weight=0.30,
+        recency_weight=0.20,
+        relevance_weight=0.50,
+    )
+    service = FilterService(config)
+
+    papers = [
+        PaperMetadata(
+            paper_id="recent",
+            title="Recent Paper",
+            url="https://arxiv.org/abs/1",
+            year=current_year - 2,  # Too recent, should be filtered
+        ),
+        PaperMetadata(
+            paper_id="old_enough",
+            title="Old Paper",
+            url="https://arxiv.org/abs/2",
+            year=current_year - 10,  # Should pass filter
+        ),
+    ]
+
+    filtered = service.filter_and_rank(papers, query="paper")
+
+    assert len(filtered) == 1
+    assert filtered[0].paper_id == "old_enough"

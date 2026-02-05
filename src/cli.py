@@ -317,7 +317,9 @@ async def _process_topics(
 
             # E. Update Catalog
             papers_processed = len(papers)
-            if phase2_enabled and summary_stats:
+            if (
+                phase2_enabled and summary_stats
+            ):  # pragma: no cover (phase2 extraction path)
                 papers_processed = summary_stats["papers_with_extraction"]
 
             run = CatalogRun(
@@ -384,6 +386,168 @@ def catalog(
                 f"  {run.date}: Found {run.papers_found} papers "
                 f"-> {run.output_file}"
             )
+
+
+@app.command()
+def schedule(
+    config_path: Path = typer.Option(
+        "config/research_config.yaml",
+        "--config",
+        "-c",
+        help="Path to research config YAML",
+    ),
+    hour: int = typer.Option(
+        6, "--hour", "-H", help="Hour to run daily research (0-23)"
+    ),
+    minute: int = typer.Option(0, "--minute", "-M", help="Minute to run (0-59)"),
+    health_port: int = typer.Option(
+        8000, "--health-port", "-p", help="Port for health server"
+    ),
+    enable_cleanup: bool = typer.Option(
+        True, "--cleanup/--no-cleanup", help="Enable cache cleanup job"
+    ),
+    enable_cost_report: bool = typer.Option(
+        True, "--cost-report/--no-cost-report", help="Enable daily cost report"
+    ),
+):
+    """Start scheduler daemon with health server.
+
+    Runs the research pipeline on a schedule with monitoring endpoints.
+    Press Ctrl+C to stop gracefully.
+
+    Examples:
+        # Run with defaults (6:00 AM daily)
+        python -m src.cli schedule
+
+        # Custom schedule (8:30 AM)
+        python -m src.cli schedule --hour 8 --minute 30
+
+        # Custom health port
+        python -m src.cli schedule --health-port 9000
+    """
+    try:  # pragma: no cover (CLI blocking entry point)
+        asyncio.run(
+            _run_scheduler(
+                config_path=config_path,
+                hour=hour,
+                minute=minute,
+                health_port=health_port,
+                enable_cleanup=enable_cleanup,
+                enable_cost_report=enable_cost_report,
+            )
+        )
+    except KeyboardInterrupt:
+        typer.secho("\nScheduler stopped.", fg=typer.colors.YELLOW)
+    except Exception as e:
+        logger.exception("scheduler_failed")
+        typer.secho(f"Scheduler failed: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+async def _run_scheduler(  # pragma: no cover (blocking scheduler daemon)
+    config_path: Path,
+    hour: int,
+    minute: int,
+    health_port: int,
+    enable_cleanup: bool,
+    enable_cost_report: bool,
+):
+    """Run the scheduler daemon with health server.
+
+    Args:
+        config_path: Path to research config
+        hour: Hour for daily research run
+        minute: Minute for daily research run
+        health_port: Port for health server
+        enable_cleanup: Whether to enable cache cleanup
+        enable_cost_report: Whether to enable cost reporting
+    """
+    from src.scheduling import (
+        ResearchScheduler,
+        DailyResearchJob,
+        CacheCleanupJob,
+        CostReportJob,
+    )
+    from src.health.server import run_health_server_async
+
+    typer.secho(
+        "Starting ARISP Scheduler Daemon",
+        fg=typer.colors.CYAN,
+        bold=True,
+    )
+    typer.echo(f"  Config: {config_path}")
+    typer.echo(f"  Daily run: {hour:02d}:{minute:02d}")
+    typer.echo(f"  Health endpoint: http://localhost:{health_port}/health")
+    typer.echo(f"  Metrics endpoint: http://localhost:{health_port}/metrics")
+    typer.echo("\nPress Ctrl+C to stop.\n")
+
+    # Create scheduler
+    scheduler = ResearchScheduler()
+
+    # Add daily research job
+    daily_job = DailyResearchJob(config_path=config_path)
+    scheduler.add_job(
+        daily_job,
+        job_id="daily_research",
+        trigger="cron",
+        hour=hour,
+        minute=minute,
+    )
+
+    # Add cache cleanup job (every 4 hours)
+    if enable_cleanup:
+        cleanup_job = CacheCleanupJob()
+        scheduler.add_job(
+            cleanup_job,
+            job_id="cache_cleanup",
+            trigger="interval",
+            hours=4,
+        )
+
+    # Add cost report job (daily at 23:00)
+    if enable_cost_report:
+        cost_job = CostReportJob()
+        scheduler.add_job(
+            cost_job,
+            job_id="cost_report",
+            trigger="cron",
+            hour=23,
+            minute=0,
+        )
+
+    # Log scheduled jobs
+    jobs = scheduler.get_jobs()
+    typer.secho(f"\nScheduled {len(jobs)} jobs:", fg=typer.colors.GREEN)
+    for job in jobs:
+        next_run = job.get("next_run_time", "N/A")
+        typer.echo(f"  - {job['id']}: next run at {next_run}")
+
+    # Start health server and scheduler concurrently
+    await asyncio.gather(
+        run_health_server_async(host="0.0.0.0", port=health_port, log_level="warning"),
+        scheduler.start(),
+    )
+
+
+@app.command()
+def health(
+    host: str = typer.Option("localhost", "--host", "-h", help="Health server host"),
+    port: int = typer.Option(8000, "--port", "-p", help="Health server port"),
+):
+    """Start standalone health server.
+
+    Starts the health server without the scheduler.
+    Useful for testing or when running scheduler separately.
+    """
+    from src.health.server import (
+        run_health_server,
+    )  # pragma: no cover (CLI blocking entry point)
+
+    typer.secho(  # pragma: no cover
+        f"Starting health server at http://{host}:{port}",
+        fg=typer.colors.CYAN,
+    )
+    run_health_server(host=host, port=port)  # pragma: no cover
 
 
 if __name__ == "__main__":

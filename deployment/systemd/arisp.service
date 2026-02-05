@@ -1,0 +1,83 @@
+# ARISP Pipeline systemd Service
+#
+# Installation:
+#   1. Copy this file to /etc/systemd/system/arisp.service
+#   2. Create /opt/arisp directory and install application
+#   3. Create arisp user: useradd -r -s /bin/false arisp
+#   4. Set ownership: chown -R arisp:arisp /opt/arisp
+#   5. Create .env file with API keys
+#   6. Enable service: systemctl enable arisp
+#   7. Start service: systemctl start arisp
+#
+# Usage:
+#   systemctl status arisp    # Check status
+#   systemctl restart arisp   # Restart service
+#   journalctl -u arisp -f    # View logs
+
+[Unit]
+Description=ARISP Research Pipeline Scheduler
+Documentation=https://github.com/your-org/arisp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=arisp
+Group=arisp
+WorkingDirectory=/opt/arisp
+
+# Environment
+Environment=PYTHONPATH=/opt/arisp
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/opt/arisp/.env
+
+# Virtual environment
+ExecStartPre=/opt/arisp/venv/bin/python --version
+ExecStart=/opt/arisp/venv/bin/python -m src.cli schedule \
+    --config /opt/arisp/config/research_config.yaml \
+    --health-port 8000 \
+    --hour 6 \
+    --minute 0
+
+# Restart policy
+Restart=always
+RestartSec=10
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+# Resource limits
+MemoryMax=4G
+CPUQuota=200%
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+
+# Allow read/write to specific directories
+ReadWritePaths=/opt/arisp/output
+ReadWritePaths=/opt/arisp/.cache
+ReadWritePaths=/opt/arisp/logs
+
+# Network
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/8
+IPAddressAllow=10.0.0.0/8
+IPAddressAllow=172.16.0.0/12
+IPAddressAllow=192.168.0.0/16
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=arisp
+
+[Install]
+WantedBy=multi-user.target

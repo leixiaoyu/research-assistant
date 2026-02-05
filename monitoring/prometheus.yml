@@ -1,0 +1,62 @@
+# Prometheus configuration for ARISP monitoring
+#
+# This configuration scrapes metrics from the ARISP health endpoint
+# and provides alerting rules for production monitoring.
+
+global:
+  scrape_interval: 15s       # Scrape targets every 15 seconds
+  evaluation_interval: 15s   # Evaluate rules every 15 seconds
+  scrape_timeout: 10s        # Timeout for scrape requests
+
+  # Attach these labels to all metrics
+  external_labels:
+    monitor: 'arisp-monitor'
+    environment: 'production'
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # Alertmanager endpoint (if configured)
+          # - alertmanager:9093
+
+# Rule files for alerting
+rule_files:
+  - "/etc/prometheus/alerts/*.yml"
+
+# Scrape configuration
+scrape_configs:
+  # ARISP application metrics
+  - job_name: 'arisp'
+    static_configs:
+      - targets: ['arisp:8000']  # Container name in Docker network
+        labels:
+          service: 'arisp'
+          component: 'pipeline'
+
+    # Relabel to extract instance from target
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        regex: '([^:]+)(:\d+)?'
+        replacement: '${1}'
+
+    # Scrape endpoint path
+    metrics_path: /metrics
+
+  # Self-monitoring for Prometheus
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+
+# Remote write configuration (optional, for long-term storage)
+# remote_write:
+#   - url: "https://your-remote-write-endpoint.com/api/v1/write"
+#     remote_timeout: 30s
+#     queue_config:
+#       capacity: 10000
+#       max_shards: 10
+#       max_samples_per_send: 5000

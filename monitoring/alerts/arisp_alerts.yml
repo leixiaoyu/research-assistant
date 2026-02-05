@@ -1,0 +1,202 @@
+# Alerting rules for ARISP pipeline
+#
+# These rules trigger alerts for:
+# - High error rates
+# - Cost overruns
+# - Disk space issues
+# - Pipeline health problems
+
+groups:
+  - name: arisp.rules
+    rules:
+      # ==============================================================================
+      # Error Rate Alerts
+      # ==============================================================================
+
+      - alert: HighPaperProcessingErrorRate
+        expr: |
+          sum(rate(arisp_papers_processed_total{status="failed"}[5m]))
+          /
+          sum(rate(arisp_papers_processed_total[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: research
+        annotations:
+          summary: "High paper processing error rate"
+          description: |
+            Paper processing error rate is {{ $value | humanizePercentage }}
+            over the last 5 minutes. Check extraction logs for details.
+          runbook_url: "docs/operations/TROUBLESHOOTING.md#high-error-rate"
+
+      - alert: CriticalPaperProcessingErrorRate
+        expr: |
+          sum(rate(arisp_papers_processed_total{status="failed"}[5m]))
+          /
+          sum(rate(arisp_papers_processed_total[5m])) > 0.25
+        for: 2m
+        labels:
+          severity: critical
+          team: research
+        annotations:
+          summary: "Critical paper processing error rate"
+          description: |
+            Error rate is {{ $value | humanizePercentage }}.
+            Immediate investigation required.
+          runbook_url: "docs/operations/TROUBLESHOOTING.md#critical-error-rate"
+
+      - alert: LLMRequestFailures
+        expr: |
+          sum(rate(arisp_llm_requests_total{status="failed"}[10m]))
+          /
+          sum(rate(arisp_llm_requests_total[10m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          team: research
+        annotations:
+          summary: "LLM API request failures detected"
+          description: |
+            LLM request failure rate is {{ $value | humanizePercentage }}.
+            Check API credentials and rate limits.
+
+      # ==============================================================================
+      # Cost Alerts
+      # ==============================================================================
+
+      - alert: DailyCostThresholdWarning
+        expr: arisp_daily_cost_usd{provider="total"} > 40
+        for: 1m
+        labels:
+          severity: warning
+          team: research
+        annotations:
+          summary: "Daily LLM cost approaching limit"
+          description: |
+            Daily cost is ${{ $value | printf "%.2f" }}.
+            Approaching the $50 daily limit.
+
+      - alert: DailyCostThresholdCritical
+        expr: arisp_daily_cost_usd{provider="total"} > 48
+        for: 1m
+        labels:
+          severity: critical
+          team: research
+        annotations:
+          summary: "Daily LLM cost at critical level"
+          description: |
+            Daily cost is ${{ $value | printf "%.2f" }}.
+            Pipeline may stop due to cost limits.
+
+      - alert: UnusualTokenConsumption
+        expr: |
+          sum(rate(arisp_llm_tokens_total[1h])) > 1000000
+        for: 30m
+        labels:
+          severity: warning
+          team: research
+        annotations:
+          summary: "Unusually high token consumption"
+          description: |
+            Token consumption rate is abnormally high.
+            Check for inefficient prompts or large documents.
+
+      # ==============================================================================
+      # Infrastructure Alerts
+      # ==============================================================================
+
+      - alert: DiskSpaceLow
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "Low disk space"
+          description: "Less than 10% disk space remaining."
+
+      - alert: DiskSpaceCritical
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.05
+        for: 2m
+        labels:
+          severity: critical
+          team: infrastructure
+        annotations:
+          summary: "Critical disk space"
+          description: "Less than 5% disk space remaining. Immediate action required."
+
+      - alert: CacheSizeExcessive
+        expr: sum(arisp_cache_size_bytes) > 10737418240  # 10GB
+        for: 1h
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "Cache size excessive"
+          description: |
+            Cache size is {{ $value | humanizeBytes }}.
+            Consider running cache cleanup.
+
+      # ==============================================================================
+      # Pipeline Health Alerts
+      # ==============================================================================
+
+      - alert: NoWorkersActive
+        expr: arisp_active_workers{worker_type="pipeline"} == 0
+        for: 1h
+        labels:
+          severity: warning
+          team: research
+        annotations:
+          summary: "No active workers"
+          description: "No pipeline workers have been active for 1 hour."
+
+      - alert: QueueBacklog
+        expr: arisp_papers_in_queue > 100
+        for: 30m
+        labels:
+          severity: warning
+          team: research
+        annotations:
+          summary: "Large queue backlog"
+          description: |
+            {{ $value }} papers waiting in queue.
+            Consider scaling up workers.
+
+      - alert: SchedulerJobsFailing
+        expr: |
+          increase(arisp_scheduler_jobs{status="failed"}[1h]) > 3
+        for: 5m
+        labels:
+          severity: warning
+          team: research
+        annotations:
+          summary: "Scheduled jobs failing"
+          description: "Multiple scheduled job failures in the last hour."
+
+      # ==============================================================================
+      # Service Health Alerts
+      # ==============================================================================
+
+      - alert: ServiceUnhealthy
+        expr: probe_success{job="arisp-health"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: infrastructure
+        annotations:
+          summary: "ARISP service unhealthy"
+          description: "Health check failing. Service may be down."
+
+      - alert: ServiceNotReady
+        expr: |
+          probe_http_status_code{job="arisp-ready"} != 200
+        for: 5m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "ARISP service not ready"
+          description: "Service readiness check failing."

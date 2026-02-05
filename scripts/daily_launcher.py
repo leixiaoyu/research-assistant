@@ -21,6 +21,7 @@ import sys
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 # Determine paths relative to this script
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -38,7 +39,7 @@ def setup_logging():
     return log_file
 
 
-def log(message: str, level: str = "INFO", log_file: Path = None):
+def log(message: str, level: str = "INFO", log_file: Optional[Path] = None):
     """Write timestamped log message."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     formatted = f"[{timestamp}] [{level}] {message}"
@@ -96,12 +97,7 @@ def run_pipeline(log_file: Path) -> int:
         log(f"Config not found at {CONFIG_FILE}", "ERROR", log_file)
         return 2
 
-    cmd = [
-        str(python_path),
-        "-m", "src.cli",
-        "run",
-        "--config", str(CONFIG_FILE)
-    ]
+    cmd = [str(python_path), "-m", "src.cli", "run", "--config", str(CONFIG_FILE)]
 
     log(f"Running: {' '.join(cmd)}", "INFO", log_file)
 
@@ -111,7 +107,7 @@ def run_pipeline(log_file: Path) -> int:
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
-            timeout=7200  # 2 hour timeout
+            timeout=7200,  # 2 hour timeout
         )
 
         # Log output
@@ -126,7 +122,8 @@ def run_pipeline(log_file: Path) -> int:
         if result.returncode == 0:
             log("Pipeline completed successfully", "INFO", log_file)
         else:
-            log(f"Pipeline failed with exit code {result.returncode}", "ERROR", log_file)
+            msg = f"Pipeline failed with exit code {result.returncode}"
+            log(msg, "ERROR", log_file)
 
         return result.returncode
 

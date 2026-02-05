@@ -5,6 +5,10 @@
 
   launchd configuration for daily ARISP research pipeline execution.
 
+  NOTE: This plist uses the Python launcher (daily_launcher.py) instead of
+  the shell script (daily_run.sh) to avoid macOS Full Disk Access requirements.
+  The Python launcher calls the venv Python directly, bypassing shell interpreters.
+
   INSTALLATION:
   1. Copy this file to ~/Library/LaunchAgents/
   2. Edit the file and replace ${PROJECT_ROOT} with actual path
@@ -20,7 +24,7 @@
   BEHAVIOR:
   - Runs daily at 3:00 AM local time
   - If machine is asleep at 3 AM, runs when machine wakes
-  - Logs to ${PROJECT_ROOT}/logs/launchd_*.log
+  - Logs to ${PROJECT_ROOT}/logs/daily_run_*.log
 -->
 <plist version="1.0">
 <dict>
@@ -28,11 +32,11 @@
     <key>Label</key>
     <string>com.arisp.daily-research</string>
 
-    <!-- Command to execute -->
+    <!-- Command to execute (Python launcher - no Full Disk Access needed) -->
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
-        <string>${PROJECT_ROOT}/scripts/daily_run.sh</string>
+        <string>${PROJECT_ROOT}/venv/bin/python</string>
+        <string>${PROJECT_ROOT}/scripts/daily_launcher.py</string>
     </array>
 
     <!-- Schedule: Daily at 3:00 AM -->

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 # daily_run.sh - Daily ARISP Research Pipeline Execution
 #
 # This script is invoked by launchd at 3:00 AM daily.
@@ -22,7 +22,8 @@ set -euo pipefail
 # Configuration
 # =============================================================================
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Get script directory (works in both bash and zsh)
+SCRIPT_DIR="$(cd "$(dirname "${0}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 VENV_PATH="$PROJECT_ROOT/venv"
 DEFAULT_CONFIG="$PROJECT_ROOT/config/daily_german_mt.yaml"

@@ -124,87 +124,68 @@ class BaseJob(ABC):
 class DailyResearchJob(BaseJob):
     """Daily research pipeline job.
 
-    Runs the research pipeline with configured topics.
+    Runs the complete research pipeline with configured topics,
+    including PDF download, LLM extraction, and report generation.
+
+    Uses the shared ResearchPipeline to ensure feature parity with CLI.
     """
 
     def __init__(
         self,
         config_path: Optional[Path] = None,
+        enable_phase2: bool = True,
     ):
         """Initialize daily research job.
 
         Args:
             config_path: Path to research config (default: config/research_config.yaml)
+            enable_phase2: Enable Phase 2 PDF/LLM extraction (default: True)
         """
         super().__init__("daily_research")
         self.config_path = config_path or Path("config/research_config.yaml")
+        self.enable_phase2 = enable_phase2
 
     async def run(self) -> Dict[str, Any]:
-        """Run the research pipeline.
+        """Run the complete research pipeline.
+
+        Executes the full pipeline:
+        1. Discovery - Find papers via Semantic Scholar/ArXiv
+        2. Extraction - Download PDFs and extract content via LLM
+        3. Report Generation - Generate Obsidian-ready markdown
+        4. Catalog Update - Track run history
 
         Returns:
-            Dictionary with run results
+            Dictionary with run results including output files
         """
-        from src.services.config_manager import ConfigManager
-        from src.services.discovery_service import DiscoveryService
-        from src.services.catalog_service import CatalogService
+        from src.orchestration.research_pipeline import ResearchPipeline
 
         logger.info(
             "daily_research_starting",
             config_path=str(self.config_path),
+            phase2_enabled=self.enable_phase2,
         )
 
-        # Load configuration
-        config_manager = ConfigManager(config_path=str(self.config_path))
-        config = config_manager.load_config()
-
-        # Initialize services
-        discovery = DiscoveryService(
-            api_key=config.settings.semantic_scholar_api_key or ""
+        # Use shared ResearchPipeline for full feature parity with CLI
+        pipeline = ResearchPipeline(
+            config_path=self.config_path,
+            enable_phase2=self.enable_phase2,
         )
-        catalog = CatalogService(config_manager)
-        catalog.load()
 
-        results: Dict[str, Any] = {
-            "topics_processed": 0,
-            "papers_discovered": 0,
-            "errors": [],
-        }
-
-        # Process each topic
-        for topic in config.research_topics:
-            try:
-                papers = await discovery.search(topic)
-                results["topics_processed"] += 1
-                results["papers_discovered"] += len(papers)
-
-                logger.info(
-                    "topic_processed",
-                    topic=topic.query,
-                    papers_found=len(papers),
-                )
-
-            except Exception as e:
-                results["errors"].append(
-                    {
-                        "topic": topic.query,
-                        "error": str(e),
-                    }
-                )
-                logger.error(
-                    "topic_failed",
-                    topic=topic.query,
-                    error=str(e),
-                )
+        # Execute the complete pipeline
+        result = await pipeline.run()
 
         logger.info(
             "daily_research_completed",
-            topics=results["topics_processed"],
-            papers=results["papers_discovered"],
-            errors=len(results["errors"]),
+            topics_processed=result.topics_processed,
+            topics_failed=result.topics_failed,
+            papers_discovered=result.papers_discovered,
+            papers_processed=result.papers_processed,
+            output_files=len(result.output_files),
+            total_cost_usd=result.total_cost_usd,
+            errors=len(result.errors),
         )
 
-        return results
+        return result.to_dict()
 
 
 class CacheCleanupJob(BaseJob):

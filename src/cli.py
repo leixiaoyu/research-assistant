@@ -1,35 +1,14 @@
 import typer
 import asyncio
 import structlog
-import os
-from pathlib import Path
 from datetime import datetime
-from typing import Optional, Union
+from pathlib import Path
+from typing import Optional
 
 from src.services.config_manager import ConfigManager, ConfigValidationError
-from src.services.discovery_service import DiscoveryService, APIError
-from src.services.catalog_service import CatalogService
-from src.output.markdown_generator import MarkdownGenerator
-from src.output.enhanced_generator import EnhancedMarkdownGenerator
-from src.models.catalog import CatalogRun
+from src.services.discovery_service import APIError  # noqa: F401 (re-exported)
+from src.models.catalog import CatalogRun  # noqa: F401 (used in type hints)
 from src.utils.logging import configure_logging
-
-# Phase 2 imports
-from src.services.pdf_service import PDFService
-from src.services.llm_service import LLMService
-from src.services.extraction_service import ExtractionService
-from src.services.pdf_extractors.fallback_service import FallbackPDFService
-from src.models.llm import LLMConfig, CostLimits
-
-# Phase 3 imports
-from src.services.cache_service import CacheService
-from src.services.dedup_service import DeduplicationService
-from src.services.filter_service import FilterService
-from src.services.checkpoint_service import CheckpointService
-from src.models.cache import CacheConfig
-from src.models.dedup import DedupConfig
-from src.models.filters import FilterConfig
-from src.models.checkpoint import CheckpointConfig
 
 # Configure structured logging
 configure_logging()
@@ -100,115 +79,49 @@ def run(
 
             return  # pragma: no cover
 
-        # 2. Initialize Core Services (Phase 1)
-        discovery_service = DiscoveryService(
-            api_key=config.settings.semantic_scholar_api_key or ""
-        )
-        catalog_service = CatalogService(config_manager)
+        # 2. Execute pipeline using shared ResearchPipeline
+        # This ensures feature parity with scheduled DailyResearchJob
+        from src.orchestration.research_pipeline import ResearchPipeline
 
-        # Load catalog once
-        catalog_service.load()
-
-        # 3. Initialize Phase 2 Services (if enabled)
-        pdf_service = None
-        llm_service = None
-        extraction_service = None
-        md_generator: Optional[Union[MarkdownGenerator, EnhancedMarkdownGenerator]] = (
-            None
-        )
-
+        typer.secho("Starting research pipeline...", fg=typer.colors.CYAN)
         if phase2_enabled:
-            # Type narrowing: these are guaranteed not None due to phase2_enabled check
-            assert config.settings.pdf_settings is not None
-            assert config.settings.llm_settings is not None
-            assert config.settings.cost_limits is not None
-            typer.secho("Initializing Phase 2 services...", fg=typer.colors.CYAN)
-
-            # PDF Service
-            pdf_service = PDFService(
-                temp_dir=Path(config.settings.pdf_settings.temp_dir),
-                max_size_mb=config.settings.pdf_settings.max_file_size_mb,
-                timeout_seconds=config.settings.pdf_settings.timeout_seconds,
-            )
-
-            # LLM Service
-            # Ensure api_key is a string (never None)
-            api_key_value: str = (
-                config.settings.llm_settings.api_key
-                if config.settings.llm_settings.api_key is not None
-                else os.getenv("LLM_API_KEY", "")
-            )
-
-            llm_config = LLMConfig(
-                provider=config.settings.llm_settings.provider,
-                model=config.settings.llm_settings.model,
-                api_key=api_key_value,
-                max_tokens=config.settings.llm_settings.max_tokens,
-                temperature=config.settings.llm_settings.temperature,
-                timeout=config.settings.llm_settings.timeout,
-            )
-
-            cost_limits = CostLimits(
-                max_tokens_per_paper=config.settings.cost_limits.max_tokens_per_paper,
-                max_daily_spend_usd=config.settings.cost_limits.max_daily_spend_usd,
-                max_total_spend_usd=config.settings.cost_limits.max_total_spend_usd,
-            )
-
-            llm_service = LLMService(config=llm_config, cost_limits=cost_limits)
-
-            # Fallback PDF Service (Phase 2.5)
-            fallback_service = FallbackPDFService(config=config.settings.pdf_settings)
-
-            # Phase 3 Services (concurrent processing support)
-            # Note: Pydantic models have Field() defaults that Mypy doesn't recognize
-            cache_service = CacheService(config=CacheConfig())  # type: ignore[call-arg]
-            dedup_service = DeduplicationService(
-                config=DedupConfig()  # type: ignore[call-arg]
-            )
-            filter_service = FilterService(
-                config=FilterConfig()  # type: ignore[call-arg]
-            )
-            checkpoint_service = CheckpointService(
-                config=CheckpointConfig()  # type: ignore[call-arg]
-            )
-
-            # Extraction Service with Phase 3 services for concurrent processing
-            extraction_service = ExtractionService(
-                pdf_service=pdf_service,
-                llm_service=llm_service,
-                fallback_service=fallback_service,
-                keep_pdfs=config.settings.pdf_settings.keep_pdfs,
-                # Phase 3 services for concurrent processing
-                cache_service=cache_service,
-                dedup_service=dedup_service,
-                filter_service=filter_service,
-                checkpoint_service=checkpoint_service,
-                concurrency_config=config.settings.concurrency,
-            )
-
-            # Enhanced Markdown Generator
-            md_generator = EnhancedMarkdownGenerator()
-
-            typer.secho("✓ Phase 2 services initialized", fg=typer.colors.GREEN)
+            typer.secho("✓ Phase 2 features enabled", fg=typer.colors.GREEN)
             typer.secho(
                 "✓ Phase 3 concurrent processing enabled", fg=typer.colors.GREEN
             )
         else:
-            # Phase 1 only - basic markdown generator
-            md_generator = MarkdownGenerator()
-
-        # 4. Process Topics
-        asyncio.run(
-            _process_topics(
-                config=config,
-                discovery=discovery_service,
-                catalog_svc=catalog_service,
-                md_gen=md_generator,
-                config_mgr=config_manager,
-                extraction_svc=extraction_service,
-                phase2_enabled=phase2_enabled,
+            typer.secho(
+                "Running in Phase 1 mode (discovery only)", fg=typer.colors.YELLOW
             )
+
+        pipeline = ResearchPipeline(
+            config_path=config_path,
+            enable_phase2=phase2_enabled,
         )
+
+        result = asyncio.run(pipeline.run())
+
+        # Display results
+        typer.echo("")
+        typer.secho("Pipeline completed!", fg=typer.colors.GREEN, bold=True)
+        typer.echo(f"  Topics processed: {result.topics_processed}")
+        typer.echo(f"  Papers discovered: {result.papers_discovered}")
+        typer.echo(f"  Papers processed: {result.papers_processed}")
+        if phase2_enabled:
+            typer.echo(f"  Papers with extraction: {result.papers_with_extraction}")
+            typer.echo(f"  Total tokens used: {result.total_tokens_used:,}")
+            typer.echo(f"  Total cost: ${result.total_cost_usd:.4f}")
+        typer.echo(f"  Output files: {len(result.output_files)}")
+
+        if result.output_files:
+            typer.echo("\nGenerated reports:")
+            for f in result.output_files:
+                typer.echo(f"  - {f}")
+
+        if result.errors:
+            typer.secho(f"\nErrors: {len(result.errors)}", fg=typer.colors.YELLOW)
+            for err in result.errors:
+                typer.echo(f"  - {err}")
 
     except Exception as e:
         logger.exception("pipeline_failed")
@@ -216,7 +129,9 @@ def run(
         raise typer.Exit(code=1)
 
 
-async def _process_topics(
+# Legacy function kept for backwards compatibility
+# New code should use ResearchPipeline directly
+async def _process_topics(  # pragma: no cover (legacy, use ResearchPipeline)
     config,
     discovery,
     catalog_svc,
@@ -225,7 +140,10 @@ async def _process_topics(
     extraction_svc=None,
     phase2_enabled=False,
 ):
-    """Async processing of topics
+    """Async processing of topics (LEGACY - use ResearchPipeline instead)
+
+    This function is kept for backwards compatibility.
+    New code should use ResearchPipeline directly.
 
     Args:
         config: Research configuration

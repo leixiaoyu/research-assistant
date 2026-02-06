@@ -112,43 +112,33 @@ class TestDailyResearchJob:
 
     @pytest.mark.asyncio
     async def test_run_with_mock_services(self):
-        """Should run research pipeline with mocked services."""
-        with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False) as f:
-            config_content = """
-research_topics:
-  - query: "test query"
-    timeframe:
-      type: "recent"
-      value: "7d"
+        """Should run research pipeline with mocked services via ResearchPipeline."""
+        from src.orchestration.research_pipeline import PipelineResult
 
-settings:
-  max_papers_per_topic: 10
-  output_base_dir: "./output"
-  semantic_scholar_api_key: null
-"""
-            f.write(config_content.encode())
-            config_path = Path(f.name)
+        job = DailyResearchJob()
 
-        try:
-            job = DailyResearchJob(config_path=config_path)
+        # Mock ResearchPipeline
+        with patch(
+            "src.orchestration.research_pipeline.ResearchPipeline"
+        ) as mock_pipeline_class:
+            mock_result = PipelineResult()
+            mock_result.topics_processed = 1
+            mock_result.papers_discovered = 5
+            mock_result.papers_processed = 3
+            mock_result.output_files = ["/tmp/output.md"]
+            mock_result.errors = []
 
-            # Mock the discovery service
-            with patch(
-                "src.services.discovery_service.DiscoveryService"
-            ) as mock_discovery:
-                mock_instance = AsyncMock()
-                mock_instance.search = AsyncMock(return_value=[])
-                mock_discovery.return_value = mock_instance
+            mock_pipeline = MagicMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_result)
+            mock_pipeline_class.return_value = mock_pipeline
 
-                with patch("src.services.catalog_service.CatalogService"):
-                    result = await job.run()
+            result = await job.run()
 
-            assert "topics_processed" in result
-            assert "papers_discovered" in result
-            assert "errors" in result
-
-        finally:
-            config_path.unlink()
+        assert "topics_processed" in result
+        assert "papers_discovered" in result
+        assert "errors" in result
+        assert result["topics_processed"] == 1
+        assert result["papers_discovered"] == 5
 
 
 class TestDailyResearchJobErrors:
@@ -156,43 +146,29 @@ class TestDailyResearchJobErrors:
 
     @pytest.mark.asyncio
     async def test_run_handles_topic_search_error(self):
-        """Should handle errors when topic search fails."""
-        with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False) as f:
-            config_content = """
-research_topics:
-  - query: "test query"
-    timeframe:
-      type: "recent"
-      value: "7d"
+        """Should handle errors when topic search fails via ResearchPipeline."""
+        from src.orchestration.research_pipeline import PipelineResult
 
-settings:
-  max_papers_per_topic: 10
-  output_base_dir: "./output"
-  semantic_scholar_api_key: null
-"""
-            f.write(config_content.encode())
-            config_path = Path(f.name)
+        job = DailyResearchJob()
 
-        try:
-            job = DailyResearchJob(config_path=config_path)
+        # Mock ResearchPipeline to return error result
+        with patch(
+            "src.orchestration.research_pipeline.ResearchPipeline"
+        ) as mock_pipeline_class:
+            mock_result = PipelineResult()
+            mock_result.topics_processed = 0
+            mock_result.topics_failed = 1
+            mock_result.errors = [{"topic": "test", "error": "Search failed"}]
 
-            # Mock the discovery service to raise an error
-            with patch(
-                "src.services.discovery_service.DiscoveryService"
-            ) as mock_discovery:
-                mock_instance = AsyncMock()
-                mock_instance.search = AsyncMock(side_effect=Exception("Search failed"))
-                mock_discovery.return_value = mock_instance
+            mock_pipeline = MagicMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_result)
+            mock_pipeline_class.return_value = mock_pipeline
 
-                with patch("src.services.catalog_service.CatalogService"):
-                    result = await job.run()
+            result = await job.run()
 
-            # Should have error recorded
-            assert len(result["errors"]) > 0
-            assert result["errors"][0]["error"] == "Search failed"
-
-        finally:
-            config_path.unlink()
+        # Should have error recorded
+        assert len(result["errors"]) > 0
+        assert result["errors"][0]["error"] == "Search failed"
 
 
 class TestCacheCleanupJob:

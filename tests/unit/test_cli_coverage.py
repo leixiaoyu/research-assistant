@@ -1,10 +1,11 @@
-import pytest
-from pathlib import Path
+"""Tests for CLI coverage."""
+
 from typer.testing import CliRunner
 from unittest.mock import Mock, patch, AsyncMock
+
 from src.cli import app
 from src.services.config_manager import ConfigValidationError
-from src.services.discovery_service import APIError
+from src.orchestration.research_pipeline import PipelineResult
 
 runner = CliRunner()
 
@@ -55,7 +56,7 @@ class TestCLICoverage:
             assert "Phase 2 Features Enabled" in result.stdout
 
     def test_run_full_phase2(self):
-        """Test full Phase 2 run with mocks to cover initialization and processing"""
+        """Test full Phase 2 run with mocks via ResearchPipeline"""
         with patch("src.cli.ConfigManager") as mock_cm:
             mock_config = Mock()
             # Phase 2 settings present
@@ -82,34 +83,28 @@ class TestCLICoverage:
             mock_config.research_topics = [topic]
 
             mock_cm.return_value.load_config.return_value = mock_config
-            mock_cm.return_value.get_output_path.return_value = Path("/tmp")
 
-            with (
-                patch("src.cli.DiscoveryService") as mock_ds,
-                patch("src.cli.CatalogService") as mock_cs,
-                patch("src.cli.PDFService"),
-                patch("src.cli.LLMService"),
-                patch("src.cli.ExtractionService") as mock_es,
-                patch("src.cli.EnhancedMarkdownGenerator") as mock_emg,
-            ):
+            # Mock ResearchPipeline
+            with patch(
+                "src.orchestration.research_pipeline.ResearchPipeline"
+            ) as mock_pipeline_class:
+                mock_result = PipelineResult()
+                mock_result.topics_processed = 1
+                mock_result.papers_discovered = 5
+                mock_result.papers_processed = 3
+                mock_result.papers_with_extraction = 2
+                mock_result.total_tokens_used = 1000
+                mock_result.total_cost_usd = 0.5
+                mock_result.output_files = ["/tmp/output.md"]
+                mock_result.errors = []
 
-                mock_ds.return_value.search = AsyncMock(return_value=[Mock()])
-                mock_cs.return_value.get_or_create_topic.return_value = Mock(
-                    topic_slug="slug"
-                )
-                mock_es.return_value.process_papers = AsyncMock(return_value=[Mock()])
-                mock_es.return_value.get_extraction_summary.return_value = {
-                    "papers_with_pdf": 1,
-                    "papers_with_extraction": 1,
-                    "total_tokens_used": 100,
-                    "total_cost_usd": 0.1,
-                }
-                mock_emg.return_value.generate_enhanced.return_value = "content"
+                mock_pipeline = Mock()
+                mock_pipeline.run = AsyncMock(return_value=mock_result)
+                mock_pipeline_class.return_value = mock_pipeline
 
-                # Mock open() for output file
-                with patch("builtins.open", patch("src.cli.open", create=True)):
-                    result = runner.invoke(app, ["run"])
-                    assert result.exit_code == 0
+                result = runner.invoke(app, ["run"])
+                assert result.exit_code == 0
+                assert "Pipeline completed" in result.stdout
 
     def test_run_exception(self):
         """Test general exception in run"""
@@ -119,67 +114,64 @@ class TestCLICoverage:
             assert "Pipeline failed" in result.stdout
 
     def test_process_topics_no_papers(self):
-        """Test processing with no papers found"""
-        with patch("src.cli.ConfigManager"):
-            with patch("src.cli.CatalogService"):
-                with patch("src.cli.DiscoveryService") as mock_discovery:
-                    mock_discovery.return_value.search = AsyncMock(return_value=[])
-                    # We need to mock _process_topics arguments or run the full command
-                    pass
+        """Test processing with no papers found - via ResearchPipeline"""
+        with patch("src.cli.ConfigManager") as mock_cm:
+            mock_config = Mock()
+            mock_config.settings.pdf_settings = None
+            mock_config.settings.llm_settings = None
+            mock_config.settings.cost_limits = None
+            mock_config.settings.semantic_scholar_api_key = None
+            mock_config.research_topics = [Mock(query="topic1")]
 
-    @pytest.mark.asyncio
-    async def test_process_topics_direct_no_papers(self):
-        """Test _process_topics directly for no papers branch"""
-        from src.cli import _process_topics
+            mock_cm.return_value.load_config.return_value = mock_config
 
-        config = Mock()
-        topic = Mock(query="test")
-        config.research_topics = [topic]
+            with patch(
+                "src.orchestration.research_pipeline.ResearchPipeline"
+            ) as mock_pipeline_class:
+                mock_result = PipelineResult()
+                mock_result.topics_processed = 1
+                mock_result.papers_discovered = 0
+                mock_result.papers_processed = 0
+                mock_result.output_files = []
+                mock_result.errors = []
 
-        discovery = Mock()
-        discovery.search = AsyncMock(return_value=[])
+                mock_pipeline = Mock()
+                mock_pipeline.run = AsyncMock(return_value=mock_result)
+                mock_pipeline_class.return_value = mock_pipeline
 
-        catalog_svc = Mock()
+                result = runner.invoke(app, ["run"])
+                assert result.exit_code == 0
 
-        await _process_topics(config, discovery, catalog_svc, Mock(), Mock())
+    def test_run_with_errors(self):
+        """Test run that has errors reported"""
+        with patch("src.cli.ConfigManager") as mock_cm:
+            mock_config = Mock()
+            mock_config.settings.pdf_settings = None
+            mock_config.settings.llm_settings = None
+            mock_config.settings.cost_limits = None
+            mock_config.settings.semantic_scholar_api_key = None
+            mock_config.research_topics = [Mock(query="topic1")]
 
-        # Log verification would be ideal, but verifying no exception is
-        # raised and it completes is start
-        assert discovery.search.called
+            mock_cm.return_value.load_config.return_value = mock_config
 
-    @pytest.mark.asyncio
-    async def test_process_topics_api_error(self):
-        """Test _process_topics with APIError"""
-        from src.cli import _process_topics
+            with patch(
+                "src.orchestration.research_pipeline.ResearchPipeline"
+            ) as mock_pipeline_class:
+                mock_result = PipelineResult()
+                mock_result.topics_processed = 0
+                mock_result.topics_failed = 1
+                mock_result.papers_discovered = 0
+                mock_result.papers_processed = 0
+                mock_result.output_files = []
+                mock_result.errors = [{"topic": "test", "error": "Search failed"}]
 
-        config = Mock()
-        topic = Mock(query="test")
-        config.research_topics = [topic]
+                mock_pipeline = Mock()
+                mock_pipeline.run = AsyncMock(return_value=mock_result)
+                mock_pipeline_class.return_value = mock_pipeline
 
-        discovery = Mock()
-        discovery.search = AsyncMock(side_effect=APIError("API Failed"))
-
-        catalog_svc = Mock()
-
-        await _process_topics(config, discovery, catalog_svc, Mock(), Mock())
-        assert discovery.search.called
-
-    @pytest.mark.asyncio
-    async def test_process_topics_unexpected_error(self):
-        """Test _process_topics with unexpected error"""
-        from src.cli import _process_topics
-
-        config = Mock()
-        topic = Mock(query="test")
-        config.research_topics = [topic]
-
-        discovery = Mock()
-        discovery.search = AsyncMock(side_effect=Exception("Crash"))
-
-        catalog_svc = Mock()
-
-        await _process_topics(config, discovery, catalog_svc, Mock(), Mock())
-        assert discovery.search.called
+                result = runner.invoke(app, ["run"])
+                assert result.exit_code == 0
+                assert "Errors" in result.stdout
 
     def test_catalog_history_no_topic(self):
         """Test catalog history without topic"""

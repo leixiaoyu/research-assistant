@@ -1,6 +1,6 @@
 # Phase 3.4: Quality-First Paper Discovery with PDF Availability Tracking
-**Version:** 2.0
-**Status:** Draft - Pending Review
+**Version:** 2.1
+**Status:** Approved - Ready for Implementation
 **Timeline:** 3-5 days
 **Dependencies:**
 - Phase 3.2 Complete (Semantic Scholar Provider Activation)
@@ -210,6 +210,9 @@ research_topics:
     # - "pdf_required": Only include papers with PDFs (may reduce quality)
     # - "arxiv_supplement": Add ArXiv results to fill PDF gaps
 
+    # ArXiv supplement threshold (when pdf_strategy: "arxiv_supplement")
+    arxiv_supplement_threshold: 0.5  # Trigger ArXiv if PDF rate below 50%
+
     # What to do with papers without PDFs
     no_pdf_action: "include_metadata"  # NEW OPTION
     # Options:
@@ -290,9 +293,10 @@ The system SHALL support multiple PDF handling strategies.
 **When** search executes
 **Then** it SHALL:
 - First query Semantic Scholar for quality papers
-- If PDF availability < 50%, supplement with ArXiv results
+- If PDF availability < `arxiv_supplement_threshold` (default 0.5), supplement with ArXiv results
 - Merge and deduplicate results
 - Prefer Semantic Scholar metadata when duplicate found
+- Log threshold and actual PDF rate for observability
 
 ### REQ-3.4.4: No-PDF Paper Handling
 The system SHALL handle papers without PDFs according to configuration.
@@ -374,38 +378,102 @@ class ResearchTopic(BaseModel):
     min_quality_score: float = 0.0
     pdf_strategy: PDFStrategy = PDFStrategy.QUALITY_FIRST
     no_pdf_action: NoPDFAction = NoPDFAction.INCLUDE_METADATA
+
+    # ArXiv supplement settings (for ARXIV_SUPPLEMENT strategy)
+    arxiv_supplement_threshold: float = 0.5  # Trigger ArXiv if PDF rate below this
 ```
 
-### 5.2 Quality Scorer Service
+### 5.2 Externalized Venue Scores (Per Review Feedback)
+
+Venue scores are externalized to a YAML file for domain flexibility. Researchers in different fields (Biology, Physics, Medicine) can customize without code changes.
+
+```yaml
+# src/data/venue_scores.yaml
+
+# Default venue reputation scores (0-30 scale)
+# Higher = more prestigious venue
+default_score: 15
+
+venues:
+  # Top NLP venues
+  acl: 30
+  emnlp: 30
+  naacl: 28
+  eacl: 25
+  tacl: 25
+  computational linguistics: 25
+
+  # Top ML venues
+  neurips: 30
+  icml: 30
+  iclr: 28
+
+  # Top CV venues
+  cvpr: 28
+  iccv: 28
+  eccv: 26
+
+  # Top journals
+  nature: 30
+  science: 30
+  cell: 30
+  jmlr: 25
+  pami: 25
+
+  # Preprints (lower quality signal - not peer-reviewed)
+  arxiv: 10
+  biorxiv: 10
+  medrxiv: 10
+
+  # Biology/Medicine (example extension)
+  # lancet: 30
+  # nejm: 30
+  # plos one: 20
+```
+
+### 5.3 Quality Scorer Service
 
 ```python
 # src/services/quality_scorer.py
 
 import math
 from datetime import datetime
-from typing import List
+from pathlib import Path
+from typing import List, Dict, Optional
 import structlog
+import yaml
 
 from src.models.paper import PaperMetadata
 
 logger = structlog.get_logger()
 
-# Venue reputation scores (expandable)
-VENUE_SCORES = {
-    # Top NLP venues
-    "acl": 30, "emnlp": 30, "naacl": 28, "eacl": 25,
-    "tacl": 25, "computational linguistics": 25,
-    # Top ML venues
-    "neurips": 30, "icml": 30, "iclr": 28,
-    # Top CV venues
-    "cvpr": 28, "iccv": 28, "eccv": 26,
-    # Top journals
-    "nature": 30, "science": 30, "cell": 30,
-    "jmlr": 25, "pami": 25,
-    # Preprints (lower quality signal)
-    "arxiv": 10, "biorxiv": 10, "medrxiv": 10,
-}
-DEFAULT_VENUE_SCORE = 15
+# Default path for venue scores
+DEFAULT_VENUE_SCORES_PATH = Path(__file__).parent.parent / "data" / "venue_scores.yaml"
+
+
+def load_venue_scores(path: Optional[Path] = None) -> tuple[Dict[str, int], int]:
+    """Load venue scores from YAML file.
+
+    Args:
+        path: Path to venue scores YAML. Uses default if None.
+
+    Returns:
+        Tuple of (venue_scores dict, default_score)
+    """
+    scores_path = path or DEFAULT_VENUE_SCORES_PATH
+
+    if not scores_path.exists():
+        logger.warning("venue_scores_file_not_found", path=str(scores_path))
+        return {}, 15  # Fallback defaults
+
+    with open(scores_path) as f:
+        data = yaml.safe_load(f)
+
+    venues = {k.lower(): v for k, v in data.get("venues", {}).items()}
+    default = data.get("default_score", 15)
+
+    logger.info("venue_scores_loaded", count=len(venues), default=default)
+    return venues, default
 
 
 class QualityScorer:
@@ -417,11 +485,15 @@ class QualityScorer:
         venue_weight: float = 0.30,
         recency_weight: float = 0.20,
         completeness_weight: float = 0.10,
+        venue_scores_path: Optional[Path] = None,
     ):
         self.citation_weight = citation_weight
         self.venue_weight = venue_weight
         self.recency_weight = recency_weight
         self.completeness_weight = completeness_weight
+
+        # Load externalized venue scores
+        self.venue_scores, self.default_venue_score = load_venue_scores(venue_scores_path)
 
     def score(self, paper: PaperMetadata) -> float:
         """Calculate composite quality score (0-100)."""
@@ -469,11 +541,12 @@ class QualityScorer:
         """Venue reputation score (0-1)."""
         venue = (paper.venue or "").lower()
 
-        for v, pts in VENUE_SCORES.items():
+        # Case-insensitive partial matching (per review feedback)
+        for v, pts in self.venue_scores.items():
             if v in venue:
                 return pts / 30  # Normalize to 0-1
 
-        return DEFAULT_VENUE_SCORE / 30
+        return self.default_venue_score / 30
 
     def _recency_score(self, paper: PaperMetadata) -> float:
         """Recency score (0-1)."""
@@ -641,22 +714,36 @@ def _quality_badge(self, score: float) -> str:
 
 ## 6. Implementation Tasks
 
-### Task 1: Create QualityScorer Service
+### Task 1: Create Externalized Venue Scores File (Per Review)
+**File:** `src/data/venue_scores.yaml`
+**Effort:** 30 minutes
+
+- Create `src/data/` directory
+- Create `venue_scores.yaml` with default CS/AI venues
+- Include comments for extensibility (Biology, Medicine examples)
+- Document score scale (0-30)
+
+**Tests Required:**
+- Test YAML loading
+- Test fallback when file missing
+- Test case-insensitive matching
+
+### Task 2: Create QualityScorer Service
 **File:** `src/services/quality_scorer.py`
 **Effort:** 2 hours
 
 - Implement `QualityScorer` class with weighted scoring
-- Add venue reputation lookup table
+- Load venue scores from YAML file (externalized)
 - Implement `rank_papers()` method
 - Add comprehensive logging
 
 **Tests Required:**
 - Test scoring with various citation counts
-- Test venue recognition
+- Test venue recognition (case-insensitive partial match)
 - Test recency scoring
 - Test edge cases (missing fields)
 
-### Task 2: Add New Config Enums and Model Fields
+### Task 3: Add New Config Enums and Model Fields
 **Files:** `src/models/config.py`, `src/models/paper.py`
 **Effort:** 1 hour
 
@@ -670,7 +757,7 @@ def _quality_badge(self, score: float) -> str:
 - Test default values
 - Test config loading
 
-### Task 3: Update SemanticScholarProvider for PDF Tracking
+### Task 4: Update SemanticScholarProvider for PDF Tracking
 **File:** `src/services/providers/semantic_scholar.py`
 **Effort:** 1.5 hours
 
@@ -684,7 +771,7 @@ def _quality_badge(self, score: float) -> str:
 - Test PDF filter mode
 - Test logging output
 
-### Task 4: Integrate Quality Scoring into Discovery Service
+### Task 5: Integrate Quality Scoring into Discovery Service
 **File:** `src/services/discovery_service.py`
 **Effort:** 1.5 hours
 
@@ -698,7 +785,7 @@ def _quality_badge(self, score: float) -> str:
 - Test min_score filtering
 - Test disabled quality ranking
 
-### Task 5: Update Enhanced Generator for Quality Display
+### Task 6: Update Enhanced Generator for Quality Display
 **File:** `src/output/enhanced_generator.py`
 **Effort:** 1 hour
 
@@ -712,7 +799,7 @@ def _quality_badge(self, score: float) -> str:
 - Test PDF status display
 - Test abstract-only entries
 
-### Task 6: Update Configuration Examples and Documentation
+### Task 7: Update Configuration Examples and Documentation
 **Files:** `config/*.yaml`, `docs/CLAUDE.md`
 **Effort:** 30 minutes
 

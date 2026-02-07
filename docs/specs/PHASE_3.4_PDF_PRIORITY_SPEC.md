@@ -1,5 +1,5 @@
-# Phase 3.4: PDF Priority Search - Open Access First Strategy
-**Version:** 1.0
+# Phase 3.4: Quality-First Paper Discovery with PDF Availability Tracking
+**Version:** 2.0
 **Status:** Draft - Pending Review
 **Timeline:** 3-5 days
 **Dependencies:**
@@ -10,198 +10,318 @@
 
 ## Architecture Reference
 
-This phase enhances the Semantic Scholar discovery provider to prioritize papers with open access PDFs, as defined in [SYSTEM_ARCHITECTURE.md §5.2 Discovery Service](../SYSTEM_ARCHITECTURE.md#core-components).
+This phase enhances the discovery pipeline to prioritize paper quality while tracking PDF availability, as defined in [SYSTEM_ARCHITECTURE.md §5.2 Discovery Service](../SYSTEM_ARCHITECTURE.md#core-components).
 
 **Architectural Gaps Addressed:**
-- Gap: Low PDF availability rate (~5%) from Semantic Scholar
-- Gap: No prioritization of papers with accessible PDFs
+- Gap: No quality-based ranking of discovered papers
+- Gap: No visibility into PDF availability before processing
+- Gap: Low actionable paper rate in research briefs
 
 **Components Modified:**
-- Discovery Layer: `SemanticScholarProvider` (see [Architecture §5.2](../SYSTEM_ARCHITECTURE.md#2-discovery-service))
-- Configuration: New `pdf_priority` option in research topics
+- Discovery Layer: `SemanticScholarProvider`, `ArxivProvider`
+- Models: `PaperMetadata` (add quality score fields)
+- Filter Service: Quality ranking integration
 
 **Coverage Targets:**
-- PDF priority logic: 100%
-- Hybrid search implementation: 100%
-- Configuration validation: 100%
+- Quality scoring logic: 100%
+- PDF availability tracking: 100%
+- Provider enhancements: 100%
 
 ---
 
 ## 1. Executive Summary
 
-Phase 3.4 implements a **hybrid PDF priority search strategy** for the Semantic Scholar provider. The goal is to maximize the number of papers with downloadable PDFs by first querying for papers with open access PDFs, then filling remaining slots with all papers.
+Phase 3.4 implements a **Quality-First Discovery Strategy** that ranks papers by academic quality metrics first, then provides PDF availability as metadata for downstream processing decisions.
 
-**Key Achievement:** Increase PDF availability from ~5% to 60-80%+ by prioritizing open access papers.
+**Key Insight:** Filtering for open access PDFs can bias toward lower-quality papers (preprints, unfunded research). Instead, we discover the BEST papers first, then let the user/pipeline decide how to handle papers without PDFs.
 
 **What This Phase Is:**
-- Implementing hybrid search strategy (open access first, then all papers)
-- Adding `pdf_priority` configuration option
-- Enhancing deduplication for multi-query results
-- Adding metrics for PDF availability tracking
+- Quality-based paper ranking (citations, venue, recency)
+- PDF availability tracking and reporting
+- Clear separation of quality discovery vs PDF processing
+- Enhanced metrics and visibility
 
 **What This Phase Is NOT:**
-- Changing the provider abstraction architecture
-- Implementing PDF download logic (already exists in Phase 2)
-- Adding new providers
+- Filtering out high-quality papers due to PDF unavailability
+- Changing the fundamental discovery approach
+- Compromising research quality for PDF convenience
 
 ---
 
 ## 2. Problem Statement
 
-### 2.1 Current State
+### 2.1 Original Problem
+Daily automation found 0 papers with downloadable PDFs from Semantic Scholar.
 
-**Working:**
-- Semantic Scholar provider functional with proper query execution
-- PDF download and conversion pipeline operational
-- Open access PDF URLs returned in API responses
+### 2.2 Naive Solution (Rejected)
+Filter for open access PDFs first → **Biases toward lower-quality papers**
 
-**Observed Issue (2025-02-07 Daily Run):**
-- Daily automation found 0 papers with downloadable PDFs
-- Root cause: Only ~5% of recent Semantic Scholar papers have open access PDFs
-- Current search does not filter or prioritize papers with available PDFs
+### 2.3 Quality Concerns with PDF-First Approach
 
-### 2.2 Analysis
+| Bias Risk | Impact |
+|-----------|--------|
+| **Preprint bias** | ArXiv papers not peer-reviewed, may contain errors |
+| **Recency bias** | Newer papers more likely OA, but less validated by community |
+| **Venue exclusion** | ACL, EMNLP, NeurIPS papers often paywalled 6-12 months |
+| **Citation blindness** | Seminal highly-cited papers often behind paywalls |
+| **Funding bias** | Well-funded institutions pay OA fees; smaller labs can't |
 
-**API Investigation Results:**
-```python
-# Standard query - ~5% have open access PDFs
-GET /paper/search?query=machine+translation&limit=20
-# Result: 20 papers, ~1 with openAccessPdf
+### 2.4 Revised Approach: Quality First, PDF Optional
 
-# With openAccessPdf filter - 100% have PDFs
-GET /paper/search?query=machine+translation&limit=20&openAccessPdf=
-# Result: 20 papers, all with openAccessPdf
-```
+**Strategy:** Discover the highest-quality papers first, then track and report PDF availability as metadata. Let the pipeline make informed decisions about what to process.
 
-**Key Finding:** The Semantic Scholar API supports an `openAccessPdf` parameter that filters results to only return papers with available PDFs. This gives 100% PDF availability but may return fewer total papers.
-
-### 2.3 Business Impact
-
-**Without PDF Priority:**
-- Daily research briefs have minimal or no extracted content
-- LLM extraction pipeline runs with nothing to process
-- Research output value significantly reduced
-- Wasted API calls and processing time
-
-**With PDF Priority:**
-- 60-80%+ of papers have downloadable PDFs
-- Rich LLM extractions for each paper
-- Higher value research briefs
-- Efficient resource utilization
+**Benefits:**
+- No quality degradation in discovery
+- Full visibility into PDF availability
+- Informed processing decisions
+- Ability to generate "quality briefs" even without full PDF extraction
 
 ---
 
 ## 3. Solution Design
 
-### 3.1 Hybrid Search Strategy
-
-The hybrid approach executes two API calls:
+### 3.1 Quality-First Discovery Flow
 
 ```
-Step 1: Open Access Search
-├── Query with openAccessPdf filter
-├── Request max_papers results
-└── Get papers with guaranteed PDF availability
-
-Step 2: Fill Remaining (if needed)
-├── Query without filter
-├── Request enough to fill remaining slots
-├── Deduplicate against Step 1 results
-└── Prioritize papers with PDFs in final sort
+┌─────────────────────────────────────────────────────────────────┐
+│                    DISCOVERY PHASE                               │
+│  1. Query provider for papers (no PDF filter)                   │
+│  2. Retrieve quality metadata (citations, venue, date)          │
+│  3. Score papers by quality metrics                             │
+│  4. Return top N papers ranked by quality                       │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    AVAILABILITY CHECK                            │
+│  1. For each paper, check open_access_pdf field                 │
+│  2. Categorize: has_pdf, no_pdf, unknown                        │
+│  3. Log PDF availability statistics                             │
+│  4. Add pdf_available flag to PaperMetadata                     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    PROCESSING DECISION                           │
+│  Papers WITH PDF: Full extraction pipeline                      │
+│  Papers WITHOUT PDF:                                            │
+│    Option A: Skip (current behavior)                            │
+│    Option B: Generate abstract-only brief                       │
+│    Option C: Try alternate PDF sources (future)                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.2 Configuration Options
+### 3.2 Quality Scoring Algorithm
+
+```python
+def calculate_quality_score(paper: PaperMetadata) -> float:
+    """
+    Calculate composite quality score (0-100).
+
+    Weights:
+    - Citation impact: 40%
+    - Venue reputation: 30%
+    - Recency boost: 20%
+    - Completeness: 10%
+    """
+    score = 0.0
+
+    # Citation impact (40 points max)
+    # Log scale: 1 citation = 5pts, 10 = 15pts, 100 = 25pts, 1000 = 35pts, 10000 = 40pts
+    if paper.citation_count > 0:
+        citation_score = min(40, 5 * math.log10(paper.citation_count + 1) * 2)
+        score += citation_score
+
+    # Influential citations bonus (within citation score)
+    if paper.influential_citation_count > 0:
+        score += min(5, paper.influential_citation_count * 0.5)
+
+    # Venue reputation (30 points max)
+    venue_scores = {
+        "ACL": 30, "EMNLP": 30, "NAACL": 28,
+        "NeurIPS": 30, "ICML": 30, "ICLR": 28,
+        "CVPR": 28, "ICCV": 28,
+        "Nature": 30, "Science": 30,
+        "TACL": 25, "CL": 25,
+        "ArXiv": 10,  # Preprint - lower score
+    }
+    venue = paper.venue or ""
+    for v, pts in venue_scores.items():
+        if v.lower() in venue.lower():
+            score += pts
+            break
+    else:
+        score += 15  # Unknown venue default
+
+    # Recency boost (20 points max)
+    # Papers < 1 year: 20pts, < 2 years: 15pts, < 5 years: 10pts, older: 5pts
+    if paper.publication_date:
+        age_days = (datetime.utcnow() - paper.publication_date).days
+        if age_days < 365:
+            score += 20
+        elif age_days < 730:
+            score += 15
+        elif age_days < 1825:
+            score += 10
+        else:
+            score += 5
+    else:
+        score += 10  # Unknown date default
+
+    # Completeness (10 points max)
+    if paper.abstract:
+        score += 5
+    if paper.authors:
+        score += 3
+    if paper.doi:
+        score += 2
+
+    return min(100, score)
+```
+
+### 3.3 Provider Comparison: ArXiv vs Semantic Scholar
+
+| Aspect | ArXiv | Semantic Scholar |
+|--------|-------|------------------|
+| **PDF Availability** | ~100% | ~5% (recent papers) |
+| **Peer Review Status** | None (preprints) | Mixed (includes published) |
+| **Citation Data** | None | Yes (key quality signal) |
+| **Venue Information** | "ArXiv" only | Yes (conferences, journals) |
+| **Coverage** | 2.4M papers (CS/Physics/Math) | 200M+ papers (all fields) |
+| **Quality Ranking** | By date only | By citations possible |
+| **Best For** | Latest preprints with PDFs | Quality-ranked published research |
+
+### 3.4 Configuration Options
 
 ```yaml
 research_topics:
-  - query: "machine translation"
+  - query: "large language model translation"
     max_papers: 20
-    pdf_priority: "open_access_first"  # NEW OPTION
+    provider: "semantic_scholar"
+
+    # NEW: Quality-first settings
+    quality_ranking: true           # Enable quality scoring (default: true)
+    min_quality_score: 0            # Minimum score threshold (0-100)
+
+    # PDF handling strategy
+    pdf_strategy: "quality_first"   # NEW OPTION
     # Options:
-    # - "open_access_first" (default): Prioritize papers with PDFs
-    # - "open_access_only": Only return papers with PDFs
-    # - "disabled": Standard search without PDF prioritization
+    # - "quality_first" (default): Rank by quality, track PDF availability
+    # - "pdf_required": Only include papers with PDFs (may reduce quality)
+    # - "arxiv_supplement": Add ArXiv results to fill PDF gaps
+
+    # What to do with papers without PDFs
+    no_pdf_action: "include_metadata"  # NEW OPTION
+    # Options:
+    # - "include_metadata" (default): Include in brief with abstract only
+    # - "skip": Exclude from brief entirely
+    # - "flag_for_manual": Mark for manual PDF acquisition
 ```
-
-### 3.3 Deduplication Logic
-
-Papers from both queries are merged with deduplication:
-1. Create set of paper IDs from open access query
-2. Filter second query results to exclude duplicates
-3. Combine: [all open access papers] + [non-duplicate papers with PDFs] + [others]
 
 ---
 
 ## 4. Requirements
 
-### REQ-3.4.1: Hybrid Search Implementation
-The Semantic Scholar provider SHALL support hybrid search that prioritizes open access papers.
+### REQ-3.4.1: Quality Scoring Implementation
+The discovery service SHALL score papers by academic quality metrics.
 
-#### Scenario: Open Access First Search
-**Given** a research topic with `pdf_priority: "open_access_first"`
-**When** the provider executes a search
+#### Scenario: Quality Score Calculation
+**Given** a paper with citation count, venue, and publication date
+**When** the quality score is calculated
 **Then** it SHALL:
-- First query with `openAccessPdf` parameter to get papers with PDFs
-- Then query without filter if more papers needed
-- Deduplicate results by paper ID
-- Return combined results with PDF papers first
-- Log the number of papers from each query phase
+- Apply weighted scoring (citations 40%, venue 30%, recency 20%, completeness 10%)
+- Return a score between 0 and 100
+- Handle missing fields gracefully with defaults
+- Log scoring breakdown at DEBUG level
 
-#### Scenario: Open Access Only Search
-**Given** a research topic with `pdf_priority: "open_access_only"`
-**When** the provider executes a search
+#### Scenario: Quality-Based Ranking
+**Given** a search returns multiple papers
+**When** results are processed
 **Then** it SHALL:
-- Query only with `openAccessPdf` parameter
-- Return only papers with available PDFs
-- Log warning if fewer than requested papers found
+- Calculate quality score for each paper
+- Sort results by quality score (highest first)
+- Store quality_score in PaperMetadata
+- Return top N papers by quality
 
-#### Scenario: Disabled PDF Priority
-**Given** a research topic with `pdf_priority: "disabled"`
-**When** the provider executes a search
+### REQ-3.4.2: PDF Availability Tracking
+The discovery service SHALL track and report PDF availability separately from quality.
+
+#### Scenario: PDF Availability Check
+**Given** papers returned from Semantic Scholar
+**When** results are processed
 **Then** it SHALL:
-- Execute standard search without PDF filtering
-- Maintain backward compatibility with existing behavior
+- Check `openAccessPdf` field for each paper
+- Set `pdf_available: bool` in PaperMetadata
+- NOT filter out papers missing PDFs (unless explicitly configured)
+- Log PDF availability statistics
 
-### REQ-3.4.2: Configuration Validation
-The configuration system SHALL validate PDF priority settings.
-
-#### Scenario: Valid PDF Priority Value
-**Given** a config with `pdf_priority` set to a valid value
-**When** the config is loaded
-**Then** it SHALL:
-- Accept values: "open_access_first", "open_access_only", "disabled"
-- Default to "open_access_first" if not specified
-
-#### Scenario: Invalid PDF Priority Value
-**Given** a config with `pdf_priority` set to an invalid value
-**When** the config is loaded
-**Then** it SHALL:
-- Raise `ValidationError` with clear message
-- List valid options in error message
-
-### REQ-3.4.3: Rate Limit Compliance
-The hybrid search SHALL respect API rate limits.
-
-#### Scenario: Double API Call Rate Limiting
-**Given** a hybrid search requires two API calls
-**When** both calls are executed
-**Then** it SHALL:
-- Acquire rate limiter before each call
-- Not exceed 100 requests/minute total
-- Log rate limit status if approaching threshold
-
-### REQ-3.4.4: Metrics and Logging
-The provider SHALL log PDF availability metrics.
-
-#### Scenario: PDF Availability Metrics
-**Given** a hybrid search completes
-**When** results are returned
-**Then** it SHALL log:
+#### Scenario: PDF Availability Reporting
+**Given** a search completes with N papers
+**When** results are logged
+**Then** it SHALL report:
 - Total papers found
-- Papers with open access PDF
+- Papers with PDF available
 - Papers without PDF
 - PDF availability percentage
-- Query phases executed
+- Average quality score of papers with/without PDFs
+
+### REQ-3.4.3: Configurable PDF Strategy
+The system SHALL support multiple PDF handling strategies.
+
+#### Scenario: Quality First Strategy (Default)
+**Given** `pdf_strategy: "quality_first"`
+**When** search executes
+**Then** it SHALL:
+- Search without PDF filter
+- Rank by quality
+- Include all papers regardless of PDF availability
+- Track PDF availability as metadata
+
+#### Scenario: PDF Required Strategy
+**Given** `pdf_strategy: "pdf_required"`
+**When** search executes
+**Then** it SHALL:
+- Search with PDF filter (Semantic Scholar: `openAccessPdf` param)
+- Warn that quality may be reduced
+- Return only papers with PDFs
+
+#### Scenario: ArXiv Supplement Strategy
+**Given** `pdf_strategy: "arxiv_supplement"`
+**When** search executes
+**Then** it SHALL:
+- First query Semantic Scholar for quality papers
+- If PDF availability < 50%, supplement with ArXiv results
+- Merge and deduplicate results
+- Prefer Semantic Scholar metadata when duplicate found
+
+### REQ-3.4.4: No-PDF Paper Handling
+The system SHALL handle papers without PDFs according to configuration.
+
+#### Scenario: Include Metadata (Default)
+**Given** `no_pdf_action: "include_metadata"`
+**When** generating research brief
+**Then** it SHALL:
+- Include paper in brief with title, abstract, authors, venue
+- Mark as "Abstract Only - Full PDF Unavailable"
+- Skip LLM extraction step
+- Include in paper count statistics
+
+#### Scenario: Skip Papers Without PDF
+**Given** `no_pdf_action: "skip"`
+**When** generating research brief
+**Then** it SHALL:
+- Exclude papers without PDFs from brief
+- Log skipped papers with reasons
+- Report "X papers skipped (no PDF)"
+
+#### Scenario: Flag for Manual Acquisition
+**Given** `no_pdf_action: "flag_for_manual"`
+**When** generating research brief
+**Then** it SHALL:
+- Include paper in brief with metadata
+- Add "ACTION REQUIRED: PDF needs manual acquisition" flag
+- Generate a separate list of papers needing PDFs
+- Include DOI/URL for manual lookup
 
 ---
 
@@ -209,16 +329,36 @@ The provider SHALL log PDF availability metrics.
 
 ### 5.1 Model Changes
 
-#### New Enum: PDFPriority
+#### New Enum: PDFStrategy
 
 ```python
 # src/models/config.py
 
-class PDFPriority(str, Enum):
-    """PDF priority strategy for paper discovery."""
-    OPEN_ACCESS_FIRST = "open_access_first"  # Default: prioritize, then fill
-    OPEN_ACCESS_ONLY = "open_access_only"    # Only papers with PDFs
-    DISABLED = "disabled"                     # Standard search
+class PDFStrategy(str, Enum):
+    """Strategy for handling PDF availability in discovery."""
+    QUALITY_FIRST = "quality_first"      # Default: rank by quality, track PDF
+    PDF_REQUIRED = "pdf_required"        # Only papers with PDFs
+    ARXIV_SUPPLEMENT = "arxiv_supplement"  # Fill PDF gaps with ArXiv
+
+class NoPDFAction(str, Enum):
+    """What to do with papers that don't have PDFs."""
+    INCLUDE_METADATA = "include_metadata"  # Include with abstract only
+    SKIP = "skip"                          # Exclude from brief
+    FLAG_FOR_MANUAL = "flag_for_manual"    # Mark for manual acquisition
+```
+
+#### Updated PaperMetadata Model
+
+```python
+# src/models/paper.py
+
+class PaperMetadata(BaseModel):
+    # ... existing fields ...
+
+    # NEW: Quality and availability tracking
+    quality_score: float = 0.0           # Calculated quality score (0-100)
+    pdf_available: bool = False          # Whether PDF is available
+    pdf_source: Optional[str] = None     # Source of PDF (open_access, arxiv, etc.)
 ```
 
 #### Updated ResearchTopic Model
@@ -227,199 +367,358 @@ class PDFPriority(str, Enum):
 # src/models/config.py
 
 class ResearchTopic(BaseModel):
-    query: str
-    timeframe: Union[TimeframeRecent, TimeframeSinceYear, TimeframeDateRange]
-    max_papers: int = 20
-    provider: ProviderType = ProviderType.ARXIV
-    pdf_priority: PDFPriority = PDFPriority.OPEN_ACCESS_FIRST  # NEW
-    # ... existing fields
+    # ... existing fields ...
+
+    # NEW: Quality-first settings
+    quality_ranking: bool = True
+    min_quality_score: float = 0.0
+    pdf_strategy: PDFStrategy = PDFStrategy.QUALITY_FIRST
+    no_pdf_action: NoPDFAction = NoPDFAction.INCLUDE_METADATA
 ```
 
-### 5.2 Provider Changes
-
-#### SemanticScholarProvider.search() - Hybrid Implementation
+### 5.2 Quality Scorer Service
 
 ```python
-# src/services/providers/semantic_scholar.py
+# src/services/quality_scorer.py
+
+import math
+from datetime import datetime
+from typing import List
+import structlog
+
+from src.models.paper import PaperMetadata
+
+logger = structlog.get_logger()
+
+# Venue reputation scores (expandable)
+VENUE_SCORES = {
+    # Top NLP venues
+    "acl": 30, "emnlp": 30, "naacl": 28, "eacl": 25,
+    "tacl": 25, "computational linguistics": 25,
+    # Top ML venues
+    "neurips": 30, "icml": 30, "iclr": 28,
+    # Top CV venues
+    "cvpr": 28, "iccv": 28, "eccv": 26,
+    # Top journals
+    "nature": 30, "science": 30, "cell": 30,
+    "jmlr": 25, "pami": 25,
+    # Preprints (lower quality signal)
+    "arxiv": 10, "biorxiv": 10, "medrxiv": 10,
+}
+DEFAULT_VENUE_SCORE = 15
+
+
+class QualityScorer:
+    """Calculate quality scores for papers."""
+
+    def __init__(
+        self,
+        citation_weight: float = 0.40,
+        venue_weight: float = 0.30,
+        recency_weight: float = 0.20,
+        completeness_weight: float = 0.10,
+    ):
+        self.citation_weight = citation_weight
+        self.venue_weight = venue_weight
+        self.recency_weight = recency_weight
+        self.completeness_weight = completeness_weight
+
+    def score(self, paper: PaperMetadata) -> float:
+        """Calculate composite quality score (0-100)."""
+        scores = {
+            "citation": self._citation_score(paper),
+            "venue": self._venue_score(paper),
+            "recency": self._recency_score(paper),
+            "completeness": self._completeness_score(paper),
+        }
+
+        total = (
+            scores["citation"] * self.citation_weight +
+            scores["venue"] * self.venue_weight +
+            scores["recency"] * self.recency_weight +
+            scores["completeness"] * self.completeness_weight
+        )
+
+        # Normalize to 0-100
+        final_score = min(100, total * 100)
+
+        logger.debug(
+            "quality_score_calculated",
+            paper_id=paper.paper_id,
+            scores=scores,
+            final=final_score,
+        )
+
+        return final_score
+
+    def _citation_score(self, paper: PaperMetadata) -> float:
+        """Citation impact score (0-1)."""
+        if paper.citation_count <= 0:
+            return 0.0
+
+        # Log scale: 1=0.17, 10=0.50, 100=0.83, 1000=1.0
+        score = math.log10(paper.citation_count + 1) / 3
+
+        # Influential citation bonus
+        if paper.influential_citation_count > 0:
+            score += min(0.1, paper.influential_citation_count * 0.01)
+
+        return min(1.0, score)
+
+    def _venue_score(self, paper: PaperMetadata) -> float:
+        """Venue reputation score (0-1)."""
+        venue = (paper.venue or "").lower()
+
+        for v, pts in VENUE_SCORES.items():
+            if v in venue:
+                return pts / 30  # Normalize to 0-1
+
+        return DEFAULT_VENUE_SCORE / 30
+
+    def _recency_score(self, paper: PaperMetadata) -> float:
+        """Recency score (0-1)."""
+        if not paper.publication_date:
+            return 0.5  # Unknown date default
+
+        age_days = (datetime.utcnow() - paper.publication_date).days
+
+        if age_days < 365:      # < 1 year
+            return 1.0
+        elif age_days < 730:    # < 2 years
+            return 0.75
+        elif age_days < 1825:   # < 5 years
+            return 0.50
+        else:
+            return 0.25
+
+    def _completeness_score(self, paper: PaperMetadata) -> float:
+        """Metadata completeness score (0-1)."""
+        score = 0.0
+
+        if paper.abstract:
+            score += 0.5
+        if paper.authors:
+            score += 0.3
+        if paper.doi:
+            score += 0.2
+
+        return score
+
+    def rank_papers(
+        self,
+        papers: List[PaperMetadata],
+        min_score: float = 0.0,
+    ) -> List[PaperMetadata]:
+        """Score and rank papers by quality."""
+        scored = []
+
+        for paper in papers:
+            paper.quality_score = self.score(paper)
+            if paper.quality_score >= min_score:
+                scored.append(paper)
+
+        # Sort by quality (highest first)
+        scored.sort(key=lambda p: p.quality_score, reverse=True)
+
+        logger.info(
+            "papers_ranked_by_quality",
+            total=len(papers),
+            above_threshold=len(scored),
+            min_score=min_score,
+        )
+
+        return scored
+```
+
+### 5.3 Updated SemanticScholarProvider
+
+```python
+# src/services/providers/semantic_scholar.py (search method update)
 
 async def search(self, topic: ResearchTopic) -> List[PaperMetadata]:
-    """Search with PDF priority strategy."""
+    """Search with quality-first strategy."""
 
-    if topic.pdf_priority == PDFPriority.DISABLED:
-        return await self._search_standard(topic)
+    # Execute search based on PDF strategy
+    if topic.pdf_strategy == PDFStrategy.PDF_REQUIRED:
+        papers = await self._search_with_pdf_filter(topic)
+    else:
+        papers = await self._search_standard(topic)
 
-    if topic.pdf_priority == PDFPriority.OPEN_ACCESS_ONLY:
-        return await self._search_open_access_only(topic)
+    # Track PDF availability
+    for paper in papers:
+        paper.pdf_available = bool(paper.open_access_pdf)
+        if paper.pdf_available:
+            paper.pdf_source = "open_access"
 
-    # Default: OPEN_ACCESS_FIRST
-    return await self._search_hybrid(topic)
-
-async def _search_hybrid(self, topic: ResearchTopic) -> List[PaperMetadata]:
-    """Hybrid search: open access first, then fill with others."""
-
-    # Phase 1: Get papers with open access PDFs
-    open_access_papers = await self._execute_search(
-        topic,
-        open_access_only=True,
-        limit=topic.max_papers
-    )
-
-    found_count = len(open_access_papers)
-    remaining_slots = topic.max_papers - found_count
-
+    # Log PDF availability metrics
+    pdf_count = sum(1 for p in papers if p.pdf_available)
     logger.info(
-        "hybrid_search_phase_1_complete",
-        open_access_count=found_count,
-        remaining_slots=remaining_slots,
-    )
-
-    if remaining_slots <= 0:
-        return open_access_papers[:topic.max_papers]
-
-    # Phase 2: Fill remaining slots
-    seen_ids = {p.paper_id for p in open_access_papers}
-
-    all_papers = await self._execute_search(
-        topic,
-        open_access_only=False,
-        limit=topic.max_papers + 10  # Request extra for dedup buffer
-    )
-
-    # Filter duplicates and prioritize papers with PDFs
-    additional = []
-    for paper in all_papers:
-        if paper.paper_id not in seen_ids:
-            seen_ids.add(paper.paper_id)
-            additional.append(paper)
-            if len(additional) >= remaining_slots:
-                break
-
-    # Sort additional: papers with PDFs first
-    additional.sort(key=lambda p: (0 if p.open_access_pdf else 1))
-
-    combined = open_access_papers + additional
-
-    # Calculate and log metrics
-    pdf_count = sum(1 for p in combined if p.open_access_pdf)
-
-    logger.info(
-        "hybrid_search_complete",
-        total_papers=len(combined),
+        "pdf_availability_check",
+        total_papers=len(papers),
         with_pdf=pdf_count,
-        without_pdf=len(combined) - pdf_count,
-        pdf_rate=f"{(pdf_count/len(combined)*100):.1f}%" if combined else "N/A",
+        without_pdf=len(papers) - pdf_count,
+        pdf_rate=f"{(pdf_count/len(papers)*100):.1f}%" if papers else "N/A",
+        provider="semantic_scholar",
     )
 
-    return combined[:topic.max_papers]
+    return papers
+
+async def _search_with_pdf_filter(self, topic: ResearchTopic) -> List[PaperMetadata]:
+    """Search with openAccessPdf filter (for PDF_REQUIRED strategy)."""
+    params = self._build_query_params(topic, topic.query)
+    params["openAccessPdf"] = ""  # Enable filter
+
+    logger.warning(
+        "pdf_required_mode_active",
+        note="Quality may be reduced - only papers with open access PDFs returned",
+    )
+
+    # ... execute search with filter ...
 ```
 
-#### Helper Method: _execute_search()
+### 5.4 Enhanced Markdown Generator
 
 ```python
-async def _execute_search(
-    self,
-    topic: ResearchTopic,
-    open_access_only: bool,
-    limit: int
-) -> List[PaperMetadata]:
-    """Execute a single search with optional open access filter."""
+# src/output/enhanced_generator.py (addition)
 
-    safe_query = self.validate_query(topic.query)
-    params = self._build_query_params(topic, safe_query, limit=limit)
+def _format_paper_entry(self, paper: PaperMetadata, has_extraction: bool) -> str:
+    """Format a single paper entry with quality and PDF status."""
 
-    if open_access_only:
-        params["openAccessPdf"] = ""  # Empty string enables filter
+    lines = []
+    lines.append(f"### {paper.title}")
+    lines.append("")
 
-    await self.rate_limiter.acquire()
+    # Quality badge
+    quality_badge = self._quality_badge(paper.quality_score)
+    pdf_badge = "📄 PDF Available" if paper.pdf_available else "📋 Abstract Only"
 
-    # ... existing HTTP request logic ...
+    lines.append(f"**Quality:** {quality_badge} | **Status:** {pdf_badge}")
+    lines.append("")
 
-    return self._parse_response(data)
+    # Metadata
+    if paper.authors:
+        authors_str = ", ".join(a.name for a in paper.authors[:5])
+        if len(paper.authors) > 5:
+            authors_str += f" (+{len(paper.authors) - 5} more)"
+        lines.append(f"**Authors:** {authors_str}")
+
+    if paper.venue:
+        lines.append(f"**Venue:** {paper.venue}")
+
+    if paper.citation_count:
+        lines.append(f"**Citations:** {paper.citation_count}")
+
+    lines.append(f"**Link:** [{paper.url}]({paper.url})")
+    lines.append("")
+
+    # Abstract
+    if paper.abstract:
+        lines.append("**Abstract:**")
+        lines.append(f"> {paper.abstract[:500]}...")
+        lines.append("")
+
+    # PDF status message
+    if not paper.pdf_available:
+        lines.append("> ⚠️ **Note:** Full PDF not available via open access.")
+        lines.append(f"> DOI: {paper.doi}" if paper.doi else "> Manual lookup may be required.")
+        lines.append("")
+
+    return "\n".join(lines)
+
+def _quality_badge(self, score: float) -> str:
+    """Generate quality badge based on score."""
+    if score >= 80:
+        return f"⭐⭐⭐ Excellent ({score:.0f})"
+    elif score >= 60:
+        return f"⭐⭐ Good ({score:.0f})"
+    elif score >= 40:
+        return f"⭐ Fair ({score:.0f})"
+    else:
+        return f"○ Low ({score:.0f})"
 ```
-
-### 5.3 Backward Compatibility
-
-- Default `pdf_priority` is "open_access_first" for new behavior
-- Existing configs without `pdf_priority` get the new default
-- Set `pdf_priority: "disabled"` for exact old behavior
 
 ---
 
 ## 6. Implementation Tasks
 
-### Task 1: Add PDFPriority Enum and Update ResearchTopic Model
-**File:** `src/models/config.py`
-**Effort:** 1 hour
-
-```python
-# Add:
-class PDFPriority(str, Enum):
-    OPEN_ACCESS_FIRST = "open_access_first"
-    OPEN_ACCESS_ONLY = "open_access_only"
-    DISABLED = "disabled"
-
-# Update ResearchTopic:
-pdf_priority: PDFPriority = PDFPriority.OPEN_ACCESS_FIRST
-```
-
-**Tests Required:**
-- Test enum value validation
-- Test default value assignment
-- Test config loading with all priority values
-
-### Task 2: Refactor SemanticScholarProvider.search() for Strategy Pattern
-**File:** `src/services/providers/semantic_scholar.py`
+### Task 1: Create QualityScorer Service
+**File:** `src/services/quality_scorer.py`
 **Effort:** 2 hours
 
-- Extract current search logic to `_search_standard()`
-- Add `_execute_search()` helper for single API call
-- Route to appropriate strategy based on `pdf_priority`
-
-**Tests Required:**
-- Test strategy routing
-- Test `_execute_search()` with both filter states
-- Mock API responses for unit tests
-
-### Task 3: Implement Hybrid Search Logic
-**File:** `src/services/providers/semantic_scholar.py`
-**Effort:** 2 hours
-
-- Implement `_search_hybrid()` with two-phase search
-- Implement `_search_open_access_only()`
-- Add deduplication logic
+- Implement `QualityScorer` class with weighted scoring
+- Add venue reputation lookup table
+- Implement `rank_papers()` method
 - Add comprehensive logging
 
 **Tests Required:**
-- Test hybrid search with various result counts
-- Test deduplication logic
-- Test edge cases (0 open access, all open access)
-- Test logging output
+- Test scoring with various citation counts
+- Test venue recognition
+- Test recency scoring
+- Test edge cases (missing fields)
 
-### Task 4: Update _build_query_params() for Open Access Filter
-**File:** `src/services/providers/semantic_scholar.py`
-**Effort:** 30 minutes
+### Task 2: Add New Config Enums and Model Fields
+**Files:** `src/models/config.py`, `src/models/paper.py`
+**Effort:** 1 hour
 
-- Add `open_access_only` parameter
-- Add `openAccessPdf` param when filter enabled
+- Add `PDFStrategy` and `NoPDFAction` enums
+- Add `quality_score`, `pdf_available`, `pdf_source` to PaperMetadata
+- Add config fields to ResearchTopic
+- Update validation
 
 **Tests Required:**
-- Test params with filter enabled/disabled
-- Verify correct API parameter format
+- Test enum validation
+- Test default values
+- Test config loading
 
-### Task 5: Integration Tests with Mocked API
-**File:** `tests/integration/test_semantic_scholar_pdf_priority.py`
-**Effort:** 2 hours
+### Task 3: Update SemanticScholarProvider for PDF Tracking
+**File:** `src/services/providers/semantic_scholar.py`
+**Effort:** 1.5 hours
 
-- Test full hybrid flow with mocked responses
-- Test rate limiting with double API calls
-- Test error handling in each phase
+- Add PDF availability tracking
+- Implement `_search_with_pdf_filter()` for PDF_REQUIRED strategy
+- Add PDF availability logging
+- Maintain backward compatibility
 
-### Task 6: Update Configuration Examples
-**Files:** `config/daily_german_mt.yaml`, `config/research_config.yaml`
+**Tests Required:**
+- Test PDF tracking
+- Test PDF filter mode
+- Test logging output
+
+### Task 4: Integrate Quality Scoring into Discovery Service
+**File:** `src/services/discovery_service.py`
+**Effort:** 1.5 hours
+
+- Integrate QualityScorer after search
+- Apply quality ranking when enabled
+- Filter by min_quality_score
+- Log quality statistics
+
+**Tests Required:**
+- Test quality ranking integration
+- Test min_score filtering
+- Test disabled quality ranking
+
+### Task 5: Update Enhanced Generator for Quality Display
+**File:** `src/output/enhanced_generator.py`
+**Effort:** 1 hour
+
+- Add quality badges to paper entries
+- Add PDF availability indicators
+- Handle no-PDF papers according to config
+- Generate PDF availability summary
+
+**Tests Required:**
+- Test quality badge generation
+- Test PDF status display
+- Test abstract-only entries
+
+### Task 6: Update Configuration Examples and Documentation
+**Files:** `config/*.yaml`, `docs/CLAUDE.md`
 **Effort:** 30 minutes
 
-- Add `pdf_priority` to example configs
-- Update documentation comments
+- Add new config options to examples
+- Document quality scoring algorithm
+- Document PDF handling strategies
 
 ---
 
@@ -429,50 +728,50 @@ pdf_priority: PDFPriority = PDFPriority.OPEN_ACCESS_FIRST
 
 | Test Case | Description | Coverage Target |
 |-----------|-------------|-----------------|
-| `test_pdf_priority_enum_values` | Verify all enum values | PDFPriority |
-| `test_research_topic_default_priority` | Default is OPEN_ACCESS_FIRST | ResearchTopic |
-| `test_search_routes_to_standard` | DISABLED routes correctly | search() |
-| `test_search_routes_to_open_access_only` | OPEN_ACCESS_ONLY routes correctly | search() |
-| `test_search_routes_to_hybrid` | OPEN_ACCESS_FIRST routes correctly | search() |
-| `test_hybrid_phase1_fills_all` | When open access fills quota | _search_hybrid() |
-| `test_hybrid_phase2_needed` | When fill phase required | _search_hybrid() |
-| `test_dedup_removes_duplicates` | No duplicate paper IDs | _search_hybrid() |
-| `test_additional_sorted_by_pdf` | PDF papers first | _search_hybrid() |
-| `test_rate_limiter_called_twice` | Two acquires for hybrid | rate limiting |
+| `test_quality_score_citation_scaling` | Log scale citation scoring | QualityScorer |
+| `test_quality_score_venue_recognition` | Known venues scored correctly | QualityScorer |
+| `test_quality_score_unknown_venue` | Default score for unknown | QualityScorer |
+| `test_quality_score_recency_tiers` | Age-based scoring | QualityScorer |
+| `test_quality_score_completeness` | Metadata completeness | QualityScorer |
+| `test_rank_papers_sorts_by_quality` | Highest quality first | rank_papers() |
+| `test_rank_papers_filters_by_min` | Min score threshold | rank_papers() |
+| `test_pdf_available_tracking` | PDF flag set correctly | Provider |
+| `test_pdf_strategy_quality_first` | No filter applied | search() |
+| `test_pdf_strategy_pdf_required` | Filter applied | search() |
 
 ### 7.2 Integration Tests
 
 | Test Case | Description |
 |-----------|-------------|
-| `test_hybrid_search_end_to_end` | Full flow with mocked API |
-| `test_open_access_only_end_to_end` | Full flow, filter only |
-| `test_config_loading_with_priority` | Config file parsing |
+| `test_full_pipeline_quality_first` | Discovery → Scoring → Output |
+| `test_config_loading_new_options` | YAML parsing with new fields |
+| `test_markdown_output_with_quality` | Brief includes quality info |
 
-### 7.3 Edge Case Tests
+### 7.3 Edge Cases
 
 | Test Case | Description |
 |-----------|-------------|
-| `test_hybrid_zero_open_access` | No papers match open access filter |
-| `test_hybrid_all_open_access` | All papers have PDFs |
-| `test_hybrid_api_error_phase1` | Error in first phase |
-| `test_hybrid_api_error_phase2` | Error in second phase |
-| `test_empty_query_result` | Query returns no papers |
+| `test_zero_citations_paper` | Paper with no citations |
+| `test_missing_publication_date` | Unknown date handling |
+| `test_all_papers_have_pdf` | 100% PDF availability |
+| `test_no_papers_have_pdf` | 0% PDF availability |
+| `test_empty_search_results` | No papers found |
 
 ---
 
 ## 8. Acceptance Criteria
 
 ### Functional Criteria
-- [ ] Hybrid search returns papers with PDFs prioritized
-- [ ] Open access only mode filters to PDF-only papers
-- [ ] Disabled mode preserves backward compatibility
-- [ ] Deduplication works correctly across phases
-- [ ] Logging includes PDF availability metrics
+- [ ] Papers ranked by quality score (citations, venue, recency)
+- [ ] PDF availability tracked without filtering quality papers
+- [ ] Quality badges displayed in research briefs
+- [ ] Papers without PDFs handled according to config
+- [ ] ArXiv supplement mode fills PDF gaps when enabled
 
 ### Non-Functional Criteria
-- [ ] Rate limiting respected for double API calls
-- [ ] Performance: <5s for typical hybrid search
-- [ ] Error handling: Pipeline continues on partial failure
+- [ ] Quality scoring adds <100ms to pipeline
+- [ ] Clear logging of quality and PDF metrics
+- [ ] Backward compatible with existing configs
 
 ### Quality Criteria
 - [ ] Test coverage >= 95% for all new code
@@ -483,89 +782,55 @@ pdf_priority: PDFPriority = PDFPriority.OPEN_ACCESS_FIRST
 
 ---
 
-## 9. Rollout Plan
+## 9. Comparison: Old vs New Approach
 
-### Phase 1: Implementation (Days 1-3)
-1. Implement model changes (Task 1)
-2. Implement provider changes (Tasks 2-4)
-3. Write comprehensive tests (Task 5)
-4. Update configs (Task 6)
-
-### Phase 2: Verification (Day 4)
-1. Run `./verify.sh` - all checks pass
-2. Manual testing with real Semantic Scholar API
-3. Verify PDF availability improvement
-
-### Phase 3: Deployment (Day 5)
-1. Create PR with verification report
-2. Team review
-3. Merge to main
-4. Update daily automation config
+| Aspect | PDF-First (v1, Rejected) | Quality-First (v2, Approved) |
+|--------|--------------------------|------------------------------|
+| **Search Filter** | `openAccessPdf` enabled | No PDF filter |
+| **Ranking** | By PDF availability | By quality score |
+| **Quality Bias** | May miss top papers | Preserves paper quality |
+| **PDF Visibility** | Only papers with PDFs | All papers with PDF status |
+| **User Choice** | PDF or nothing | Quality + informed PDF decision |
+| **Output Value** | Limited but extractable | Comprehensive but mixed extraction |
 
 ---
 
-## 10. Risks and Mitigations
+## 10. Future Considerations
 
-| Risk | Impact | Likelihood | Mitigation |
-|------|--------|------------|------------|
-| Open access filter returns too few papers | Medium | Low | Fill with non-filtered results |
-| Double API calls hit rate limit | High | Low | Careful rate limiter management |
-| Semantic Scholar changes API | High | Very Low | Monitor API responses, add alerts |
-
----
-
-## 11. Future Considerations
-
-- **PDF Source Fallback:** If open access URL fails, try unpaywall.org or other sources
-- **PDF Quality Scoring:** Rank PDFs by quality/completeness
-- **Provider-Agnostic:** Abstract PDF priority to work with other providers
-- **Caching:** Cache open access status to avoid repeated API calls
+- **PDF Source Expansion:** Try Unpaywall, CORE, or institutional repos for missing PDFs
+- **Quality Model Training:** Learn quality weights from user feedback
+- **Venue Database:** Maintain comprehensive venue reputation scores
+- **Abstract-Based Extraction:** LLM extraction from abstracts when PDF unavailable
+- **Citation Network Analysis:** Quality boost for papers citing/cited by known good papers
 
 ---
 
-## Appendix A: API Reference
+## Appendix A: Quality Score Examples
 
-### Semantic Scholar Paper Search API
-
-**Endpoint:** `GET https://api.semanticscholar.org/graph/v1/paper/search`
-
-**Relevant Parameters:**
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `query` | string | Search query |
-| `limit` | int | Max results (1-100) |
-| `fields` | string | Comma-separated fields to return |
-| `openAccessPdf` | empty string | Filter to papers with open access PDFs |
-| `publicationDateOrYear` | string | Date range filter |
-
-**Example Request (with filter):**
-```bash
-curl -H "x-api-key: $API_KEY" \
-  "https://api.semanticscholar.org/graph/v1/paper/search\
-?query=machine+translation&limit=20&fields=title,openAccessPdf&openAccessPdf="
-```
+| Paper | Citations | Venue | Age | Score |
+|-------|-----------|-------|-----|-------|
+| Attention Is All You Need | 100,000+ | NeurIPS | 7 years | 92 |
+| Recent ArXiv preprint | 0 | ArXiv | 1 week | 35 |
+| EMNLP 2023 paper | 50 | EMNLP | 1.5 years | 68 |
+| Unknown venue, 500 cites | 500 | Unknown | 3 years | 55 |
 
 ---
 
-## Appendix B: Logging Examples
+## Appendix B: Configuration Migration Guide
 
-### Hybrid Search Logging Output
+**Existing configs work unchanged.** New options are optional with sensible defaults.
 
-```json
-{"event": "hybrid_search_phase_1_complete", "open_access_count": 12, "remaining_slots": 8}
-{"event": "hybrid_search_complete", "total_papers": 20, "with_pdf": 15, "without_pdf": 5, "pdf_rate": "75.0%"}
-```
+```yaml
+# Before (still works):
+research_topics:
+  - query: "machine translation"
+    max_papers: 20
 
-### Metrics Dashboard Query
-
-```sql
-SELECT
-  date,
-  COUNT(*) as total_papers,
-  SUM(CASE WHEN has_pdf THEN 1 ELSE 0 END) as with_pdf,
-  ROUND(SUM(CASE WHEN has_pdf THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) as pdf_rate
-FROM paper_discoveries
-WHERE provider = 'semantic_scholar'
-GROUP BY date
-ORDER BY date DESC;
+# After (with new options):
+research_topics:
+  - query: "machine translation"
+    max_papers: 20
+    quality_ranking: true           # NEW (default: true)
+    pdf_strategy: "quality_first"   # NEW (default)
+    no_pdf_action: "include_metadata"  # NEW (default)
 ```

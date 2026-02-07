@@ -85,6 +85,100 @@ This ensures:
 - Use `git stash` instead of discarding changes
 - Use `git checkout -b backup/branch` before destructive operations
 
+### 🔐 Git Worktree Protection Protocol (Non-Negotiable)
+
+**Worktrees are PROTECTED WORKSPACES. Removal requires MANDATORY validation and EXPLICIT user confirmation.**
+
+This protocol exists because worktrees may contain:
+- Uncommitted changes (lost forever if removed)
+- Untracked files (not recoverable)
+- Work-in-progress not yet pushed (lost forever)
+- Local experiments and notes (not in git)
+
+#### Pre-Removal Validation Steps (MANDATORY)
+
+**Before removing ANY worktree, you MUST complete ALL of these steps:**
+
+1. **List all worktrees:**
+   ```bash
+   git worktree list
+   ```
+
+2. **Check for uncommitted changes in the target worktree:**
+   ```bash
+   git -C <worktree-path> status --porcelain
+   ```
+   - If output is NOT empty → **STOP, DO NOT REMOVE**
+
+3. **Check for unpushed commits:**
+   ```bash
+   git -C <worktree-path> log @{u}..HEAD --oneline 2>/dev/null
+   ```
+   - If output is NOT empty → **STOP, DO NOT REMOVE**
+
+4. **Check for untracked files:**
+   ```bash
+   git -C <worktree-path> status --porcelain | grep "^??"
+   ```
+   - If output is NOT empty → **WARN USER about untracked files**
+
+5. **Request EXPLICIT user confirmation with full details:**
+   ```
+   ⚠️ WORKTREE REMOVAL REQUEST
+
+   Path: <full-worktree-path>
+   Branch: <branch-name>
+   Uncommitted changes: [None detected / X files modified]
+   Unpushed commits: [None / X commits ahead of remote]
+   Untracked files: [None / X untracked files]
+
+   This action is IRREVERSIBLE. All untracked files will be PERMANENTLY DELETED.
+
+   Do you want to proceed with removal? [Requires explicit "yes" or "confirm"]
+   ```
+
+6. **Wait for explicit confirmation:**
+   - Acceptable: "yes", "confirm", "proceed", "remove it"
+   - NOT acceptable: silence, "ok", "sure", ambiguous responses
+
+#### Use the Validation Script
+
+For safety, use the provided validation script:
+```bash
+./scripts/safe_worktree_remove.sh <worktree-path>
+```
+
+This script will:
+- Check for uncommitted changes
+- Check for unpushed commits
+- Check for untracked files
+- Block removal if unsafe conditions detected
+- Provide clear status report
+
+#### Violation Consequences
+
+**Removing a worktree without following this protocol is a CRITICAL VIOLATION.**
+
+If violated:
+1. Immediately acknowledge the violation to the user
+2. Attempt recovery if possible (check if files exist, git reflog, etc.)
+3. Conduct a retrospective with 5 Whys analysis
+4. Document lessons learned
+
+#### When "Clean up workspace" is Requested
+
+The instruction "clean up workspace/repo" does NOT authorize worktree removal.
+
+**Safe cleanup (no confirmation needed):**
+- `git fetch --prune` - Remove stale remote refs
+- `git branch -d <merged-branch>` - Delete merged branches (lowercase -d)
+- Remove `.pyc`, `__pycache__`, `.pytest_cache`
+
+**Requires confirmation:**
+- `git worktree remove` - ALWAYS requires validation protocol
+- `git branch -D` - Force delete, requires confirmation
+- Removing any directory under `.worktrees/` or worktree locations
+
 ### PR Requirements (Non-Negotiable)
 Before a Pull Request can be merged into `main`:
 1. **CI Status:** The "test (3.10)" workflow must pass with **100% success rate**.

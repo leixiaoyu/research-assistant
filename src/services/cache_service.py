@@ -5,6 +5,8 @@ Implements 3-tier caching:
 1. API responses (short TTL, frequently changing)
 2. PDFs (medium TTL, rarely change)
 3. Extractions (long TTL, expensive to regenerate)
+
+Phase 4: Includes Prometheus metrics for cache hit/miss/size tracking.
 """
 
 import hashlib
@@ -17,6 +19,9 @@ import structlog
 from src.models.cache import CacheConfig, CacheStats
 from src.models.config import Timeframe
 from src.models.extraction import ExtractionTarget, PaperExtraction
+
+# Phase 4: Prometheus metrics
+from src.observability.metrics import CACHE_OPERATIONS, CACHE_SIZE_BYTES
 
 logger = structlog.get_logger()
 
@@ -92,9 +97,11 @@ class CacheService:
             response = cast(Optional[Dict[Any, Any]], self.api_cache.get(cache_key))
 
             if response is not None:
+                CACHE_OPERATIONS.labels(cache_type="api", operation="hit").inc()
                 logger.info("api_cache_hit", query=query[:50], cache_key=cache_key[:8])
                 return response
             else:
+                CACHE_OPERATIONS.labels(cache_type="api", operation="miss").inc()
                 logger.debug(
                     "api_cache_miss", query=query[:50], cache_key=cache_key[:8]
                 )
@@ -122,6 +129,7 @@ class CacheService:
 
         try:
             self.api_cache.set(cache_key, response)
+            CACHE_OPERATIONS.labels(cache_type="api", operation="set").inc()
             logger.debug(
                 "api_cached",
                 query=query[:50],
@@ -152,6 +160,7 @@ class CacheService:
             if cached_path:
                 path = Path(cached_path)
                 if path.exists():
+                    CACHE_OPERATIONS.labels(cache_type="pdf", operation="hit").inc()
                     logger.info("pdf_cache_hit", paper_id=paper_id)
                     return path
                 else:
@@ -159,6 +168,7 @@ class CacheService:
                     self.pdf_cache.delete(paper_id)
                     logger.warning("pdf_cache_stale", paper_id=paper_id)
 
+            CACHE_OPERATIONS.labels(cache_type="pdf", operation="miss").inc()
             logger.debug("pdf_cache_miss", paper_id=paper_id)
             return None
 
@@ -179,6 +189,7 @@ class CacheService:
 
         try:
             self.pdf_cache.set(paper_id, str(pdf_path.resolve()))
+            CACHE_OPERATIONS.labels(cache_type="pdf", operation="set").inc()
             logger.debug("pdf_cached", paper_id=paper_id, path=str(pdf_path))
         except Exception as e:
             logger.error("pdf_cache_set_error", error=str(e))
@@ -211,6 +222,7 @@ class CacheService:
             cached_data = self.extraction_cache.get(cache_key)
 
             if cached_data:
+                CACHE_OPERATIONS.labels(cache_type="extraction", operation="hit").inc()
                 logger.info(
                     "extraction_cache_hit",
                     paper_id=paper_id,
@@ -218,6 +230,7 @@ class CacheService:
                 )
                 return PaperExtraction.model_validate(cached_data)
             else:
+                CACHE_OPERATIONS.labels(cache_type="extraction", operation="miss").inc()
                 logger.debug(
                     "extraction_cache_miss",
                     paper_id=paper_id,
@@ -251,6 +264,7 @@ class CacheService:
 
         try:
             self.extraction_cache.set(cache_key, extraction.model_dump())
+            CACHE_OPERATIONS.labels(cache_type="extraction", operation="set").inc()
             logger.debug(
                 "extraction_cached", paper_id=paper_id, targets_hash=targets_hash[:8]
             )
@@ -303,6 +317,8 @@ class CacheService:
         """
         Get cache statistics.
 
+        Also updates Prometheus metrics for cache sizes.
+
         Returns:
             CacheStats with current statistics
         """
@@ -314,8 +330,17 @@ class CacheService:
             api_hits, api_misses = self.api_cache.stats()
             ext_hits, ext_misses = self.extraction_cache.stats()
 
-            # Calculate PDF cache size on disk
-            pdf_cache_mb = self._get_cache_size_mb(self.pdf_cache)
+            # Calculate cache sizes on disk
+            api_cache_bytes = self._get_cache_size_bytes(self.api_cache)
+            pdf_cache_bytes = self._get_cache_size_bytes(self.pdf_cache)
+            ext_cache_bytes = self._get_cache_size_bytes(self.extraction_cache)
+
+            # Update Prometheus metrics
+            CACHE_SIZE_BYTES.labels(cache_type="api").set(api_cache_bytes)
+            CACHE_SIZE_BYTES.labels(cache_type="pdf").set(pdf_cache_bytes)
+            CACHE_SIZE_BYTES.labels(cache_type="extraction").set(ext_cache_bytes)
+
+            pdf_cache_mb = pdf_cache_bytes / (1024 * 1024)
 
             return CacheStats(
                 api_cache_size=len(self.api_cache),
@@ -332,16 +357,20 @@ class CacheService:
             logger.error("cache_stats_error", error=str(e))
             return CacheStats()
 
-    def _get_cache_size_mb(self, cache: diskcache.Cache) -> float:
-        """Calculate cache size on disk in MB"""
+    def _get_cache_size_bytes(self, cache: diskcache.Cache) -> int:
+        """Calculate cache size on disk in bytes."""
         try:
             cache_path = Path(cache.directory)
             total_size = sum(
                 f.stat().st_size for f in cache_path.rglob("*") if f.is_file()
             )
-            return total_size / (1024 * 1024)  # Convert to MB
-        except Exception:
-            return 0.0
+            return total_size
+        except Exception:  # pragma: no cover (filesystem errors)
+            return 0
+
+    def _get_cache_size_mb(self, cache: diskcache.Cache) -> float:
+        """Calculate cache size on disk in MB."""
+        return self._get_cache_size_bytes(cache) / (1024 * 1024)
 
     def clear_cache(self, cache_type: Optional[str] = None) -> None:
         """

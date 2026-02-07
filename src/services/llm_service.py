@@ -6,6 +6,7 @@ This service handles:
 3. Parsing LLM JSON responses
 4. Cost tracking and budget enforcement
 5. Usage statistics
+6. Prometheus metrics export (Phase 4)
 
 Cost Control Features:
 - Per-paper token limits
@@ -20,6 +21,7 @@ Security Features:
 """
 
 import json
+import time
 from typing import List, Any, Optional
 from datetime import datetime
 import structlog
@@ -32,6 +34,17 @@ from src.utils.exceptions import (
     CostLimitExceeded,
     LLMAPIError,
     JSONParseError,
+)
+
+# Phase 4: Prometheus metrics
+from src.observability.metrics import (
+    LLM_TOKENS_TOTAL,
+    LLM_COST_USD_TOTAL,
+    LLM_REQUESTS_TOTAL,
+    LLM_REQUEST_DURATION,
+    EXTRACTION_ERRORS,
+    EXTRACTION_CONFIDENCE,
+    DAILY_COST_USD,
 )
 
 logger = structlog.get_logger()
@@ -144,18 +157,55 @@ class LLMService:
             provider=self.config.provider,
         )
 
-        # Call LLM
+        # Call LLM with metrics tracking
+        start_time = time.time()
         try:
             if self.config.provider == "anthropic":
                 response = await self._call_anthropic(prompt)
-                tokens_used = response.usage.input_tokens + response.usage.output_tokens
+                input_tokens = response.usage.input_tokens
+                output_tokens = response.usage.output_tokens
+                tokens_used = input_tokens + output_tokens
                 cost = self._calculate_cost_anthropic(response.usage)
+
+                # Track token metrics by type
+                LLM_TOKENS_TOTAL.labels(provider="anthropic", type="input").inc(
+                    input_tokens
+                )
+                LLM_TOKENS_TOTAL.labels(provider="anthropic", type="output").inc(
+                    output_tokens
+                )
             else:  # google
                 response = await self._call_google(prompt)
                 tokens_used = getattr(response.usage_metadata, "total_token_count", 0)
                 cost = self._calculate_cost_google(tokens_used)
 
+                # Track token metrics (combined for Gemini)
+                LLM_TOKENS_TOTAL.labels(provider="google", type="total").inc(
+                    tokens_used
+                )
+
+            # Record request duration
+            duration = time.time() - start_time
+            LLM_REQUEST_DURATION.labels(provider=self.config.provider).observe(duration)
+
+            # Track cost metrics
+            LLM_COST_USD_TOTAL.labels(provider=self.config.provider).inc(cost)
+            DAILY_COST_USD.labels(provider=self.config.provider).set(
+                self.usage_stats.total_cost_usd + cost
+            )
+
+            # Track successful request
+            LLM_REQUESTS_TOTAL.labels(
+                provider=self.config.provider, status="success"
+            ).inc()
+
         except Exception as e:
+            # Track failed request
+            LLM_REQUESTS_TOTAL.labels(
+                provider=self.config.provider, status="failed"
+            ).inc()
+            EXTRACTION_ERRORS.labels(error_type="llm").inc()
+
             logger.error(
                 "llm_api_call_failed",
                 paper_id=paper_metadata.paper_id,
@@ -167,7 +217,14 @@ class LLMService:
         # Parse response
         try:
             results = self._parse_response(response, targets)
+
+            # Track confidence scores for successful extractions
+            for result in results:
+                if result.success and result.confidence is not None:
+                    EXTRACTION_CONFIDENCE.observe(result.confidence)
+
         except JSONParseError as e:
+            EXTRACTION_ERRORS.labels(error_type="parsing").inc()
             logger.error(
                 "extraction_parse_failed",
                 paper_id=paper_metadata.paper_id,
@@ -446,6 +503,7 @@ extracting structured information from academic papers.
         """
         # Check total spending limit
         if self.usage_stats.total_cost_usd >= self.cost_limits.max_total_spend_usd:
+            EXTRACTION_ERRORS.labels(error_type="cost_limit").inc()
             raise CostLimitExceeded(
                 f"Total spending limit reached: "
                 f"${self.usage_stats.total_cost_usd:.2f} >= "
@@ -454,6 +512,7 @@ extracting structured information from academic papers.
 
         # Check daily spending limit
         if self.usage_stats.total_cost_usd >= self.cost_limits.max_daily_spend_usd:
+            EXTRACTION_ERRORS.labels(error_type="cost_limit").inc()
             raise CostLimitExceeded(
                 f"Daily spending limit reached: "
                 f"${self.usage_stats.total_cost_usd:.2f} >= "

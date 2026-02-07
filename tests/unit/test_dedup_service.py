@@ -214,6 +214,15 @@ def test_clear_indices(dedup_service, sample_papers):
     assert dedup_service.stats.total_papers_checked == 0
 
 
+def test_dedup_rate_with_zero_papers():
+    """Test dedup_rate property returns 0.0 when no papers have been checked"""
+    from src.models.dedup import DedupStats
+
+    stats = DedupStats()
+    assert stats.total_papers_checked == 0
+    assert stats.dedup_rate == 0.0  # Should not divide by zero
+
+
 def test_disabled_dedup_service():
     """Test deduplication service when disabled"""
     config = DedupConfig(enabled=False)

@@ -1,0 +1,122 @@
+# ARISP Pipeline Docker Compose Configuration
+#
+# Full stack deployment with:
+# - ARISP application
+# - Prometheus monitoring
+# - Grafana dashboards
+#
+# Usage:
+#   docker-compose up -d          # Start all services
+#   docker-compose logs -f arisp  # View ARISP logs
+#   docker-compose down           # Stop all services
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # ARISP Application
+  # ===========================================================================
+  arisp:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile
+    container_name: arisp
+    restart: unless-stopped
+    ports:
+      - "8000:8000"  # Health/metrics endpoint
+    environment:
+      - PYTHONPATH=/app
+      - TZ=UTC
+      # LLM API keys (set in .env file)
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - SEMANTIC_SCHOLAR_API_KEY=${SEMANTIC_SCHOLAR_API_KEY:-}
+      # Configuration
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      # Persistent storage
+      - arisp-output:/app/output
+      - arisp-cache:/app/.cache
+      - arisp-logs:/app/logs
+      # Configuration (optional override)
+      - ${CONFIG_PATH:-./config}:/app/config:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - arisp-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # Prometheus Monitoring
+  # ===========================================================================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: arisp-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../monitoring/alerts:/etc/prometheus/alerts:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    networks:
+      - arisp-network
+    depends_on:
+      - arisp
+
+  # ===========================================================================
+  # Grafana Dashboards
+  # ===========================================================================
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: arisp-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3000}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ../monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+    networks:
+      - arisp-network
+    depends_on:
+      - prometheus
+
+# ===========================================================================
+# Networks
+# ===========================================================================
+networks:
+  arisp-network:
+    driver: bridge
+
+# ===========================================================================
+# Volumes
+# ===========================================================================
+volumes:
+  arisp-output:
+    name: arisp-output
+  arisp-cache:
+    name: arisp-cache
+  arisp-logs:
+    name: arisp-logs
+  prometheus-data:
+    name: arisp-prometheus-data
+  grafana-data:
+    name: arisp-grafana-data

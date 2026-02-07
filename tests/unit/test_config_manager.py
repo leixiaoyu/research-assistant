@@ -186,3 +186,57 @@ def test_config_manager_project_root():
         mock_cwd.return_value = Path("/mock/project/root")
         manager = ConfigManager()
         assert manager.project_root == Path("/mock/project/root")
+
+
+def test_load_config_caching(valid_config_file):
+    """Test that config is cached and returned on subsequent calls"""
+    manager = ConfigManager(config_path=str(valid_config_file))
+    manager.project_root = valid_config_file.parent
+    manager.path_sanitizer.allowed_bases.append(valid_config_file.parent)
+
+    # First load
+    config1 = manager.load_config()
+    assert config1 is not None
+
+    # Second load should return cached config
+    config2 = manager.load_config()
+    assert config1 is config2  # Same object (cached)
+
+
+def test_get_output_path_creates_directory(valid_config_file, tmp_path):
+    """Test that get_output_path creates directory if it doesn't exist"""
+    manager = ConfigManager(config_path=str(valid_config_file))
+    manager.project_root = valid_config_file.parent
+    manager.path_sanitizer.allowed_bases.append(valid_config_file.parent)
+    manager.path_sanitizer.allowed_bases.append(tmp_path)
+
+    # Load config first
+    manager.load_config()
+
+    # Get output path for a new topic (directory doesn't exist yet)
+    topic_slug = "new-topic-test"
+    output_path = manager.get_output_path(topic_slug)
+
+    # Verify directory was created
+    assert output_path.exists()
+    assert output_path.is_dir()
+    assert output_path.name == topic_slug
+
+
+def test_get_output_path_lazy_loads_config(valid_config_file, tmp_path):
+    """Test that get_output_path lazy-loads config if not already loaded"""
+    manager = ConfigManager(config_path=str(valid_config_file))
+    manager.project_root = valid_config_file.parent
+    manager.path_sanitizer.allowed_bases.append(valid_config_file.parent)
+    manager.path_sanitizer.allowed_bases.append(tmp_path)
+
+    # Don't call load_config() first - get_output_path should lazy-load it
+    assert manager._config is None
+
+    # This should trigger lazy loading of config
+    topic_slug = "lazy-load-test"
+    output_path = manager.get_output_path(topic_slug)
+
+    # Verify config was loaded
+    assert manager._config is not None
+    assert output_path.exists()

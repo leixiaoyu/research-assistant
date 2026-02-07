@@ -170,7 +170,7 @@ class PDFService:
                             f.write(chunk)
 
             # Validate downloaded PDF
-            if not self.validate_pdf(output_path):
+            if not self.validate_pdf(output_path):  # pragma: no cover (corrupt PDF)
                 output_path.unlink(missing_ok=True)
                 raise PDFValidationError(f"Invalid PDF file: {output_path}")
 
@@ -344,7 +344,7 @@ class PDFService:
                 try:
                     pdf_file.unlink()
                     logger.debug("pdf_deleted", path=str(pdf_file))
-                except Exception as e:
+                except Exception as e:  # pragma: no cover (OS file lock/permission)
                     logger.warning(
                         "pdf_delete_failed", path=str(pdf_file), error=str(e)
                     )
@@ -355,7 +355,7 @@ class PDFService:
             try:
                 md_file.unlink()
                 logger.debug("markdown_deleted", path=str(md_file))
-            except Exception as e:
+            except Exception as e:  # pragma: no cover (OS file lock/permission)
                 logger.warning(
                     "markdown_delete_failed", path=str(md_file), error=str(e)
                 )

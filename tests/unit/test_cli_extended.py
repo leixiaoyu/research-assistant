@@ -1,23 +1,37 @@
+"""Extended CLI tests using mocked ResearchPipeline."""
+
 import pytest
 from typer.testing import CliRunner
 from unittest.mock import MagicMock, patch, AsyncMock
+
 from src.cli import app
-from src.models.paper import PaperMetadata
-from src.services.discovery_service import APIError
+from src.orchestration.research_pipeline import PipelineResult
 
 runner = CliRunner()
 
 
 @pytest.fixture
-def mock_components():
+def mock_pipeline_result():
+    """Create a mock PipelineResult for testing."""
+    result = PipelineResult()
+    result.topics_processed = 1
+    result.papers_discovered = 3
+    result.papers_processed = 3
+    result.papers_with_extraction = 0
+    result.total_tokens_used = 0
+    result.total_cost_usd = 0.0
+    result.output_files = ["/tmp/output.md"]
+    result.errors = []
+    return result
+
+
+@pytest.fixture
+def mock_components(mock_pipeline_result):
+    """Mock ConfigManager and ResearchPipeline for CLI tests."""
     with (
         patch("src.cli.ConfigManager") as MockConfig,
-        patch("src.cli.DiscoveryService") as MockDiscovery,
-        patch("src.cli.CatalogService") as MockCatalog,
-        patch("src.cli.MarkdownGenerator") as MockGen,
-        patch("src.cli.open", new_callable=MagicMock) as mock_open,
-    ):  # Mock file writing
-
+        patch("src.orchestration.research_pipeline.ResearchPipeline") as MockPipeline,
+    ):
         # Setup Config
         config_instance = MockConfig.return_value
         config = MagicMock()
@@ -32,67 +46,60 @@ def mock_components():
         config.settings.llm_settings = None
         config.settings.cost_limits = None
         config_instance.load_config.return_value = config
-        config_instance.get_output_path.return_value = MagicMock()  # Path object
 
-        # Setup Discovery
-        discovery_instance = MockDiscovery.return_value
-        discovery_instance.search = AsyncMock()
-        discovery_instance.search.return_value = [
-            PaperMetadata(
-                paper_id="1", title="P1", url="http://u", year=2023  # type: ignore
-            )
-        ]
-
-        # Setup Catalog
-        catalog_instance = MockCatalog.return_value
-        catalog_topic = MagicMock()
-        catalog_topic.topic_slug = "slug"
-        catalog_instance.get_or_create_topic.return_value = catalog_topic
+        # Setup Pipeline
+        pipeline_instance = MockPipeline.return_value
+        pipeline_instance.run = AsyncMock(return_value=mock_pipeline_result)
 
         yield {
             "config": config_instance,
-            "discovery": discovery_instance,
-            "catalog": catalog_instance,
-            "gen": MockGen.return_value,
-            "open": mock_open,
+            "pipeline": pipeline_instance,
+            "pipeline_class": MockPipeline,
+            "result": mock_pipeline_result,
         }
 
 
 def test_run_full_flow(mock_components):
+    """Test successful run flow."""
     result = runner.invoke(app, ["run"])
     assert result.exit_code == 0
+    assert "Pipeline completed" in result.stdout
 
-    # Check calls
-    mock_components["discovery"].search.assert_called()
-    mock_components["gen"].generate.assert_called()
-    mock_components["catalog"].add_run.assert_called()
+    # Check pipeline was called
+    mock_components["pipeline"].run.assert_called_once()
 
 
 def test_run_discovery_no_papers(mock_components):
-    mock_components["discovery"].search.return_value = []
+    """Test run when no papers are found."""
+    # Modify the result to show no papers
+    mock_components["result"].papers_discovered = 0
+    mock_components["result"].papers_processed = 0
+    mock_components["result"].output_files = []
 
     result = runner.invoke(app, ["run"])
     assert result.exit_code == 0
-
-    mock_components["catalog"].add_run.assert_not_called()
 
 
 def test_run_discovery_error(mock_components):
-    mock_components["discovery"].search.side_effect = APIError("Fail")
+    """Test run when discovery fails."""
+    # Modify result to show failure
+    mock_components["result"].topics_processed = 0
+    mock_components["result"].topics_failed = 1
+    mock_components["result"].papers_discovered = 0
+    mock_components["result"].papers_processed = 0
+    mock_components["result"].output_files = []
+    mock_components["result"].errors = [{"topic": "test", "error": "API Fail"}]
 
     result = runner.invoke(app, ["run"])
-    assert result.exit_code == 0  # Should continue to next topic or finish gracefully
-
-    # Should log error but not crash CLI
-    # We can't easily check log output with CliRunner unless we capture stderr
-    # and logging is configured to print there.
-    # structlog is configured to print to console.
-
-    mock_components["catalog"].add_run.assert_not_called()
+    assert result.exit_code == 0  # Should continue gracefully
+    assert "Errors" in result.stdout
 
 
 def test_run_unexpected_error(mock_components):
-    mock_components["discovery"].search.side_effect = Exception("Boom")
+    """Test run when pipeline raises exception."""
+    # Make pipeline raise exception
+    mock_components["pipeline"].run.side_effect = Exception("Boom")
 
     result = runner.invoke(app, ["run"])
-    assert result.exit_code == 0
+    assert result.exit_code == 1
+    assert "Pipeline failed" in result.stdout

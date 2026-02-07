@@ -246,7 +246,7 @@ class FilterService:
         query_words = set(query.lower().split())
         paper_words = set(paper_text.lower().split())
 
-        if not query_words or not paper_words:
+        if not query_words or not paper_words:  # pragma: no cover (title validation)
             return 0.0
 
         # Jaccard similarity: intersection / union

@@ -80,7 +80,7 @@ This ensures:
 4. Never assume silence or ambiguous responses as confirmation
 
 **Safe Alternatives:**
-- Use `git worktree remove` (without --force) - fails safely if worktree is dirty
+- Use `git wt-remove` alias for worktree removal - enforces validation (see Worktree Protection Protocol below)
 - Use `git branch -d` (lowercase d) - fails safely if branch is not merged
 - Use `git stash` instead of discarding changes
 - Use `git checkout -b backup/branch` before destructive operations
@@ -141,19 +141,50 @@ This protocol exists because worktrees may contain:
    - Acceptable: "yes", "confirm", "proceed", "remove it"
    - NOT acceptable: silence, "ok", "sure", ambiguous responses
 
-#### Use the Validation Script
+#### Required Method: Use `git wt-remove` Alias (MANDATORY)
 
-For safety, use the provided validation script:
+**NEVER use `git worktree remove` directly. ALWAYS use the safe alias:**
+
+```bash
+# Required method - triggers automatic validation
+git wt-remove <worktree-path>
+```
+
+This alias is configured in `.gitconfig` and automatically:
+- Checks for uncommitted changes (BLOCKS if found)
+- Checks for unpushed commits (BLOCKS if found)
+- Warns about untracked files
+- Requires explicit "yes" confirmation
+- Provides clear status report
+
+#### Git Alias Setup (One-Time Configuration)
+
+The project requires this git alias to be configured:
+
+```bash
+# Add to your global git config (one-time setup)
+git config --global alias.wt-remove '!f() {
+    SCRIPT="$(git rev-parse --show-toplevel)/scripts/safe_worktree_remove.sh"
+    if [ -f "$SCRIPT" ]; then
+        "$SCRIPT" "$@"
+    else
+        echo "ERROR: safe_worktree_remove.sh not found. Use full path or run from repo root."
+        exit 1
+    fi
+}; f'
+```
+
+**Verification:**
+```bash
+git wt-remove --help  # Should show script usage
+```
+
+#### Direct Script Usage (Alternative)
+
+If the alias is not available, use the script directly:
 ```bash
 ./scripts/safe_worktree_remove.sh <worktree-path>
 ```
-
-This script will:
-- Check for uncommitted changes
-- Check for unpushed commits
-- Check for untracked files
-- Block removal if unsafe conditions detected
-- Provide clear status report
 
 #### Violation Consequences
 

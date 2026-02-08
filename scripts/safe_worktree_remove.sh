@@ -84,12 +84,14 @@ check_uncommitted_changes() {
     local worktree_path="$1"
     local status_output
 
-    status_output=$(git -C "$worktree_path" status --porcelain 2>/dev/null || echo "")
+    # Filter out untracked files (??) - they are handled separately as warnings
+    # Only check for modified/staged/deleted tracked files
+    status_output=$(git -C "$worktree_path" status --porcelain 2>/dev/null | grep -v "^??" || echo "")
 
     if [ -n "$status_output" ]; then
-        log_block "Uncommitted changes detected!"
+        log_block "Uncommitted changes to TRACKED files detected!"
         echo ""
-        echo "The following files have uncommitted changes:"
+        echo "The following tracked files have uncommitted changes:"
         echo "----------------------------------------------"
         echo "$status_output"
         echo "----------------------------------------------"
@@ -279,10 +281,15 @@ main() {
     fi
 
     # Perform removal
+    # Using --force is SAFE here because:
+    # 1. check_uncommitted_changes verified NO tracked files are dirty
+    # 2. check_unpushed_commits verified NO unpushed commits exist
+    # 3. User has explicitly confirmed removal (including untracked file warning)
+    # The --force flag only affects untracked files, which the user accepted losing
     echo ""
-    log_info "Removing worktree..."
+    log_info "Removing worktree (with --force for untracked files)..."
 
-    if git worktree remove "$worktree_path"; then
+    if git worktree remove --force "$worktree_path"; then
         log_success "Worktree removed successfully: $worktree_path"
 
         # Offer to delete the branch

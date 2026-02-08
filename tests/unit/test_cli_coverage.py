@@ -187,3 +187,25 @@ class TestCLICoverage:
             mock_cm.return_value.load_catalog.return_value.topics = {}
             result = runner.invoke(app, ["catalog", "history", "--topic", "unknown"])
             assert "Topic 'unknown' not found" in result.stdout
+
+
+class TestSchedulerExceptionHandling:
+    """Tests for scheduler command exception handling."""
+
+    def test_scheduler_keyboard_interrupt(self):
+        """Test scheduler graceful shutdown on KeyboardInterrupt."""
+        with patch("src.cli.asyncio.run", side_effect=KeyboardInterrupt()):
+            result = runner.invoke(app, ["schedule"])
+            # KeyboardInterrupt causes graceful exit
+            assert result.exit_code == 0
+            assert "Scheduler stopped" in result.stdout
+
+    def test_scheduler_general_exception(self):
+        """Test scheduler error handling on general exception."""
+        with patch(
+            "src.cli.asyncio.run", side_effect=RuntimeError("Connection failed")
+        ):
+            result = runner.invoke(app, ["schedule"])
+            assert result.exit_code == 1
+            assert "Scheduler failed" in result.stdout
+            assert "Connection failed" in result.stdout

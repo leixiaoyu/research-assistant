@@ -7,14 +7,19 @@ Features:
 - Exponential backoff with jitter for request spreading
 - Respects retry-after headers from rate limit errors
 - Callback support for retry notifications
+- Built-in structured logging for observability
 """
 
 import asyncio
 import random
 from typing import TypeVar, Callable, Awaitable, Set, Type, Optional
 
+import structlog
+
 from src.models.llm import RetryConfig
 from src.utils.exceptions import RateLimitError
+
+logger = structlog.get_logger(__name__)
 
 
 T = TypeVar("T")
@@ -121,6 +126,17 @@ class RetryHandler:
 
                 delay = self.calculate_delay(attempt, retry_after)
 
+                # Log retry attempt for observability
+                logger.warning(
+                    "retry_attempt",
+                    attempt=attempt + 1,
+                    max_attempts=self.config.max_attempts,
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                    delay_seconds=delay,
+                    retry_after=retry_after,
+                )
+
                 # Call retry callback if provided
                 if on_retry is not None:
                     on_retry(attempt + 1, e, delay)
@@ -128,10 +144,13 @@ class RetryHandler:
                 # Wait before retry
                 await asyncio.sleep(delay)
 
-        # This should not be reached, but satisfy type checker
-        if last_exception is not None:
+        # Defensive code to satisfy type checker - logically unreachable
+        # since the loop either returns successfully or raises on exhaustion
+        if last_exception is not None:  # pragma: no cover
             raise last_exception
-        raise RuntimeError("Retry loop completed without result or exception")
+        raise RuntimeError(  # pragma: no cover
+            "Retry loop completed without result or exception"
+        )
 
 
 class RetryContext:

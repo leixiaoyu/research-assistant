@@ -514,3 +514,118 @@ class TestEnhancedUsageStats:
         stats.by_provider["anthropic"].record_success(tokens=1000, cost=0.05)
 
         assert stats.by_provider["anthropic"].total_tokens == 1000
+
+
+class TestFallbackInitializationEdgeCases:
+    """Additional tests for fallback initialization edge cases."""
+
+    def test_no_fallback_configured(self):
+        """Test LLM service without fallback config (covers early return)."""
+        config = LLMConfig(
+            provider="anthropic",
+            model="claude-3-5-sonnet-20250122",
+            api_key="anthropic-key",
+            fallback=None,  # No fallback configured
+        )
+        limits = CostLimits()
+
+        with patch("anthropic.AsyncAnthropic"):
+            service = LLMService(config, limits)
+
+            # Verify no fallback was initialized
+            assert service.fallback_provider is None
+            assert service.fallback_client is None
+
+            # Explicitly call _init_fallback_provider to ensure coverage
+            # This is a no-op when fallback is None, hitting the early return
+            service._init_fallback_provider()
+
+    def test_fallback_google_from_environment(self):
+        """Test Google fallback provider uses GOOGLE_API_KEY from environment."""
+        config = LLMConfig(
+            provider="anthropic",
+            model="claude-3-5-sonnet-20250122",
+            api_key="anthropic-key",
+            fallback=FallbackProviderConfig(
+                enabled=True,
+                provider="google",
+                model="gemini-1.5-pro",
+                # No api_key - should use GOOGLE_API_KEY env
+            ),
+        )
+        limits = CostLimits()
+
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "env-google-key"}):
+            with patch("anthropic.AsyncAnthropic"):
+                with patch("google.generativeai.GenerativeModel"):
+                    with patch("google.generativeai.configure") as mock_configure:
+                        service = LLMService(config, limits)
+
+                        assert service.fallback_provider == "google"
+                        mock_configure.assert_called_with(api_key="env-google-key")
+
+    def test_fallback_import_error_google(self):
+        """Test handling missing google.generativeai package for fallback."""
+        config = LLMConfig(
+            provider="anthropic",
+            model="claude-3-5-sonnet-20250122",
+            api_key="anthropic-key",
+            fallback=FallbackProviderConfig(
+                enabled=True,
+                provider="google",
+                model="gemini-1.5-pro",
+                api_key="fallback-google-key",
+            ),
+        )
+        limits = CostLimits()
+
+        with patch("anthropic.AsyncAnthropic"):
+            # Mock google.generativeai import to raise ImportError
+            with patch.dict("sys.modules", {"google.generativeai": None}):
+                service = LLMService(config, limits)
+
+                # Should handle gracefully
+                assert service.fallback_client is None
+
+
+class TestOnRetryCallback:
+    """Tests for on_retry callback invocation."""
+
+    @pytest.fixture
+    def llm_service(self):
+        """Create LLM service for testing."""
+        config = LLMConfig(
+            provider="anthropic",
+            model="claude-3-5-sonnet-20250122",
+            api_key="test-key",
+        )
+        limits = CostLimits()
+        with patch("anthropic.AsyncAnthropic"):
+            return LLMService(config, limits)
+
+    @pytest.mark.asyncio
+    async def test_on_retry_callback_updates_stats(self, llm_service):
+        """Test that on_retry callback updates usage stats."""
+        service = llm_service
+        call_count = 0
+
+        # Mock _call_anthropic_raw to fail once then succeed
+        async def flaky_call(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RetryableError("Transient failure")
+            # Return a mock response
+            mock_response = Mock()
+            mock_response.content = [Mock(text='{"extractions": []}')]
+            mock_response.usage = Mock(input_tokens=100, output_tokens=50)
+            return mock_response
+
+        service._call_anthropic_raw = flaky_call
+
+        metadata = Mock(paper_id="123", title="Test", authors=[])
+        result = await service.extract("markdown", [], metadata)
+
+        # Verify stats were updated by on_retry callback
+        assert service.usage_stats.total_retry_attempts == 1
+        assert result.paper_id == "123"

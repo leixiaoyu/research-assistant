@@ -80,10 +80,138 @@ This ensures:
 4. Never assume silence or ambiguous responses as confirmation
 
 **Safe Alternatives:**
-- Use `git worktree remove` (without --force) - fails safely if worktree is dirty
+- Use `git wt-remove` alias for worktree removal - enforces validation (see Worktree Protection Protocol below)
 - Use `git branch -d` (lowercase d) - fails safely if branch is not merged
 - Use `git stash` instead of discarding changes
 - Use `git checkout -b backup/branch` before destructive operations
+
+### 🔐 Git Worktree Protection Protocol (Non-Negotiable)
+
+**Worktrees are PROTECTED WORKSPACES. Removal requires MANDATORY validation and EXPLICIT user confirmation.**
+
+This protocol exists because worktrees may contain:
+- Uncommitted changes (lost forever if removed)
+- Untracked files (not recoverable)
+- Work-in-progress not yet pushed (lost forever)
+- Local experiments and notes (not in git)
+
+#### Pre-Removal Validation Steps (MANDATORY)
+
+**Before removing ANY worktree, you MUST complete ALL of these steps:**
+
+1. **List all worktrees:**
+   ```bash
+   git worktree list
+   ```
+
+2. **Check for uncommitted changes in the target worktree:**
+   ```bash
+   git -C <worktree-path> status --porcelain
+   ```
+   - If output is NOT empty → **STOP, DO NOT REMOVE**
+
+3. **Check for unpushed commits:**
+   ```bash
+   git -C <worktree-path> log @{u}..HEAD --oneline 2>/dev/null
+   ```
+   - If output is NOT empty → **STOP, DO NOT REMOVE**
+
+4. **Check for untracked files:**
+   ```bash
+   git -C <worktree-path> status --porcelain | grep "^??"
+   ```
+   - If output is NOT empty → **WARN USER about untracked files**
+
+5. **Request EXPLICIT user confirmation with full details:**
+   ```
+   ⚠️ WORKTREE REMOVAL REQUEST
+
+   Path: <full-worktree-path>
+   Branch: <branch-name>
+   Uncommitted changes: [None detected / X files modified]
+   Unpushed commits: [None / X commits ahead of remote]
+   Untracked files: [None / X untracked files]
+
+   This action is IRREVERSIBLE. All untracked files will be PERMANENTLY DELETED.
+
+   Do you want to proceed with removal? [Requires explicit "yes" or "confirm"]
+   ```
+
+6. **Wait for explicit confirmation:**
+   - Acceptable: "yes", "confirm", "proceed", "remove it"
+   - NOT acceptable: silence, "ok", "sure", ambiguous responses
+
+#### Required Method: Use `git wt-remove` Alias (MANDATORY)
+
+**NEVER use `git worktree remove` directly. ALWAYS use the safe alias:**
+
+```bash
+# Required method - triggers automatic validation
+git wt-remove <worktree-path>
+```
+
+This alias is configured in `.gitconfig` and automatically:
+- Checks for uncommitted changes (BLOCKS if found)
+- Checks for unpushed commits (BLOCKS if found)
+- Warns about untracked files
+- Requires explicit "yes" confirmation
+- Provides clear status report
+
+#### Git Alias Setup (One-Time Configuration)
+
+The project requires this git alias to be configured:
+
+```bash
+# Run the setup script (one-time)
+./scripts/setup_git_aliases.sh
+
+# Or manually add to your global git config
+git config --global alias.wt-remove '!f() {
+    SCRIPT="$(git rev-parse --show-toplevel)/scripts/safe_worktree_remove.sh"
+    if [ -f "$SCRIPT" ]; then
+        "$SCRIPT" "$@"
+    else
+        echo "ERROR: safe_worktree_remove.sh not found. Use full path or run from repo root."
+        exit 1
+    fi
+}; f'
+```
+
+**Verification:**
+```bash
+git wt-remove --help  # Should show script usage
+```
+
+#### Direct Script Usage (Alternative)
+
+If the alias is not available, use the script directly:
+```bash
+./scripts/safe_worktree_remove.sh <worktree-path>
+```
+
+#### Violation Consequences
+
+**Removing a worktree without following this protocol is a CRITICAL VIOLATION.**
+
+If violated:
+1. Immediately acknowledge the violation to the user
+2. Attempt recovery if possible (check if files exist, git reflog, etc.)
+3. Conduct a retrospective with 5 Whys analysis
+4. Document lessons learned
+
+#### When "Clean up workspace" is Requested
+
+The instruction "clean up workspace/repo" does NOT authorize worktree removal.
+
+**Safe cleanup (no confirmation needed):**
+- `git fetch --prune` - Remove stale remote refs
+- `git branch -d <merged-branch>` - Delete merged branches (lowercase -d)
+- Remove `.pyc`, `__pycache__`, `.pytest_cache`
+
+**Requires confirmation:**
+- `git worktree remove` - ALWAYS requires validation protocol
+- `git branch -D` - Force delete, requires confirmation
+- Removing any directory under `.worktrees/` or worktree locations
 
 ### PR Requirements (Non-Negotiable)
 Before a Pull Request can be merged into `main`:

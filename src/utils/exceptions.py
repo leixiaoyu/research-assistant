@@ -125,3 +125,70 @@ class JSONParseError(ExtractionError):
     """
 
     pass
+
+
+# Phase 3.3: Retry and Fallback Exceptions
+
+
+class RetryableError(PipelineError):
+    """Base for retryable errors (timeouts, 5xx, connection errors).
+
+    Errors that inherit from this class indicate transient failures
+    that may succeed on retry.
+    """
+
+    pass
+
+
+class RateLimitError(RetryableError):
+    """Rate limit exceeded with optional retry-after metadata.
+
+    Raised when:
+    - API returns 429 status
+    - Rate limit headers indicate throttling
+    """
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class QuotaExhaustedError(LLMAPIError):
+    """Daily/monthly quota exhausted - fallback only, no retry.
+
+    Raised when:
+    - Provider quota is exhausted
+    - Monthly/daily limits reached
+    """
+
+    pass
+
+
+class ProviderUnavailableError(LLMAPIError):
+    """Circuit breaker OPEN - provider marked unavailable.
+
+    Raised when:
+    - Circuit breaker is in OPEN state
+    - Provider has exceeded failure threshold
+    """
+
+    pass
+
+
+class AllProvidersFailedError(LLMAPIError):
+    """All providers (primary + fallback) have failed.
+
+    Raised when:
+    - Primary provider fails
+    - Fallback provider (if configured) also fails
+    - No more providers to try
+    """
+
+    def __init__(
+        self, message: str, provider_errors: dict[str, str] | None = None
+    ) -> None:
+        if provider_errors:
+            error_details = ", ".join(f"{p}: {e}" for p, e in provider_errors.items())
+            message = f"{message} | Provider errors: {error_details}"
+        super().__init__(message)
+        self.provider_errors = provider_errors or {}

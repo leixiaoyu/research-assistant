@@ -337,7 +337,8 @@ async def test_extract_success(llm_service, paper_metadata, extraction_targets):
     ]
     mock_response.usage = Mock(input_tokens=10000, output_tokens=5000)
 
-    llm_service._call_anthropic = AsyncMock(return_value=mock_response)
+    # Phase 3.3: Mock _call_anthropic_raw instead of _call_anthropic
+    llm_service._call_anthropic_raw = AsyncMock(return_value=mock_response)
 
     result = await llm_service.extract(markdown, extraction_targets, paper_metadata)
 
@@ -362,7 +363,8 @@ async def test_extract_daily_reset(llm_service, paper_metadata, extraction_targe
     mock_response.content = [Mock(text=json.dumps({"extractions": []}))]
     mock_response.usage = Mock(input_tokens=1000, output_tokens=500)
 
-    llm_service._call_anthropic = AsyncMock(return_value=mock_response)
+    # Phase 3.3: Mock _call_anthropic_raw instead of _call_anthropic
+    llm_service._call_anthropic_raw = AsyncMock(return_value=mock_response)
 
     await llm_service.extract(markdown, extraction_targets, paper_metadata)
 
@@ -387,12 +389,16 @@ async def test_extract_cost_limit_check(
 
 @pytest.mark.asyncio
 async def test_extract_api_error(llm_service, paper_metadata, extraction_targets):
-    """Test extraction handles API errors"""
+    """Test extraction handles API errors (all providers fail)"""
+    from src.utils.exceptions import AllProvidersFailedError
+
     markdown = "# Test"
 
-    llm_service._call_anthropic = AsyncMock(side_effect=Exception("API Error"))
+    # Phase 3.3: Mock _call_anthropic_raw to raise LLMAPIError
+    llm_service._call_anthropic_raw = AsyncMock(side_effect=LLMAPIError("API Error"))
 
-    with pytest.raises(LLMAPIError) as exc_info:
+    with pytest.raises(AllProvidersFailedError) as exc_info:
         await llm_service.extract(markdown, extraction_targets, paper_metadata)
 
-    assert "LLM API call failed" in str(exc_info.value)
+    # The error should include the provider error
+    assert "anthropic" in str(exc_info.value).lower()

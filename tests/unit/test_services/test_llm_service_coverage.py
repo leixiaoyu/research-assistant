@@ -8,6 +8,7 @@ from src.utils.exceptions import (
     CostLimitExceeded,
     LLMAPIError,
     JSONParseError,
+    AllProvidersFailedError,
 )
 
 
@@ -65,25 +66,26 @@ class TestLLMServiceCoverage:
             llm_service._check_cost_limits()
 
     @pytest.mark.asyncio
-    async def test_call_anthropic_success(self, llm_service):
-        """Test Anthropic API success path"""
+    async def test_call_anthropic_raw_success(self, llm_service):
+        """Test Anthropic raw API success path (Phase 3.3)"""
         mock_response = Mock()
         llm_service.client.messages.create = AsyncMock(return_value=mock_response)
-        response = await llm_service._call_anthropic("prompt")
+        response = await llm_service._call_anthropic_raw(llm_service.client, "prompt")
         assert response == mock_response
 
     @pytest.mark.asyncio
-    async def test_call_anthropic_error(self, llm_service):
-        """Test Anthropic API error"""
+    async def test_call_anthropic_raw_error(self, llm_service):
+        """Test Anthropic raw API error classification (Phase 3.3)"""
         llm_service.client.messages.create = AsyncMock(
             side_effect=Exception("API Error")
         )
-        with pytest.raises(LLMAPIError, match="Anthropic API error"):
-            await llm_service._call_anthropic("prompt")
+        # Phase 3.3: Errors are classified and re-raised as LLMAPIError
+        with pytest.raises(LLMAPIError, match="API Error"):
+            await llm_service._call_anthropic_raw(llm_service.client, "prompt")
 
     @pytest.mark.asyncio
-    async def test_call_google_success(self, llm_config, cost_limits):
-        """Test Google API success path"""
+    async def test_call_google_raw_success(self, llm_config, cost_limits):
+        """Test Google raw API success path (Phase 3.3)"""
         llm_config.provider = "google"
         with patch("google.generativeai.GenerativeModel"):
             with patch("google.generativeai.configure"):
@@ -92,12 +94,12 @@ class TestLLMServiceCoverage:
                 service.client.generate_content_async = AsyncMock(
                     return_value=mock_response
                 )
-                response = await service._call_google("prompt")
+                response = await service._call_google_raw(service.client, "prompt")
                 assert response == mock_response
 
     @pytest.mark.asyncio
-    async def test_call_google_error(self, llm_config, cost_limits):
-        """Test Google API error"""
+    async def test_call_google_raw_error(self, llm_config, cost_limits):
+        """Test Google raw API error classification (Phase 3.3)"""
         llm_config.provider = "google"
         with patch("google.generativeai.GenerativeModel"):
             with patch("google.generativeai.configure"):
@@ -105,8 +107,9 @@ class TestLLMServiceCoverage:
                 service.client.generate_content_async = AsyncMock(
                     side_effect=Exception("API Error")
                 )
-                with pytest.raises(LLMAPIError, match="Google API error"):
-                    await service._call_google("prompt")
+                # Phase 3.3: Errors are classified and re-raised as LLMAPIError
+                with pytest.raises(LLMAPIError, match="API Error"):
+                    await service._call_google_raw(service.client, "prompt")
 
     @pytest.mark.asyncio
     async def test_extract_google_path(self, llm_config, cost_limits):
@@ -206,21 +209,24 @@ class TestLLMServiceCoverage:
 
     @pytest.mark.asyncio
     async def test_extract_llm_api_error(self, llm_service):
-        """Test extract catching LLMAPIError"""
-        llm_service.client.messages.create = AsyncMock(
-            side_effect=Exception("API Error")
+        """Test extract catching LLM errors (Phase 3.3: AllProvidersFailedError)"""
+        # Phase 3.3: Mock _call_anthropic_raw to raise LLMAPIError
+        llm_service._call_anthropic_raw = AsyncMock(
+            side_effect=LLMAPIError("API Error")
         )
         metadata = Mock(paper_id="123", title="Test", authors=[])
-        with pytest.raises(LLMAPIError):
+        # Phase 3.3: When all providers fail, AllProvidersFailedError is raised
+        with pytest.raises(AllProvidersFailedError):
             await llm_service.extract("markdown", [], metadata)
 
     @pytest.mark.asyncio
     async def test_extract_json_parse_error(self, llm_service):
-        """Test extract catching JSONParseError"""
+        """Test extract catching JSONParseError (Phase 3.3)"""
         mock_response = Mock()
         mock_response.usage.input_tokens = 500
         mock_response.usage.output_tokens = 500
-        llm_service._call_anthropic = AsyncMock(return_value=mock_response)
+        # Phase 3.3: Mock _call_anthropic_raw instead of _call_anthropic
+        llm_service._call_anthropic_raw = AsyncMock(return_value=mock_response)
 
         # Mock _parse_response to raise JSONParseError
         llm_service._parse_response = Mock(side_effect=JSONParseError("Parse failed"))

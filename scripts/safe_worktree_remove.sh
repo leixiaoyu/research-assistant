@@ -83,6 +83,14 @@ print_usage() {
 check_uncommitted_changes() {
     local worktree_path="$1"
     local status_output
+    local git_exit_code
+
+    # First, verify git status command succeeds
+    if ! git -C "$worktree_path" status --porcelain >/dev/null 2>&1; then
+        log_error "Failed to run 'git status' in worktree"
+        log_error "Cannot verify worktree is safe to remove"
+        return 2
+    fi
 
     # Filter out untracked files (??) - they are handled separately as warnings
     # Only check for modified/staged/deleted tracked files
@@ -112,12 +120,31 @@ check_uncommitted_changes() {
 check_unpushed_commits() {
     local worktree_path="$1"
     local unpushed_output
+    local branch_name
+    local commit_count
+
+    # Get current branch name
+    branch_name=$(git -C "$worktree_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 
     # Check if there's an upstream branch set
     if ! git -C "$worktree_path" rev-parse --abbrev-ref '@{u}' &>/dev/null; then
-        log_warning "No upstream branch set - cannot check for unpushed commits"
-        log_warning "Consider pushing this branch before removal"
-        return 0
+        # Count commits on this branch to determine risk
+        commit_count=$(git -C "$worktree_path" rev-list --count HEAD 2>/dev/null || echo "0")
+
+        log_block "No upstream branch set - CANNOT VERIFY commits are pushed!"
+        echo ""
+        echo "Branch '$branch_name' has no remote tracking branch."
+        echo "This branch has $commit_count commit(s) that may be LOST FOREVER."
+        echo ""
+        echo "Action required:"
+        echo "  1. cd $worktree_path"
+        echo "  2. git push -u origin $branch_name"
+        echo "  3. Then run this script again"
+        echo ""
+        echo "If this branch was intentionally never pushed and you want to discard it:"
+        echo "  git branch -D $branch_name  # From main worktree, after removal"
+        echo ""
+        return 3
     fi
 
     unpushed_output=$(git -C "$worktree_path" log '@{u}..HEAD' --oneline 2>/dev/null || echo "")

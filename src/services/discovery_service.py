@@ -294,17 +294,13 @@ class DiscoveryService:
                 seen_ids.add(unique_id)
             merged.append(paper)
 
-        # Add ArXiv papers that are not duplicates
+        # Add ArXiv papers that are not duplicates (using unified dedup logic)
         for paper in arxiv_papers:
-            unique_id = paper.doi or paper.paper_id
-            if unique_id and unique_id not in seen_ids:
-                seen_ids.add(unique_id)
+            if not self._is_duplicate(paper, merged, seen_ids):
+                unique_id = paper.doi or paper.paper_id
+                if unique_id:
+                    seen_ids.add(unique_id)
                 merged.append(paper)
-            elif not unique_id:
-                # No unique ID - check title similarity
-                # Simple check: skip if same title exists
-                if not any(p.title.lower() == paper.title.lower() for p in merged):
-                    merged.append(paper)
 
         logger.info(
             "arxiv_supplement_complete",
@@ -314,6 +310,40 @@ class DiscoveryService:
         )
 
         return merged
+
+    def _is_duplicate(
+        self,
+        paper: PaperMetadata,
+        existing_papers: List[PaperMetadata],
+        seen_ids: set,
+    ) -> bool:
+        """Check if a paper is a duplicate of existing papers.
+
+        Uses two-stage deduplication:
+        1. Check DOI or paper_id against seen_ids set
+        2. Fall back to case-insensitive title matching
+
+        Args:
+            paper: Paper to check.
+            existing_papers: List of already-collected papers.
+            seen_ids: Set of unique identifiers already seen.
+
+        Returns:
+            True if paper is a duplicate, False otherwise.
+        """
+        unique_id = paper.doi or paper.paper_id
+
+        # Stage 1: Check by unique identifier
+        if unique_id and unique_id in seen_ids:
+            return True
+
+        # Stage 2: Check by normalized title (for papers without unique ID)
+        normalized_title = paper.title.lower().strip()
+        for existing in existing_papers:
+            if existing.title.lower().strip() == normalized_title:
+                return True
+
+        return False
 
     def _log_quality_stats(self, papers: List[PaperMetadata]) -> None:
         """Log quality and PDF availability statistics.
@@ -390,13 +420,11 @@ class DiscoveryService:
             # Type is now List[PaperMetadata] after BaseException check
             papers_result: List[PaperMetadata] = result
             for paper in papers_result:
-                # Deduplicate by DOI or paper_id
-                unique_id = paper.doi or paper.paper_id
-                if unique_id and unique_id not in seen_ids:
-                    seen_ids.add(unique_id)
-                    all_papers.append(paper)
-                elif not unique_id:
-                    # No unique ID, include anyway
+                # Use unified deduplication logic (DOI/paper_id + title matching)
+                if not self._is_duplicate(paper, all_papers, seen_ids):
+                    unique_id = paper.doi or paper.paper_id
+                    if unique_id:
+                        seen_ids.add(unique_id)
                     all_papers.append(paper)
 
         logger.info(

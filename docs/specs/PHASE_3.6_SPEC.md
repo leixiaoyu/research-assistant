@@ -10,7 +10,7 @@
 
 ## Architecture Reference
 
-This phase evolves the output generation layer from run-based logs to persistent knowledge assets, as defined in [SYSTEM_ARCHITECTURE.md §5.5 Storage Service](../SYSTEM_ARCHITECTURE.md#core-components).
+This phase evolves the output generation layer from run-based logs to persistent knowledge assets, as defined in [SYSTEM_ARCHITECTURE.md §5 Core Components](../SYSTEM_ARCHITECTURE.md#core-components).
 
 **Architectural Gaps Addressed:**
 - ❌ Gap: Research results are scattered across dated files, hindering synthesis.
@@ -19,10 +19,10 @@ This phase evolves the output generation layer from run-based logs to persistent
 - ❌ Gap: Quality rankings are lost between runs.
 
 **Components Modified:**
-- Output Layer: `EnhancedGenerator` (`src/output/enhanced_generator.py`)
-- Service Layer: `RegistryService` (`src/services/registry_service.py`)
-- Orchestration: `ResearchPipeline` (`src/orchestration/research_pipeline.py`)
-- New Component: `SynthesisEngine` (`src/output/synthesis_engine.py`)
+- Output Layer: EnhancedGenerator (src/output/enhanced_generator.py)
+- Service Layer: RegistryService (src/services/registry_service.py)
+- Orchestration: ResearchPipeline (src/orchestration/research_pipeline.py)
+- New Component: SynthesisEngine (src/output/synthesis_engine.py)
 
 **Coverage Targets:**
 - Synthesis logic: 100%
@@ -35,20 +35,35 @@ This phase evolves the output generation layer from run-based logs to persistent
 
 Phase 3.6 transforms the ARISP output model from "event-based reporting" to **"knowledge-base synthesis."** It introduces a dual-stream output system:
 1.  **Delta Briefs:** A run-specific snapshot of "What is new or updated today."
-2.  **Living Knowledge Base:** A persistent, cumulative master document (`Knowledge_Base.md`) for each topic that represents the totality of learned information, automatically updated and quality-ranked.
+2.  **Living Knowledge Base:** A persistent, cumulative master document (Knowledge_Base.md) for each topic that represents the totality of learned information, automatically updated and quality-ranked.
+
+**What This Phase Is:**
+- ✅ Creation of cumulative master documents per topic.
+- ✅ Generation of delta-only briefs for latest updates.
+- ✅ Automated quality-ranked re-synthesis of Knowledge Bases.
+- ✅ Preservation of manual user notes via anchor tags.
+
+**What This Phase Is NOT:**
+- ❌ Real-time collaborative editing of Knowledge Base.
+- ❌ Version control or change tracking within Knowledge Base.
+- ❌ Automatic summarization or AI-generated synthesis prose.
+- ❌ Multi-format export (PDF, HTML, etc.).
+- ❌ Replacing dated research files (Delta + KB coexist).
+
+**Key Achievement:** Transform output from fragmented run logs to a cohesive, cumulative knowledge asset.
 
 ---
 
 ## 2. Problem Statement
 
 ### 2.1 The Snapshot Problem
-Currently, the pipeline creates a new markdown file for every run (e.g., `2026-02-08_Research.md`). If you run the same topic for a month, you end up with 30 files. To find a specific piece of information, you must search across all 30 files, which defeats the purpose of an automated assistant.
+Currently, the pipeline creates a new markdown file for every run (e.g., 2026-02-08_Research.md). If you run the same topic for a month, you end up with 30 files. To find a specific piece of information, you must search across all 30 files, which defeats the purpose of an automated assistant.
 
 ### 2.2 The Lack of Delta Awareness
-When the pipeline runs and finds 50 papers, but only 5 are "new" (thanks to Phase 3.5), the current output doesn't clearly distinguish between the new findings and the papers it already knew about. The user loses visibility into the *incremental* value of the latest run.
+When the pipeline runs and finds 50 papers, but only 5 are "new" (thanks to Phase 3.5), the current output doesn't clearly distinguish between the new findings and the papers it already knew about. The user loses visibility into the incremental value of the latest run.
 
 ### 2.3 The Quality Decay
-Papers are ranked by quality within a single run (Phase 3.4), but that ranking is lost over time. There is no central place where the *highest quality papers ever found* for a topic are aggregated.
+Papers are ranked by quality within a single run (Phase 3.4), but that ranking is lost over time. There is no central place where the highest quality papers ever found for a topic are aggregated.
 
 ---
 
@@ -57,7 +72,7 @@ Papers are ranked by quality within a single run (Phase 3.4), but that ranking i
 ### 3.1 Dual-Stream Output Model
 
 #### REQ-3.6.1: Run-Specific Delta Briefs
-Each run SHALL generate a `runs/YYYY-MM-DD_Delta.md` file in the topic directory.
+Each run SHALL generate a runs/YYYY-MM-DD_Delta.md file in the topic directory.
 
 **Requirements for Delta Briefs:**
 - **New Section:** Details for papers processed for the first time.
@@ -65,22 +80,22 @@ Each run SHALL generate a `runs/YYYY-MM-DD_Delta.md` file in the topic directory
 - **Summary Metrics:** Total new papers, total backfilled, total ignored (duplicates).
 
 #### REQ-3.6.2: Persistent Knowledge Base (Living Document)
-Each topic SHALL maintain a `Knowledge_Base.md` file in its root directory.
+Each topic SHALL maintain a Knowledge_Base.md file in its root directory.
 
 **Requirements for Knowledge Base:**
 - **Cumulative:** Includes every paper associated with the topic from the beginning of time.
 - **Deduplicated:** Each paper appears exactly once.
-- **Quality-Sorted:** Papers are ranked by `quality_score` (from Phase 3.4), ensuring the best research is always at the top of the file.
+- **Quality-Sorted:** Papers are ranked by quality_score (from Phase 3.4), ensuring the best research is always at the top of the file.
 - **Automated Updates:** The file is re-synthesized at the end of every successful run.
 
 ### 3.2 Synthesis Engine
 
 #### REQ-3.6.3: Multi-Topic Consistency
-If a paper belongs to multiple topics (Topic A and Topic B), it SHALL be synthesized into the `Knowledge_Base.md` of *both* topics.
+If a paper belongs to multiple topics (Topic A and Topic B), it SHALL be synthesized into the Knowledge_Base.md of both topics.
 
 #### REQ-3.6.4: Anchor-Based Persistence
 The Synthesis Engine SHALL attempt to preserve manual user annotations.
-- If a user adds notes under a specific paper header in `Knowledge_Base.md`, the engine SHOULD attempt to preserve these notes during re-synthesis (using "Anchor Tags" like `<!-- USER_NOTES_START -->`).
+- If a user adds notes under a specific paper header in Knowledge_Base.md, the engine SHOULD attempt to preserve these notes during re-synthesis (using "Anchor Tags" like <!-- USER_NOTES_START -->).
 
 ### 3.3 Folder Structure Evolution
 
@@ -135,50 +150,88 @@ class DeltaGenerator:
 
 ---
 
-## 5. Implementation Tasks
+## 5. Security Requirements (MANDATORY) 🔒
+
+### SR-3.6.1: Knowledge Base File Security
+- [ ] Knowledge_Base.md permissions appropriate for user access (0644).
+- [ ] Backup files (Knowledge_Base.bak) follow same permission model.
+- [ ] No executable content or script blocks allowed in Knowledge Base.
+
+### SR-3.6.2: Anchor Tag Safety
+- [ ] User anchor tags ( <!-- USER_NOTES_START --> ) validated with strict regex.
+- [ ] No script injection possible through anchor content.
+- [ ] Malformed anchors safely ignored (logged warning, content preserved as raw text).
+
+### SR-3.6.3: Path Safety
+- [ ] Topic slugs sanitized before folder creation.
+- [ ] No directory traversal possible via topic names (../, etc.) - use PathSanitizer.
+- [ ] runs/ subfolder names validated (YYYY-MM-DD format only).
+
+### SR-3.6.4: Content Integrity
+- [ ] Synthesis engine validates registry data against schema before rendering.
+- [ ] Corrupted registry entries logged and skipped (no pipeline crash).
+- [ ] Backup created atomically before Knowledge Base overwrite.
+
+### SR-3.6.5: Logging & Audit
+- [ ] All synthesis operations logged with correlation IDs.
+- [ ] User note preservation/loss events logged at WARNING level.
+- [ ] No sensitive extraction content logged during synthesis.
+
+---
+
+## 6. Implementation Tasks
 
 ### Task 1: Synthesis Engine Core (2 days)
-**Files:** `src/output/synthesis_engine.py`
+**Files:** src/output/synthesis_engine.py
 - Implement the core logic to aggregate papers from the registry by topic.
-- Implement quality-based sorting and categorization.
-- Implement the "Living Document" renderer.
+- Implement quality-based sorting and categorization (using Phase 3.4 metrics).
+- Implement the "Living Document" renderer with standardized templates.
 
 ### Task 2: Anchor Persistence (1 day)
-**Files:** `src/output/synthesis_engine.py`
+**Files:** src/output/synthesis_engine.py
 - Implement regex-based extraction of user notes from existing markdown files.
+- Create robust anchor tag pair detection.
 - Ensure re-synthesis doesn't destroy manual annotations.
 
 ### Task 3: Delta Stream Implementation (1 day)
-**Files:** `src/output/delta_generator.py`, `src/orchestration/research_pipeline.py`
+**Files:** src/output/delta_generator.py, src/orchestration/research_pipeline.py
 - Update pipeline to track "New" vs "Backfilled" status.
 - Implement the Delta Brief markdown template.
-- Update folder structure to include the `runs/` subfolder.
+- Update folder structure to include the runs/ subfolder and move historical files.
 
 ### Task 4: CLI & Orchestration Update (1 day)
-**Files:** `src/cli.py`, `src/orchestration/research_pipeline.py`
-- Integrate `SynthesisEngine` at the end of the `run` command.
+**Files:** src/cli.py, src/orchestration/research_pipeline.py
+- Integrate SynthesisEngine at the end of the run command.
 - Ensure all topics are synthesized even if some papers failed.
+- Add --no-synthesis flag for faster runs when output update is not needed.
 
 ---
 
-## 6. Verification Criteria
+## 7. Verification Criteria
 
-### 6.1 Functional Tests
-- `test_kb_includes_all_papers`: Verify cumulative inclusion across multiple runs.
-- `test_kb_quality_sorting`: Verify top-quality papers appear at the beginning.
-- `test_delta_shows_only_changes`: Verify Delta Brief doesn't include "known" unchanged papers.
-- `test_note_persistence`: Verify that manual text added between anchors is preserved after a re-run.
+### 7.1 Unit Tests
+- test_kb_includes_all_papers: Verify cumulative inclusion across multiple mock runs.
+- test_kb_quality_sorting: Verify top-quality papers (score 90+) appear before lower scores.
+- test_delta_shows_only_changes: Verify Delta Brief excludes "known" unchanged papers.
+- test_note_persistence: Verify that manual text added between anchors is preserved after a re-run.
+- test_path_sanitization: Verify topic names like "../" are blocked.
 
-### 6.2 Visual Verification
-- Inspect `Knowledge_Base.md` for clarity and professional formatting.
-- Verify `runs/` directory contains correctly dated Delta files.
+### 7.2 Integration Tests
+- test_full_dual_stream_output: Run pipeline twice, verify Delta Brief and Knowledge_Base.md are correct.
+- test_multi_topic_synthesis: Verify Paper A appears in KB of Topic 1 and Topic 2.
+- test_corrupted_registry_handling: Ensure synthesis continues if one entry is malformed.
+
+### 7.3 Security Verification
+- [ ] Verify HTML/Script tags are escaped or blocked in Knowledge Base.
+- [ ] Verify atomic backup and restore logic for KB file.
+- [ ] Verify path safety for all generated directories.
 
 ---
 
-## 7. Risks & Mitigations
+## 8. Risks & Mitigations
 
 | Risk | Impact | Mitigation |
 | :--- | :--- | :--- |
 | **Document Bloat** | Medium | Implement truncation or "Summary Mode" for papers with low quality scores. |
-| **Note Loss** | High | Use robust regex anchors and create a `Knowledge_Base.bak` before re-synthesis. |
+| **Note Loss** | High | Use robust regex anchors and create a Knowledge_Base.bak before re-synthesis. |
 | **Performance** | Low | Synthesis only runs once per topic at the end of the pipeline. |

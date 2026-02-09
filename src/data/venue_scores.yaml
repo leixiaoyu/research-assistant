@@ -1,0 +1,117 @@
+# =============================================================================
+# Venue Reputation Scores for Quality Scoring
+# =============================================================================
+#
+# This file contains reputation scores for academic venues used in paper
+# quality scoring. Scores are on a 0-30 scale where:
+#   - 30 = Top-tier venue (NeurIPS, ACL, Nature, etc.)
+#   - 25 = High-quality venue (TACL, JMLR, etc.)
+#   - 20 = Good venue
+#   - 15 = Default/unknown venue
+#   - 10 = Preprint servers (ArXiv, bioRxiv, etc.)
+#
+# Matching is case-insensitive and uses partial matching.
+# Example: "acl" matches "ACL 2024", "Proceedings of ACL", etc.
+#
+# To customize for your domain (Biology, Medicine, Physics, etc.):
+# 1. Add relevant venues with appropriate scores
+# 2. Adjust default_score if needed
+# 3. Restart the pipeline to pick up changes
+#
+# =============================================================================
+
+# Default score for venues not in the list
+default_score: 15
+
+venues:
+  # ---------------------------------------------------------------------------
+  # Top NLP/Computational Linguistics Venues
+  # ---------------------------------------------------------------------------
+  acl: 30
+  emnlp: 30
+  naacl: 28
+  eacl: 25
+  coling: 25
+  tacl: 25
+  computational linguistics: 25
+  conll: 24
+
+  # ---------------------------------------------------------------------------
+  # Top Machine Learning Venues
+  # ---------------------------------------------------------------------------
+  neurips: 30
+  nips: 30  # Historical name
+  icml: 30
+  iclr: 28
+  aistats: 25
+  uai: 24
+  colt: 24
+
+  # ---------------------------------------------------------------------------
+  # Top Computer Vision Venues
+  # ---------------------------------------------------------------------------
+  cvpr: 28
+  iccv: 28
+  eccv: 26
+  wacv: 22
+  bmvc: 22
+
+  # ---------------------------------------------------------------------------
+  # Top AI/General CS Venues
+  # ---------------------------------------------------------------------------
+  aaai: 27
+  ijcai: 27
+  kdd: 27
+  www: 26
+  sigir: 26
+  wsdm: 25
+  recsys: 24
+  cikm: 24
+
+  # ---------------------------------------------------------------------------
+  # Top Journals
+  # ---------------------------------------------------------------------------
+  nature: 30
+  science: 30
+  cell: 30
+  jmlr: 25
+  pami: 25
+  tpami: 25
+  jair: 24
+  ai journal: 24
+  artificial intelligence: 24
+
+  # ---------------------------------------------------------------------------
+  # Preprint Servers (lower quality signal - not peer-reviewed)
+  # ---------------------------------------------------------------------------
+  arxiv: 10
+  biorxiv: 10
+  medrxiv: 10
+  ssrn: 10
+  osf preprints: 10
+
+  # ---------------------------------------------------------------------------
+  # Workshops (lower but still valuable)
+  # ---------------------------------------------------------------------------
+  workshop: 15
+
+  # ---------------------------------------------------------------------------
+  # Example Extensions for Other Domains (uncomment and customize)
+  # ---------------------------------------------------------------------------
+
+  # Biology/Medicine
+  # lancet: 30
+  # nejm: 30
+  # pnas: 28
+  # plos one: 20
+  # plos biology: 25
+
+  # Physics
+  # physical review letters: 28
+  # physical review: 25
+  # physics letters: 24
+
+  # Robotics
+  # icra: 27
+  # iros: 26
+  # rss: 27

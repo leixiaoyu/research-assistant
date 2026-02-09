@@ -40,6 +40,17 @@ class PaperMetadata(BaseModel):
     # Computed fields
     relevance_score: float = Field(0.0, ge=0.0, le=1.0)
 
+    # Phase 3.4: Quality scoring and PDF availability tracking
+    quality_score: float = Field(
+        0.0, ge=0.0, le=100.0, description="Composite quality score (0-100)"
+    )
+    pdf_available: bool = Field(
+        False, description="Whether a PDF is available for download"
+    )
+    pdf_source: Optional[str] = Field(
+        None, description="Source of PDF (open_access, arxiv, etc.)"
+    )
+
     model_config = ConfigDict(populate_by_name=True)
 
 

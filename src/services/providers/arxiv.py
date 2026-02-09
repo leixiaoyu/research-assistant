@@ -120,8 +120,17 @@ class ArxivProvider(DiscoveryProvider):
         # 6. Parse
         papers = self._parse_feed(feed)
 
+        # Phase 3.4: Track and log PDF availability
+        pdf_count = sum(1 for p in papers if p.pdf_available)
+        pdf_rate = (pdf_count / len(papers) * 100) if papers else 0.0
+
         logger.info(
-            "papers_discovered", query=topic.query, count=len(papers), provider="arxiv"
+            "papers_discovered",
+            query=topic.query,
+            count=len(papers),
+            provider="arxiv",
+            pdf_available=pdf_count,
+            pdf_rate=f"{pdf_rate:.1f}%",
         )
 
         return papers
@@ -189,13 +198,17 @@ class ArxivProvider(DiscoveryProvider):
                     pub_date = datetime(*entry.published_parsed[:6])
                     year = pub_date.year
 
-                # PDF Link
+                # PDF Link (Phase 3.4: track availability)
                 pdf_link = None
+                pdf_available = False
+                pdf_source = None
                 for link in entry.links:
                     if link.type == "application/pdf":
                         raw_link = link.href
                         # Validate PDF URL for security
                         pdf_link = self._validate_pdf_url(raw_link)
+                        pdf_available = True
+                        pdf_source = "arxiv"
                         break
 
                 paper = PaperMetadata(
@@ -211,6 +224,9 @@ class ArxivProvider(DiscoveryProvider):
                     venue="ArXiv",
                     open_access_pdf=pdf_link,  # type: ignore
                     relevance_score=0.0,
+                    # Phase 3.4: PDF availability tracking
+                    pdf_available=pdf_available,
+                    pdf_source=pdf_source,
                 )
                 papers.append(paper)
 

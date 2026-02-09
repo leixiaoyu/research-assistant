@@ -1,4 +1,4 @@
-"""Discovery service with multi-provider intelligence (Phase 3.2)."""
+"""Discovery service with multi-provider intelligence (Phase 3.2 & 3.4)."""
 
 import asyncio
 import time
@@ -12,10 +12,12 @@ from src.models.config import (
     ResearchTopic,
     ProviderType,
     ProviderSelectionConfig,
+    PDFStrategy,
 )
 from src.models.paper import PaperMetadata
 from src.models.provider import ProviderMetrics, ProviderComparison
 from src.utils.provider_selector import ProviderSelector
+from src.services.quality_scorer import QualityScorer
 
 logger = structlog.get_logger()
 
@@ -28,18 +30,25 @@ class DiscoveryService:
     - Automatic fallback on provider failure
     - Benchmark mode for multi-provider comparison
     - Metrics collection for performance analysis
+
+    Phase 3.4 Features:
+    - Quality-first paper ranking
+    - PDF availability tracking and statistics
+    - ArXiv supplement mode for PDF gaps
     """
 
     def __init__(
         self,
         api_key: str = "",
         config: Optional[ProviderSelectionConfig] = None,
+        quality_scorer: Optional[QualityScorer] = None,
     ):
         """Initialize discovery service with providers.
 
         Args:
             api_key: Semantic Scholar API key (optional).
             config: Provider selection configuration.
+            quality_scorer: Quality scorer instance (optional, created if None).
         """
         self.config = config or ProviderSelectionConfig()
         self.providers: Dict[ProviderType, DiscoveryProvider] = {}
@@ -60,6 +69,9 @@ class DiscoveryService:
         self._selector = ProviderSelector(
             preference_order=self.config.preference_order,
         )
+
+        # Phase 3.4: Initialize quality scorer
+        self._quality_scorer = quality_scorer or QualityScorer()
 
     @property
     def available_providers(self) -> List[ProviderType]:
@@ -112,9 +124,24 @@ class DiscoveryService:
 
         # Execute search with fallback if enabled
         if self.config.fallback_enabled and len(self.providers) > 1:
-            return await self._search_with_fallback(topic, provider, selected_provider)
+            papers = await self._search_with_fallback(
+                topic, provider, selected_provider
+            )
         else:
-            return await provider.search(topic)
+            papers = await provider.search(topic)
+
+        # Phase 3.4: Handle ArXiv supplement strategy
+        if topic.pdf_strategy == PDFStrategy.ARXIV_SUPPLEMENT:
+            papers = await self._apply_arxiv_supplement(topic, papers)
+
+        # Phase 3.4: Apply quality ranking if enabled
+        if topic.quality_ranking and papers:
+            papers = self._quality_scorer.rank_papers(
+                papers, min_score=topic.min_quality_score
+            )
+            self._log_quality_stats(papers)
+
+        return papers
 
     async def _search_with_fallback(
         self,
@@ -202,6 +229,130 @@ class DiscoveryService:
 
         logger.error("all_providers_failed", topic=topic.query[:50])
         return []
+
+    async def _apply_arxiv_supplement(
+        self,
+        topic: ResearchTopic,
+        papers: List[PaperMetadata],
+    ) -> List[PaperMetadata]:
+        """Supplement with ArXiv papers if PDF availability is below threshold.
+
+        Phase 3.4: When pdf_strategy is ARXIV_SUPPLEMENT, if the PDF rate
+        from the primary provider is below the threshold, query ArXiv
+        for additional papers with guaranteed PDF availability.
+
+        Args:
+            topic: Research topic with supplement threshold.
+            papers: Papers from primary provider.
+
+        Returns:
+            Merged and deduplicated list of papers.
+        """
+        if not papers:
+            # No papers from primary - try ArXiv directly
+            if ProviderType.ARXIV in self.providers:
+                logger.info("arxiv_supplement_no_primary_results")
+                return await self.providers[ProviderType.ARXIV].search(topic)
+            return []
+
+        # Calculate PDF availability rate
+        pdf_count = sum(1 for p in papers if p.pdf_available)
+        pdf_rate = pdf_count / len(papers)
+
+        logger.info(
+            "arxiv_supplement_check",
+            pdf_rate=f"{pdf_rate:.2f}",
+            threshold=topic.arxiv_supplement_threshold,
+            trigger=pdf_rate < topic.arxiv_supplement_threshold,
+        )
+
+        # Check if we need to supplement
+        if pdf_rate >= topic.arxiv_supplement_threshold:
+            return papers
+
+        # ArXiv provider not available
+        if ProviderType.ARXIV not in self.providers:
+            logger.warning("arxiv_supplement_unavailable")
+            return papers
+
+        # Query ArXiv for supplementary papers
+        logger.info("arxiv_supplement_triggered", pdf_rate=f"{pdf_rate:.2f}")
+        try:
+            arxiv_papers = await self.providers[ProviderType.ARXIV].search(topic)
+        except Exception as e:
+            logger.warning("arxiv_supplement_failed", error=str(e))
+            return papers
+
+        # Merge and deduplicate (prefer primary provider metadata)
+        seen_ids: set = set()
+        merged: List[PaperMetadata] = []
+
+        # Add primary papers first
+        for paper in papers:
+            unique_id = paper.doi or paper.paper_id
+            if unique_id:
+                seen_ids.add(unique_id)
+            merged.append(paper)
+
+        # Add ArXiv papers that are not duplicates
+        for paper in arxiv_papers:
+            unique_id = paper.doi or paper.paper_id
+            if unique_id and unique_id not in seen_ids:
+                seen_ids.add(unique_id)
+                merged.append(paper)
+            elif not unique_id:
+                # No unique ID - check title similarity
+                # Simple check: skip if same title exists
+                if not any(p.title.lower() == paper.title.lower() for p in merged):
+                    merged.append(paper)
+
+        logger.info(
+            "arxiv_supplement_complete",
+            original_count=len(papers),
+            arxiv_added=len(merged) - len(papers),
+            total_count=len(merged),
+        )
+
+        return merged
+
+    def _log_quality_stats(self, papers: List[PaperMetadata]) -> None:
+        """Log quality and PDF availability statistics.
+
+        Args:
+            papers: Ranked papers with quality scores.
+        """
+        if not papers:
+            return
+
+        pdf_count = sum(1 for p in papers if p.pdf_available)
+        pdf_rate = (pdf_count / len(papers)) * 100
+
+        scores = [p.quality_score for p in papers]
+        avg_score = sum(scores) / len(scores)
+
+        # Calculate average quality for papers with/without PDF
+        with_pdf_scores = [p.quality_score for p in papers if p.pdf_available]
+        without_pdf_scores = [p.quality_score for p in papers if not p.pdf_available]
+
+        avg_with_pdf = (
+            sum(with_pdf_scores) / len(with_pdf_scores) if with_pdf_scores else 0
+        )
+        avg_without_pdf = (
+            sum(without_pdf_scores) / len(without_pdf_scores)
+            if without_pdf_scores
+            else 0
+        )
+
+        logger.info(
+            "quality_ranking_stats",
+            total_papers=len(papers),
+            pdf_available=pdf_count,
+            pdf_rate=f"{pdf_rate:.1f}%",
+            avg_quality_score=round(avg_score, 2),
+            avg_quality_with_pdf=round(avg_with_pdf, 2),
+            avg_quality_without_pdf=round(avg_without_pdf, 2),
+            top_quality=round(papers[0].quality_score, 2) if papers else 0,
+        )
 
     async def _benchmark_search(
         self,

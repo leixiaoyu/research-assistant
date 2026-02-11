@@ -239,6 +239,15 @@ class TestCalculateTitleSimilarity:
         result = calculate_title_similarity("AI", "Artificial Intelligence")
         assert result < 0.5
 
+    def test_single_char_non_overlapping_zero_union(self):
+        """Test zero-union edge case with non-overlapping single characters."""
+        # Single characters that don't overlap result in empty union
+        # After normalization, "A" and "B" become "a" and "b"
+        # These are < 3 chars, so they become single trigrams {"a"} and {"b"}
+        # Intersection is empty, union is {"a", "b"} = 2
+        result = calculate_title_similarity("A", "B")
+        assert result == 0.0
+
 
 class TestGenerateTopicSlug:
     """Tests for topic slug generation."""

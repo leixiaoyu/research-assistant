@@ -165,6 +165,17 @@ class TestRegistryEntry:
         )
         assert entry.identifiers == {}
 
+    def test_empty_slug_in_affiliations_skipped(self):
+        """Test that empty slugs in topic affiliations are skipped."""
+        entry = RegistryEntry(
+            title_normalized="test",
+            extraction_target_hash="sha256:abc",
+            topic_affiliations=["valid-topic", "", "another-topic"],
+        )
+        # Empty string should be filtered out
+        assert entry.topic_affiliations == ["valid-topic", "another-topic"]
+        assert len(entry.topic_affiliations) == 2
+
 
 class TestIdentityMatch:
     """Tests for IdentityMatch model."""

@@ -658,3 +658,117 @@ class TestRegistryServiceErrorHandling:
 
         assert entry2.pdf_path == "/data/pdfs/new.pdf"
         assert entry2.markdown_path == "/data/md/new.md"
+
+
+class TestRegistryServiceFileLocking:
+    """Tests for file locking functionality."""
+
+    def test_acquire_lock_creates_lock_file(self, temp_registry_path):
+        """Test that acquiring lock creates a lock file."""
+        service = RegistryService(registry_path=temp_registry_path)
+
+        result = service._acquire_lock()
+
+        assert result is True
+        lock_path = temp_registry_path.with_suffix(".lock")
+        assert lock_path.exists()
+
+        service._release_lock()
+
+    def test_release_lock_clears_fd(self, temp_registry_path):
+        """Test that releasing lock clears the file descriptor."""
+        service = RegistryService(registry_path=temp_registry_path)
+
+        service._acquire_lock()
+        assert service._lock_fd is not None
+
+        service._release_lock()
+        assert service._lock_fd is None
+
+    def test_acquire_lock_idempotent(self, temp_registry_path):
+        """Test that acquiring lock twice returns True (already locked)."""
+        service = RegistryService(registry_path=temp_registry_path)
+
+        result1 = service._acquire_lock()
+        result2 = service._acquire_lock()
+
+        assert result1 is True
+        assert result2 is True
+
+        service._release_lock()
+
+    def test_release_lock_idempotent(self, temp_registry_path):
+        """Test that releasing lock twice is safe."""
+        service = RegistryService(registry_path=temp_registry_path)
+
+        service._acquire_lock()
+        service._release_lock()
+        # Should not raise
+        service._release_lock()
+
+    def test_load_uses_locking(self, temp_registry_path, mocker):
+        """Test that load acquires and releases lock."""
+        service = RegistryService(registry_path=temp_registry_path)
+
+        acquire_spy = mocker.spy(service, "_acquire_lock")
+        release_spy = mocker.spy(service, "_release_lock")
+
+        service.load()
+
+        assert acquire_spy.call_count == 1
+        assert release_spy.call_count == 1
+
+    def test_save_uses_locking(self, temp_registry_path, sample_paper, mocker):
+        """Test that save acquires and releases lock."""
+        service = RegistryService(registry_path=temp_registry_path)
+        service.load()
+        service.register_paper(
+            sample_paper,
+            topic_slug="test-topic",
+            extraction_targets=[],
+        )
+
+        # Reset call counts after setup
+        acquire_spy = mocker.spy(service, "_acquire_lock")
+        release_spy = mocker.spy(service, "_release_lock")
+
+        # Clear state to force re-save
+        service._state = service._state
+
+        service.save()
+
+        assert acquire_spy.call_count == 1
+        assert release_spy.call_count == 1
+
+    def test_lock_failure_logs_warning(self, temp_registry_path, mocker):
+        """Test that lock failure logs a warning and returns False."""
+        service = RegistryService(registry_path=temp_registry_path)
+
+        # Mock os.open to raise OSError
+        mocker.patch("os.open", side_effect=OSError("Cannot open lock file"))
+
+        result = service._acquire_lock()
+
+        assert result is False
+        assert service._lock_fd is None
+
+    def test_unlock_failure_logs_warning(self, temp_registry_path, mocker):
+        """Test that unlock failure logs a warning."""
+        import fcntl
+
+        service = RegistryService(registry_path=temp_registry_path)
+        service._acquire_lock()
+
+        # Mock fcntl.flock to raise on unlock
+        original_flock = fcntl.flock
+
+        def mock_flock(fd, operation):
+            if operation == fcntl.LOCK_UN:
+                raise OSError("Cannot unlock")
+            return original_flock(fd, operation)
+
+        mocker.patch("fcntl.flock", side_effect=mock_flock)
+
+        # Should not raise, just log warning
+        service._release_lock()
+        assert service._lock_fd is None

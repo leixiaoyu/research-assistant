@@ -4,6 +4,7 @@ Provides persistent identity resolution and cross-topic deduplication
 with atomic state updates and file locking for concurrent safety.
 """
 
+import fcntl
 import os
 import json
 import tempfile
@@ -85,10 +86,58 @@ class RegistryService:
             except OSError as e:
                 logger.warning("registry_file_chmod_failed", error=str(e))
 
+    def _acquire_lock(self) -> bool:
+        """Acquire an advisory lock on the registry file.
+
+        Returns:
+            True if lock acquired, False otherwise.
+        """
+        if self._lock_fd is not None:
+            return True  # Already locked
+
+        self._ensure_directory()
+
+        try:
+            # Create or open lock file
+            lock_path = self.registry_path.with_suffix(".lock")
+            self._lock_fd = os.open(
+                str(lock_path),
+                os.O_RDWR | os.O_CREAT,
+                0o600,
+            )
+
+            # Acquire exclusive lock (blocking)
+            fcntl.flock(self._lock_fd, fcntl.LOCK_EX)
+
+            logger.debug("registry_lock_acquired", path=str(lock_path))
+            return True
+
+        except OSError as e:
+            logger.warning("registry_lock_failed", error=str(e))
+            if self._lock_fd is not None:
+                os.close(self._lock_fd)
+                self._lock_fd = None
+            return False
+
+    def _release_lock(self) -> None:
+        """Release the advisory lock on the registry file."""
+        if self._lock_fd is None:
+            return
+
+        try:
+            fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+            os.close(self._lock_fd)
+            logger.debug("registry_lock_released")
+        except OSError as e:
+            logger.warning("registry_unlock_failed", error=str(e))
+        finally:
+            self._lock_fd = None
+
     def load(self) -> RegistryState:
         """Load registry state from disk.
 
         Creates an empty registry if file doesn't exist.
+        Uses advisory file locking to prevent concurrent access issues.
 
         Returns:
             Current registry state.
@@ -96,57 +145,64 @@ class RegistryService:
         if self._state is not None:
             return self._state
 
-        self._ensure_directory()
-
-        if not self.registry_path.exists():
-            logger.info("registry_creating_new", path=str(self.registry_path))
-            self._state = RegistryState()
-            return self._state
+        self._acquire_lock()
 
         try:
-            with open(self.registry_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            self._ensure_directory()
 
-            self._state = RegistryState.model_validate(data)
+            if not self.registry_path.exists():
+                logger.info("registry_creating_new", path=str(self.registry_path))
+                self._state = RegistryState()
+                return self._state
 
-            logger.info(
-                "registry_loaded",
-                path=str(self.registry_path),
-                entries=self._state.get_entry_count(),
-            )
-            return self._state
+            try:
+                with open(self.registry_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
 
-        except json.JSONDecodeError as e:
-            logger.error(
-                "registry_parse_error",
-                path=str(self.registry_path),
-                error=str(e),
-            )
-            # Create backup and start fresh
-            backup_path = self.registry_path.with_suffix(".json.backup")
-            if self.registry_path.exists():
-                self.registry_path.rename(backup_path)
-                logger.warning(
-                    "registry_backed_up",
-                    backup=str(backup_path),
+                self._state = RegistryState.model_validate(data)
+
+                logger.info(
+                    "registry_loaded",
+                    path=str(self.registry_path),
+                    entries=self._state.get_entry_count(),
                 )
+                return self._state
 
-            self._state = RegistryState()
-            return self._state
+            except json.JSONDecodeError as e:
+                logger.error(
+                    "registry_parse_error",
+                    path=str(self.registry_path),
+                    error=str(e),
+                )
+                # Create backup and start fresh
+                backup_path = self.registry_path.with_suffix(".json.backup")
+                if self.registry_path.exists():
+                    self.registry_path.rename(backup_path)
+                    logger.warning(
+                        "registry_backed_up",
+                        backup=str(backup_path),
+                    )
 
-        except Exception as e:
-            logger.error(
-                "registry_load_error",
-                path=str(self.registry_path),
-                error=str(e),
-            )
-            self._state = RegistryState()
-            return self._state
+                self._state = RegistryState()
+                return self._state
+
+            except Exception as e:
+                logger.error(
+                    "registry_load_error",
+                    path=str(self.registry_path),
+                    error=str(e),
+                )
+                self._state = RegistryState()
+                return self._state
+
+        finally:
+            self._release_lock()
 
     def save(self) -> bool:
         """Save registry state to disk atomically.
 
         Uses temporary file + rename pattern to prevent corruption.
+        Uses advisory file locking to prevent concurrent access issues.
 
         Returns:
             True if save succeeded, False otherwise.
@@ -155,56 +211,62 @@ class RegistryService:
             logger.warning("registry_save_no_state")
             return False
 
-        self._ensure_directory()
-
-        # Update timestamp
-        self._state.updated_at = datetime.now(timezone.utc)
+        self._acquire_lock()
 
         try:
-            # Write to temporary file first
-            fd, tmp_path = tempfile.mkstemp(
-                dir=self.registry_path.parent,
-                prefix=".registry_",
-                suffix=".tmp",
-            )
+            self._ensure_directory()
+
+            # Update timestamp
+            self._state.updated_at = datetime.now(timezone.utc)
 
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(
-                        self._state.model_dump(mode="json"),
-                        f,
-                        indent=2,
-                        default=str,
-                    )
-                    f.flush()
-                    os.fsync(f.fileno())
-
-                # Atomic rename
-                os.rename(tmp_path, self.registry_path)
-
-                # Set proper permissions
-                self._set_file_permissions()
-
-                logger.debug(
-                    "registry_saved",
-                    path=str(self.registry_path),
-                    entries=self._state.get_entry_count(),
+                # Write to temporary file first
+                fd, tmp_path = tempfile.mkstemp(
+                    dir=self.registry_path.parent,
+                    prefix=".registry_",
+                    suffix=".tmp",
                 )
-                return True
 
-            except Exception:
-                # Clean up temp file on error
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-                raise
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        json.dump(
+                            self._state.model_dump(mode="json"),
+                            f,
+                            indent=2,
+                            default=str,
+                        )
+                        f.flush()
+                        os.fsync(f.fileno())
 
-        except Exception as e:
-            logger.error(
-                "registry_save_error",
-                path=str(self.registry_path),
-                error=str(e),
-            )
-            return False
+                    # Atomic rename
+                    os.rename(tmp_path, self.registry_path)
+
+                    # Set proper permissions
+                    self._set_file_permissions()
+
+                    logger.debug(
+                        "registry_saved",
+                        path=str(self.registry_path),
+                        entries=self._state.get_entry_count(),
+                    )
+                    return True
+
+                except Exception:
+                    # Clean up temp file on error
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+                    raise
+
+            except Exception as e:
+                logger.error(
+                    "registry_save_error",
+                    path=str(self.registry_path),
+                    error=str(e),
+                )
+                return False
+
+        finally:
+            self._release_lock()
 
     def resolve_identity(self, paper: PaperMetadata) -> IdentityMatch:
         """Resolve paper identity against the registry.

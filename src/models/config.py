@@ -64,6 +64,22 @@ class ProviderType(str, Enum):
     SEMANTIC_SCHOLAR = "semantic_scholar"
 
 
+class PDFStrategy(str, Enum):
+    """Strategy for handling PDF availability in discovery (Phase 3.4)."""
+
+    QUALITY_FIRST = "quality_first"  # Default: rank by quality, track PDF availability
+    PDF_REQUIRED = "pdf_required"  # Only include papers with PDFs (may reduce quality)
+    ARXIV_SUPPLEMENT = "arxiv_supplement"  # Fill PDF gaps with ArXiv results
+
+
+class NoPDFAction(str, Enum):
+    """What to do with papers that don't have PDFs (Phase 3.4)."""
+
+    INCLUDE_METADATA = "include_metadata"  # Include with abstract only (default)
+    SKIP = "skip"  # Exclude from brief entirely
+    FLAG_FOR_MANUAL = "flag_for_manual"  # Mark for manual PDF acquisition
+
+
 class ResearchTopic(BaseModel):
     """A single research topic configuration"""
 
@@ -88,6 +104,32 @@ class ResearchTopic(BaseModel):
     auto_select_provider: bool = Field(
         default=True,
         description="Allow automatic provider selection when not explicitly set",
+    )
+
+    # Phase 3.4: Quality-first discovery settings
+    quality_ranking: bool = Field(
+        default=True,
+        description="Enable quality-based ranking of papers",
+    )
+    min_quality_score: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=100.0,
+        description="Minimum quality score threshold (0-100)",
+    )
+    pdf_strategy: PDFStrategy = Field(
+        default=PDFStrategy.QUALITY_FIRST,
+        description="Strategy for handling PDF availability",
+    )
+    no_pdf_action: NoPDFAction = Field(
+        default=NoPDFAction.INCLUDE_METADATA,
+        description="How to handle papers without PDFs in output",
+    )
+    arxiv_supplement_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="PDF rate threshold to trigger ArXiv supplement (0-1)",
     )
 
     @field_validator("query")

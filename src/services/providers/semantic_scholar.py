@@ -16,6 +16,7 @@ from src.models.config import (
     TimeframeRecent,
     TimeframeSinceYear,
     TimeframeDateRange,
+    PDFStrategy,
 )
 from src.models.paper import PaperMetadata, Author
 from src.utils.rate_limiter import RateLimiter
@@ -105,12 +106,29 @@ class SemanticScholarProvider(DiscoveryProvider):
 
         papers = self._parse_response(data)
 
+        # Phase 3.4: Track and log PDF availability
+        pdf_count = sum(1 for p in papers if p.pdf_available)
+        pdf_rate = (pdf_count / len(papers) * 100) if papers else 0.0
+
         logger.info(
             "papers_discovered",
             query=topic.query,
             count=len(papers),
             provider="semantic_scholar",
+            pdf_available=pdf_count,
+            pdf_rate=f"{pdf_rate:.1f}%",
         )
+
+        # Phase 3.4: Handle PDF_REQUIRED strategy
+        if topic.pdf_strategy == PDFStrategy.PDF_REQUIRED:
+            original_count = len(papers)
+            papers = [p for p in papers if p.pdf_available]
+            logger.warning(
+                "pdf_required_filter_applied",
+                original_count=original_count,
+                filtered_count=len(papers),
+                note="Quality may be reduced - only papers with open access PDFs",
+            )
 
         return papers
 
@@ -163,11 +181,15 @@ class SemanticScholarProvider(DiscoveryProvider):
                             Author(name=auth["name"], author_id=auth.get("authorId"))
                         )
 
-                # Handle open access PDF
+                # Handle open access PDF (Phase 3.4: track availability)
                 open_access_pdf = None
+                pdf_available = False
+                pdf_source = None
                 oa_data = item.get("openAccessPdf")
                 if oa_data and oa_data.get("url"):
                     open_access_pdf = oa_data["url"]
+                    pdf_available = True
+                    pdf_source = "open_access"
 
                 # Parse dates
                 pub_date = None
@@ -195,6 +217,9 @@ class SemanticScholarProvider(DiscoveryProvider):
                     venue=item.get("venue"),
                     open_access_pdf=open_access_pdf,  # type: ignore
                     relevance_score=0.0,
+                    # Phase 3.4: PDF availability tracking
+                    pdf_available=pdf_available,
+                    pdf_source=pdf_source,
                 )
                 papers.append(paper)
             except Exception as e:

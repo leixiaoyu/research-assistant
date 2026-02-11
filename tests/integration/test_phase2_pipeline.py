@@ -202,11 +202,11 @@ class TestPhase2PipelineIntegration:
         assert "- You are an expert translator." in markdown
         assert "def translate(text, model):" in markdown
 
-        # Verify Paper 2 (PDF Unavailable)
+        # Verify Paper 2 (PDF Unavailable) - Phase 3.4 format
         assert (
             "### 2. [BERT: Pre-training of Deep Bidirectional Transformers]" in markdown
         )
-        assert "**PDF Available:** ❌" in markdown
+        assert "**PDF:** ❌" in markdown  # New format for PDF unavailable
 
         # Verify Paper 3 (No extraction results)
         assert "### 3. [Language Models are Few-Shot Learners]" in markdown

@@ -71,3 +71,80 @@ def test_input_validation_invalid_char_logging():
         mock_logger.warning.assert_any_call(
             "invalid_char_detected", char="#", query="valid query with # hash"
         )
+
+
+class TestSanitizePathComponent:
+    """Tests for PathSanitizer.sanitize_path_component static method."""
+
+    def test_removes_null_bytes(self):
+        """Test that null bytes are removed."""
+        result = PathSanitizer.sanitize_path_component("test\x00file")
+        assert "\x00" not in result
+        assert result == "testfile"
+
+    def test_removes_directory_traversal(self):
+        """Test that directory traversal patterns are removed."""
+        result = PathSanitizer.sanitize_path_component("../malicious")
+        assert ".." not in result
+        assert "/" not in result
+
+    def test_replaces_slashes(self):
+        """Test that slashes are replaced with dashes."""
+        result = PathSanitizer.sanitize_path_component("path/to/file")
+        assert "/" not in result
+        assert result == "path-to-file"
+
+    def test_replaces_backslashes(self):
+        """Test that backslashes are replaced with dashes."""
+        result = PathSanitizer.sanitize_path_component("path\\to\\file")
+        assert "\\" not in result
+        assert result == "path-to-file"
+
+    def test_replaces_invalid_filesystem_chars(self):
+        """Test that invalid filesystem characters are replaced."""
+        result = PathSanitizer.sanitize_path_component("file<name>:test|?*")
+        for char in '<>:"|?*':
+            assert char not in result
+
+    def test_collapses_multiple_dashes(self):
+        """Test that multiple dashes are collapsed to single dash."""
+        result = PathSanitizer.sanitize_path_component("test---file")
+        assert "---" not in result
+        assert "--" not in result
+        assert result == "test-file"
+
+    def test_strips_leading_trailing_dashes(self):
+        """Test that leading/trailing dashes are stripped."""
+        result = PathSanitizer.sanitize_path_component("-test-file-")
+        assert not result.startswith("-")
+        assert not result.endswith("-")
+        assert result == "test-file"
+
+    def test_strips_leading_trailing_dots_and_spaces(self):
+        """Test that leading/trailing dots and spaces are stripped."""
+        result = PathSanitizer.sanitize_path_component("...test file...")
+        assert not result.startswith(".")
+        assert not result.endswith(".")
+
+    def test_fallback_for_empty_input(self):
+        """Test that empty input returns 'unnamed'."""
+        result = PathSanitizer.sanitize_path_component("")
+        assert result == "unnamed"
+
+    def test_fallback_for_all_invalid_chars(self):
+        """Test that input with only invalid chars returns 'unnamed'."""
+        result = PathSanitizer.sanitize_path_component("...")
+        assert result == "unnamed"
+
+        result = PathSanitizer.sanitize_path_component("///")
+        assert result == "unnamed"
+
+    def test_normal_input_unchanged(self):
+        """Test that normal input is returned unchanged."""
+        result = PathSanitizer.sanitize_path_component("valid-topic-name")
+        assert result == "valid-topic-name"
+
+    def test_preserves_underscores(self):
+        """Test that underscores are preserved."""
+        result = PathSanitizer.sanitize_path_component("my_topic_name")
+        assert result == "my_topic_name"

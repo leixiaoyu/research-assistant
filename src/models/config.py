@@ -138,6 +138,19 @@ class ResearchTopic(BaseModel):
         # Delegate to centralized security utility
         return InputValidation.validate_query(v)
 
+    @property
+    def slug(self) -> str:
+        """Generate a filesystem-safe slug from the query.
+
+        Phase 3.5: Used for topic affiliation tracking in the registry.
+
+        Returns:
+            Lowercase alphanumeric + hyphen slug.
+        """
+        from src.utils.hash import generate_topic_slug
+
+        return generate_topic_slug(self.query)
+
 
 class PDFBackendConfig(BaseModel):
     """Configuration for a single PDF extraction backend"""

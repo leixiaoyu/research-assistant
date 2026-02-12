@@ -17,6 +17,7 @@ import structlog
 from src.models.catalog import CatalogRun
 from src.models.config import ResearchConfig, ResearchTopic
 from src.models.paper import PaperMetadata
+from src.models.synthesis import ProcessingResult
 from src.services.providers.base import APIError
 from src.output.markdown_generator import MarkdownGenerator
 from src.output.enhanced_generator import EnhancedMarkdownGenerator
@@ -29,6 +30,9 @@ if TYPE_CHECKING:
     from src.services.discovery_service import DiscoveryService
     from src.services.catalog_service import CatalogService
     from src.services.extraction_service import ExtractionService
+    from src.services.registry_service import RegistryService
+    from src.output.synthesis_engine import SynthesisEngine
+    from src.output.delta_generator import DeltaGenerator
     from src.models.catalog import TopicCatalogEntry
 
 logger = structlog.get_logger()
@@ -75,21 +79,25 @@ class ResearchPipeline:
     Attributes:
         config_path: Path to research configuration file
         enable_phase2: Whether to enable Phase 2 features (PDF/LLM extraction)
+        enable_synthesis: Whether to enable Phase 3.6 synthesis
     """
 
     def __init__(
         self,
         config_path: Optional[Path] = None,
         enable_phase2: bool = True,
+        enable_synthesis: bool = True,
     ) -> None:
         """Initialize the research pipeline.
 
         Args:
             config_path: Path to research config (default: config/research_config.yaml)
             enable_phase2: Enable Phase 2 PDF/LLM extraction (default: True)
+            enable_synthesis: Enable Phase 3.6 synthesis (default: True)
         """
         self.config_path = config_path or Path("config/research_config.yaml")
         self.enable_phase2 = enable_phase2
+        self.enable_synthesis = enable_synthesis
 
         # Services (initialized on run)
         self._config: Optional[ResearchConfig] = None
@@ -97,9 +105,15 @@ class ResearchPipeline:
         self._discovery_service: Optional["DiscoveryService"] = None
         self._catalog_service: Optional["CatalogService"] = None
         self._extraction_service: Optional["ExtractionService"] = None
+        self._registry_service: Optional["RegistryService"] = None
+        self._synthesis_engine: Optional["SynthesisEngine"] = None
+        self._delta_generator: Optional["DeltaGenerator"] = None
         self._md_generator: Optional[
             Union[MarkdownGenerator, EnhancedMarkdownGenerator]
         ] = None
+
+        # Processing results for synthesis (Phase 3.6)
+        self._topic_processing_results: Dict[str, List[ProcessingResult]] = {}
 
     async def run(self) -> PipelineResult:
         """Execute the complete research pipeline.
@@ -124,6 +138,7 @@ class ResearchPipeline:
                 "pipeline_starting",
                 config_path=str(self.config_path),
                 phase2_enabled=self.enable_phase2,
+                synthesis_enabled=self.enable_synthesis,
                 topics_count=len(self._config.research_topics),
             )
 
@@ -131,6 +146,10 @@ class ResearchPipeline:
             for topic in self._config.research_topics:
                 topic_result = await self._process_topic(topic)
                 self._merge_topic_result(result, topic_result)
+
+            # Phase 3.6: Run synthesis for all processed topics
+            if self.enable_synthesis:
+                await self._run_synthesis()
 
             logger.info(
                 "pipeline_completed",
@@ -152,6 +171,9 @@ class ResearchPipeline:
         from src.services.config_manager import ConfigManager
         from src.services.discovery_service import DiscoveryService
         from src.services.catalog_service import CatalogService
+        from src.services.registry_service import RegistryService
+        from src.output.synthesis_engine import SynthesisEngine
+        from src.output.delta_generator import DeltaGenerator
 
         # Core services
         self._config_manager = ConfigManager(config_path=str(self.config_path))
@@ -163,6 +185,18 @@ class ResearchPipeline:
 
         self._catalog_service = CatalogService(self._config_manager)
         self._catalog_service.load()
+
+        # Phase 3.5: Registry service (global identity)
+        self._registry_service = RegistryService()
+
+        # Phase 3.6: Synthesis services
+        if self.enable_synthesis:
+            output_base = Path(self._config.settings.output_base_dir)
+            self._synthesis_engine = SynthesisEngine(
+                registry_service=self._registry_service,
+                output_base_dir=output_base,
+            )
+            self._delta_generator = DeltaGenerator(output_base_dir=output_base)
 
         # Phase 2 services (if enabled)
         if self.enable_phase2:  # pragma: no cover (Phase 2 tested via integration)
@@ -337,6 +371,18 @@ class ResearchPipeline:
                 if summary_stats
                 else len(papers)
             )
+
+            # Phase 3.6: Store processing results for synthesis
+            if self.enable_synthesis and self._extraction_service:
+                # Get processing results from extraction service if available
+                processing_results = self._get_processing_results(
+                    papers=papers,
+                    topic_slug=catalog_topic.topic_slug,
+                    extracted_papers=extracted_papers,
+                )
+                self._topic_processing_results[catalog_topic.topic_slug] = (
+                    processing_results
+                )
 
             # E. Update Catalog
             duration = time.time() - start_time
@@ -524,6 +570,113 @@ class ResearchPipeline:
             total_duration_seconds=duration_seconds,
         )
         self._catalog_service.add_run(catalog_topic.topic_slug, run)
+
+    async def _run_synthesis(self) -> None:
+        """Run Phase 3.6 synthesis for all processed topics.
+
+        Generates:
+        - Delta briefs (YYYY-MM-DD_Delta.md) for each topic's run
+        - Updated Knowledge_Base.md for each topic
+        """
+        if not self._synthesis_engine or not self._delta_generator:
+            logger.warning("synthesis_skipped", reason="services not initialized")
+            return
+
+        logger.info(
+            "synthesis_starting",
+            topics=list(self._topic_processing_results.keys()),
+        )
+
+        for topic_slug, results in self._topic_processing_results.items():
+            try:
+                # Generate Delta Brief for this run
+                delta_path = self._delta_generator.generate(
+                    results=results,
+                    topic_slug=topic_slug,
+                )
+
+                if delta_path:
+                    logger.info(
+                        "delta_generated",
+                        topic=topic_slug,
+                        path=str(delta_path),
+                    )
+
+                # Synthesize Knowledge Base
+                stats = self._synthesis_engine.synthesize(topic_slug)
+
+                logger.info(
+                    "knowledge_base_synthesized",
+                    topic=topic_slug,
+                    total_papers=stats.total_papers,
+                    average_quality=stats.average_quality,
+                    duration_ms=stats.synthesis_duration_ms,
+                )
+
+            except Exception as e:
+                logger.error(
+                    "synthesis_failed",
+                    topic=topic_slug,
+                    error=str(e),
+                    exc_info=True,
+                )
+
+        logger.info("synthesis_completed")
+
+    def _get_processing_results(
+        self,
+        papers: List[PaperMetadata],
+        topic_slug: str,
+        extracted_papers: Optional[Any] = None,
+    ) -> List[ProcessingResult]:
+        """Generate processing results for synthesis.
+
+        Args:
+            papers: All discovered papers.
+            topic_slug: Topic slug.
+            extracted_papers: Extracted papers from Phase 2 (if available).
+
+        Returns:
+            List of ProcessingResult for synthesis.
+        """
+        from src.models.synthesis import ProcessingResult, ProcessingStatus
+
+        results: List[ProcessingResult] = []
+
+        # If we have extraction results, use them
+        if extracted_papers:
+            for ep in extracted_papers:
+                status = ProcessingStatus.NEW
+                quality_score = 0.0
+
+                # Extract quality score if available
+                if hasattr(ep, "extraction") and ep.extraction:
+                    quality_score = getattr(ep.extraction, "quality_score", 0.0)
+
+                results.append(
+                    ProcessingResult(
+                        paper_id=ep.metadata.paper_id,
+                        title=ep.metadata.title or "Untitled",
+                        status=status,
+                        quality_score=quality_score,
+                        pdf_available=getattr(ep, "pdf_available", False),
+                        extraction_success=ep.extraction is not None,
+                        topic_slug=topic_slug,
+                    )
+                )
+        else:
+            # Phase 1 mode - just mark papers as new
+            for paper in papers:
+                results.append(
+                    ProcessingResult(
+                        paper_id=paper.paper_id,
+                        title=paper.title or "Untitled",
+                        status=ProcessingStatus.NEW,
+                        topic_slug=topic_slug,
+                    )
+                )
+
+        return results
 
     def _merge_topic_result(
         self, result: PipelineResult, topic_result: Dict[str, Any]

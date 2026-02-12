@@ -334,3 +334,335 @@ class TestKnowledgeBaseSynthesis:
         # Both papers should be in the Knowledge Base
         assert "Paper A on Neural Networks" in content
         assert "Paper B on Deep Learning" in content
+
+
+class TestRegistryPersistenceE2E:
+    """E2E tests for registry persistence loop.
+
+    Verifies that:
+    1. ConcurrentPipeline persists papers to registry after extraction
+    2. Subsequent runs detect existing papers
+    3. BACKFILL is triggered when targets change
+    4. registry.json is automatically updated by the pipeline
+    """
+
+    @pytest.fixture
+    def mock_services(self):
+        """Create mock services for ConcurrentPipeline."""
+        from unittest.mock import Mock, AsyncMock
+
+        services = {
+            "fallback_pdf": Mock(),
+            "llm": Mock(),
+            "cache": Mock(),
+            "dedup": Mock(),
+            "filter": Mock(),
+            "checkpoint": Mock(),
+        }
+
+        # Configure mocks
+        services["fallback_pdf"].extract_with_fallback = AsyncMock()
+        services["llm"].extract = AsyncMock()
+        services["cache"].get_extraction = Mock(return_value=None)
+        services["cache"].set_extraction = Mock()
+        services["dedup"].find_duplicates = Mock(
+            side_effect=lambda papers: (papers, [])
+        )
+        services["filter"].filter_and_rank = Mock(side_effect=lambda papers, q: papers)
+        services["checkpoint"].get_processed_ids = Mock(return_value=set())
+        services["checkpoint"].save_checkpoint = Mock()
+        services["checkpoint"].clear_checkpoint = Mock()
+
+        return services
+
+    @pytest.mark.asyncio
+    async def test_pipeline_persists_to_registry(
+        self, tmp_path, mock_services, extraction_targets_v1
+    ):
+        """Test that ConcurrentPipeline automatically persists papers to registry."""
+        from src.orchestration.concurrent_pipeline import ConcurrentPipeline
+        from src.models.concurrency import ConcurrencyConfig
+        from src.models.extraction import PaperExtraction
+        import json
+
+        # Create registry with temp path
+        registry_path = tmp_path / "registry.json"
+        registry_service = RegistryService(registry_path=registry_path)
+
+        # Create pipeline with registry
+        config = ConcurrencyConfig(
+            max_concurrent_downloads=2,
+            max_concurrent_conversions=1,
+            max_concurrent_llm=1,
+            queue_size=10,
+        )
+
+        pipeline = ConcurrentPipeline(
+            config=config,
+            fallback_pdf_service=mock_services["fallback_pdf"],
+            llm_service=mock_services["llm"],
+            cache_service=mock_services["cache"],
+            dedup_service=mock_services["dedup"],
+            filter_service=mock_services["filter"],
+            checkpoint_service=mock_services["checkpoint"],
+            registry_service=registry_service,
+        )
+
+        # Create test paper
+        paper = PaperMetadata(
+            paper_id="e2e-test-paper-001",
+            title="E2E Test Paper on Persistence",
+            abstract="Testing automatic registry persistence.",
+            url="https://example.com/e2e-paper",
+            authors=[Author(name="Test Author")],
+        )
+
+        # Configure mock to return successful extraction
+        from unittest.mock import Mock as MockClass
+
+        mock_result = MockClass()
+        mock_result.metadata = paper
+        mock_result.pdf_path = None
+
+        mock_services["fallback_pdf"].extract_with_fallback.return_value = MockClass(
+            success=True, content="# Test Content", backend="test"
+        )
+        mock_services["llm"].extract.return_value = PaperExtraction(
+            paper_id=paper.paper_id,
+            extraction_results=[],
+            tokens_used=100,
+            cost_usd=0.001,
+        )
+
+        # Process the paper
+        results = []
+        async for result in pipeline.process_papers_concurrent(
+            papers=[paper],
+            targets=extraction_targets_v1,
+            run_id="e2e-run-1",
+            query="test",
+            topic_slug="e2e-topic",
+        ):
+            results.append(result)
+
+        # Verify paper was processed
+        assert len(results) == 1
+
+        # CRITICAL CHECK: Verify registry.json was created and contains the paper
+        assert registry_path.exists(), "registry.json should be created automatically"
+
+        with open(registry_path) as f:
+            registry_data = json.load(f)
+
+        assert "entries" in registry_data
+        assert len(registry_data["entries"]) == 1
+
+        # Find the entry
+        entry_id = list(registry_data["entries"].keys())[0]
+        entry = registry_data["entries"][entry_id]
+
+        assert entry["title_normalized"] == "e2e test paper on persistence"
+        assert "e2e-topic" in entry["topic_affiliations"]
+        assert entry["identifiers"]["semantic_scholar"] == "e2e-test-paper-001"
+
+    @pytest.mark.asyncio
+    async def test_backfill_triggered_on_target_change(
+        self, tmp_path, mock_services, extraction_targets_v1, extraction_targets_v2
+    ):
+        """Test that BACKFILL is triggered when extraction targets change."""
+        from src.orchestration.concurrent_pipeline import ConcurrentPipeline
+        from src.models.concurrency import ConcurrencyConfig
+        from src.models.extraction import PaperExtraction
+        import json
+
+        # Create registry with temp path
+        registry_path = tmp_path / "registry.json"
+        registry_service = RegistryService(registry_path=registry_path)
+
+        config = ConcurrencyConfig(
+            max_concurrent_downloads=2,
+            max_concurrent_conversions=1,
+            max_concurrent_llm=1,
+            queue_size=10,
+        )
+
+        pipeline = ConcurrentPipeline(
+            config=config,
+            fallback_pdf_service=mock_services["fallback_pdf"],
+            llm_service=mock_services["llm"],
+            cache_service=mock_services["cache"],
+            dedup_service=mock_services["dedup"],
+            filter_service=mock_services["filter"],
+            checkpoint_service=mock_services["checkpoint"],
+            registry_service=registry_service,
+        )
+
+        paper = PaperMetadata(
+            paper_id="backfill-e2e-paper",
+            title="Backfill E2E Test Paper",
+            abstract="Testing backfill detection with changed extraction targets.",
+            url="https://example.com/backfill-paper",
+        )
+
+        # Configure mocks for successful extraction
+        from unittest.mock import Mock as MockClass
+
+        mock_services["fallback_pdf"].extract_with_fallback.return_value = MockClass(
+            success=True, content="# Test Content", backend="test"
+        )
+        mock_services["llm"].extract.return_value = PaperExtraction(
+            paper_id=paper.paper_id,
+            extraction_results=[],
+            tokens_used=100,
+            cost_usd=0.001,
+        )
+
+        # RUN 1: Process with v1 targets
+        results1 = []
+        async for result in pipeline.process_papers_concurrent(
+            papers=[paper],
+            targets=extraction_targets_v1,
+            run_id="backfill-run-1",
+            query="test",
+            topic_slug="backfill-topic",
+        ):
+            results1.append(result)
+
+        assert len(results1) == 1
+
+        # Verify initial state
+        processing_results_1 = pipeline.get_processing_results()
+        assert len(processing_results_1) == 1
+        assert processing_results_1[0].status == ProcessingStatus.NEW
+
+        # Read initial extraction hash
+        with open(registry_path) as f:
+            registry_data_1 = json.load(f)
+        entry_id = list(registry_data_1["entries"].keys())[0]
+        initial_hash = registry_data_1["entries"][entry_id]["extraction_target_hash"]
+
+        # RUN 2: Process same paper with v2 targets (should trigger BACKFILL)
+        pipeline2 = ConcurrentPipeline(
+            config=config,
+            fallback_pdf_service=mock_services["fallback_pdf"],
+            llm_service=mock_services["llm"],
+            cache_service=mock_services["cache"],
+            dedup_service=mock_services["dedup"],
+            filter_service=mock_services["filter"],
+            checkpoint_service=mock_services["checkpoint"],
+            registry_service=registry_service,
+        )
+
+        results2 = []
+        async for result in pipeline2.process_papers_concurrent(
+            papers=[paper],
+            targets=extraction_targets_v2,  # Different targets!
+            run_id="backfill-run-2",
+            query="test",
+            topic_slug="backfill-topic",
+        ):
+            results2.append(result)
+
+        # CRITICAL CHECK: Verify BACKFILL was detected
+        processing_results_2 = pipeline2.get_processing_results()
+        assert len(processing_results_2) == 1
+        assert processing_results_2[0].status == ProcessingStatus.BACKFILLED
+
+        # Verify extraction hash was updated
+        with open(registry_path) as f:
+            registry_data_2 = json.load(f)
+
+        updated_hash = registry_data_2["entries"][entry_id]["extraction_target_hash"]
+        assert updated_hash != initial_hash, "Extraction hash should be updated"
+
+    @pytest.mark.asyncio
+    async def test_skip_on_same_targets(
+        self, tmp_path, mock_services, extraction_targets_v1
+    ):
+        """Test that SKIP is returned when processing same paper with same targets."""
+        from src.orchestration.concurrent_pipeline import ConcurrentPipeline
+        from src.models.concurrency import ConcurrencyConfig
+        from src.models.extraction import PaperExtraction
+
+        registry_path = tmp_path / "registry.json"
+        registry_service = RegistryService(registry_path=registry_path)
+
+        config = ConcurrencyConfig(
+            max_concurrent_downloads=2,
+            max_concurrent_conversions=1,
+            max_concurrent_llm=1,
+            queue_size=10,
+        )
+
+        pipeline = ConcurrentPipeline(
+            config=config,
+            fallback_pdf_service=mock_services["fallback_pdf"],
+            llm_service=mock_services["llm"],
+            cache_service=mock_services["cache"],
+            dedup_service=mock_services["dedup"],
+            filter_service=mock_services["filter"],
+            checkpoint_service=mock_services["checkpoint"],
+            registry_service=registry_service,
+        )
+
+        paper = PaperMetadata(
+            paper_id="skip-e2e-paper",
+            title="Skip E2E Test Paper",
+            abstract="Testing skip detection when targets are the same.",
+            url="https://example.com/skip-paper",
+        )
+
+        from unittest.mock import Mock as MockClass
+
+        mock_services["fallback_pdf"].extract_with_fallback.return_value = MockClass(
+            success=True, content="# Test", backend="test"
+        )
+        mock_services["llm"].extract.return_value = PaperExtraction(
+            paper_id=paper.paper_id,
+            extraction_results=[],
+            tokens_used=50,
+            cost_usd=0.0005,
+        )
+
+        # RUN 1: First processing
+        results1 = []
+        async for result in pipeline.process_papers_concurrent(
+            papers=[paper],
+            targets=extraction_targets_v1,
+            run_id="skip-run-1",
+            query="test",
+            topic_slug="skip-topic",
+        ):
+            results1.append(result)
+
+        assert len(results1) == 1
+
+        # RUN 2: Same paper, same targets - should be SKIPPED
+        pipeline2 = ConcurrentPipeline(
+            config=config,
+            fallback_pdf_service=mock_services["fallback_pdf"],
+            llm_service=mock_services["llm"],
+            cache_service=mock_services["cache"],
+            dedup_service=mock_services["dedup"],
+            filter_service=mock_services["filter"],
+            checkpoint_service=mock_services["checkpoint"],
+            registry_service=registry_service,
+        )
+
+        results2 = []
+        async for result in pipeline2.process_papers_concurrent(
+            papers=[paper],
+            targets=extraction_targets_v1,  # Same targets
+            run_id="skip-run-2",
+            query="test",
+            topic_slug="skip-topic",
+        ):
+            results2.append(result)
+
+        # No results should be yielded (paper was skipped)
+        assert len(results2) == 0
+
+        # Verify SKIP status
+        processing_results_2 = pipeline2.get_processing_results()
+        assert len(processing_results_2) == 1
+        assert processing_results_2[0].status == ProcessingStatus.SKIPPED

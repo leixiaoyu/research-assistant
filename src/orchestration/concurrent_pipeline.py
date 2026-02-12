@@ -11,7 +11,7 @@ Implements async producer-consumer pattern with:
 """
 
 import asyncio
-from typing import List, AsyncIterator, Optional
+from typing import List, AsyncIterator, Optional, Dict
 from pathlib import Path
 import time
 import structlog
@@ -19,7 +19,7 @@ import structlog
 from src.models.paper import PaperMetadata
 from src.models.extraction import ExtractionTarget, ExtractedPaper
 from src.models.concurrency import ConcurrencyConfig, PipelineStats, WorkerStats
-from src.models.registry import ProcessingAction
+from src.models.registry import ProcessingAction, RegistryEntry
 from src.models.synthesis import ProcessingResult, ProcessingStatus
 
 # Phase 2.5 integration
@@ -151,6 +151,8 @@ class ConcurrentPipeline:
         # Stage 1: Registry-based identity resolution (Phase 3.5)
         new_papers: List[PaperMetadata] = []
         duplicates: List[PaperMetadata] = []
+        # Track existing entries for backfill persistence
+        backfill_entries: Dict[str, RegistryEntry] = {}
 
         if self.registry_service and topic_slug:
             # Use global registry for identity resolution
@@ -167,12 +169,20 @@ class ConcurrentPipeline:
                     self._add_processing_result(
                         paper, ProcessingStatus.BACKFILLED, topic_slug
                     )
+                    # Store existing entry for persistence update
+                    if existing_entry:
+                        backfill_entries[paper.paper_id] = existing_entry
                 elif action == ProcessingAction.MAP_ONLY:
                     # Just add topic affiliation, no processing needed
                     duplicates.append(paper)
                     self._add_processing_result(
                         paper, ProcessingStatus.MAPPED, topic_slug
                     )
+                    # Register topic affiliation for MAP_ONLY
+                    if existing_entry:
+                        self.registry_service.add_topic_affiliation(
+                            existing_entry, topic_slug
+                        )
                 else:  # SKIP
                     duplicates.append(paper)
                     self._add_processing_result(
@@ -277,6 +287,31 @@ class ConcurrentPipeline:
             completed += 1
             self.stats.papers_completed = completed
             processed_paper_ids.append(result.metadata.paper_id)
+
+            # Phase 3.5: Persist to global registry after successful extraction
+            if self.registry_service and topic_slug:
+                paper_id = result.metadata.paper_id
+                existing_entry = backfill_entries.get(paper_id)
+
+                # Get PDF path from result if available
+                pdf_path = None
+                if hasattr(result, "pdf_path") and result.pdf_path:
+                    pdf_path = str(result.pdf_path)
+
+                self.registry_service.register_paper(
+                    paper=result.metadata,
+                    topic_slug=topic_slug,
+                    extraction_targets=targets,
+                    pdf_path=pdf_path,
+                    existing_entry=existing_entry,  # For backfill updates
+                )
+
+                logger.debug(
+                    "registry_paper_persisted",
+                    paper_id=paper_id,
+                    is_backfill=existing_entry is not None,
+                    topic=topic_slug,
+                )
 
             # Update metrics
             PAPERS_PROCESSED.labels(status="success").inc()

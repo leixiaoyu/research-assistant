@@ -28,6 +28,11 @@ def run(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Validate and plan without executing"
     ),
+    no_synthesis: bool = typer.Option(
+        False,
+        "--no-synthesis",
+        help="Skip Knowledge Base synthesis (faster runs)",
+    ),
 ):
     """Run the research pipeline based on configuration"""
     try:
@@ -94,9 +99,18 @@ def run(
                 "Running in Phase 1 mode (discovery only)", fg=typer.colors.YELLOW
             )
 
+        if no_synthesis:
+            typer.secho(
+                "✗ Phase 3.6 synthesis disabled (--no-synthesis)",
+                fg=typer.colors.YELLOW,
+            )
+        else:
+            typer.secho("✓ Phase 3.6 synthesis enabled", fg=typer.colors.GREEN)
+
         pipeline = ResearchPipeline(
             config_path=config_path,
             enable_phase2=phase2_enabled,
+            enable_synthesis=not no_synthesis,
         )
 
         result = asyncio.run(pipeline.run())

@@ -19,6 +19,50 @@ class PathSanitizer:
         """Initialize with allowed base directories"""
         self.allowed_bases = [p.resolve() for p in allowed_bases]
 
+    @staticmethod
+    def sanitize_path_component(component: str) -> str:
+        """Sanitize a single path component (filename or directory name).
+
+        Prevents:
+        - Directory traversal characters
+        - Null bytes
+        - Invalid filesystem characters
+
+        Args:
+            component: Raw path component string.
+
+        Returns:
+            Sanitized path component safe for filesystem use.
+        """
+        # Remove null bytes
+        safe = component.replace("\0", "")
+
+        # Remove directory traversal patterns
+        safe = safe.replace("..", "")
+        safe = safe.replace("/", "-")
+        safe = safe.replace("\\", "-")
+
+        # Replace invalid filesystem characters
+        invalid_chars = '<>:"|?*'
+        for char in invalid_chars:
+            safe = safe.replace(char, "-")
+
+        # Remove leading/trailing dots and spaces
+        safe = safe.strip(". ")
+
+        # Collapse multiple dashes
+        while "--" in safe:
+            safe = safe.replace("--", "-")
+
+        # Remove leading/trailing dashes
+        safe = safe.strip("-")
+
+        # Fallback if completely empty
+        if not safe:
+            safe = "unnamed"
+
+        return safe
+
     def safe_path(
         self, base_dir: Path, user_input: str, must_exist: bool = False
     ) -> Path:

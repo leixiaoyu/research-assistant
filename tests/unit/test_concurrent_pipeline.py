@@ -693,3 +693,294 @@ async def test_paper_with_empty_abstract_no_pdf(
     assert (
         pipeline.stats.papers_completed >= 0
     )  # Processing completed one way or another
+
+
+# ==================== Phase 3.5/3.6 Registry Integration Tests ====================
+
+
+class TestRegistryIntegration:
+    """Tests for Phase 3.5 registry service integration."""
+
+    @pytest.fixture
+    def mock_registry_service(self):
+        """Mock registry service for testing."""
+        from src.models.registry import ProcessingAction
+
+        registry = Mock()
+        # Default: no existing entries, always FULL_PROCESS
+        registry.determine_action = Mock(
+            return_value=(ProcessingAction.FULL_PROCESS, None)
+        )
+        return registry
+
+    @pytest.fixture
+    def pipeline_with_registry(
+        self, concurrency_config, mock_services, mock_registry_service
+    ):
+        """ConcurrentPipeline with registry service."""
+        return ConcurrentPipeline(
+            config=concurrency_config,
+            fallback_pdf_service=mock_services["fallback_pdf"],
+            llm_service=mock_services["llm"],
+            cache_service=mock_services["cache"],
+            dedup_service=mock_services["dedup"],
+            filter_service=mock_services["filter"],
+            checkpoint_service=mock_services["checkpoint"],
+            registry_service=mock_registry_service,
+        )
+
+    def test_get_processing_results_empty(self, pipeline_with_registry):
+        """Test get_processing_results returns empty list initially."""
+        results = pipeline_with_registry.get_processing_results()
+        assert results == []
+
+    def test_add_processing_result(self, pipeline_with_registry):
+        """Test _add_processing_result adds to processing_results."""
+        from src.models.synthesis import ProcessingStatus
+
+        paper = PaperMetadata(
+            paper_id="test-paper",
+            title="Test Paper",
+            url="https://example.com",
+        )
+
+        pipeline_with_registry._add_processing_result(
+            paper=paper,
+            status=ProcessingStatus.NEW,
+            topic_slug="test-topic",
+            quality_score=85.0,
+            pdf_available=True,
+            extraction_success=True,
+        )
+
+        results = pipeline_with_registry.get_processing_results()
+        assert len(results) == 1
+        assert results[0].paper_id == "test-paper"
+        assert results[0].title == "Test Paper"
+        assert results[0].status == ProcessingStatus.NEW
+        assert results[0].quality_score == 85.0
+        assert results[0].pdf_available is True
+        assert results[0].extraction_success is True
+
+    def test_add_processing_result_with_error(self, pipeline_with_registry):
+        """Test _add_processing_result with error message."""
+        from src.models.synthesis import ProcessingStatus
+
+        paper = PaperMetadata(
+            paper_id="failed-paper",
+            title="Failed Paper",
+            url="https://example.com",
+        )
+
+        pipeline_with_registry._add_processing_result(
+            paper=paper,
+            status=ProcessingStatus.FAILED,
+            topic_slug="test-topic",
+            error_message="PDF download failed",
+        )
+
+        results = pipeline_with_registry.get_processing_results()
+        assert len(results) == 1
+        assert results[0].status == ProcessingStatus.FAILED
+        assert results[0].error_message == "PDF download failed"
+
+    @pytest.mark.asyncio
+    async def test_process_with_registry_full_process(
+        self, pipeline_with_registry, mock_services, mock_registry_service
+    ):
+        """Test processing papers with registry returning FULL_PROCESS."""
+        from src.models.registry import ProcessingAction
+        from src.models.synthesis import ProcessingStatus
+
+        paper = PaperMetadata(
+            paper_id="new-paper",
+            title="New Paper",
+            abstract="Test abstract",
+            url="https://example.com",
+            open_access_pdf="https://example.com/paper.pdf",
+        )
+        targets = [ExtractionTarget(name="summary", description="Summary")]
+
+        # Configure registry to return FULL_PROCESS
+        mock_registry_service.determine_action.return_value = (
+            ProcessingAction.FULL_PROCESS,
+            None,
+        )
+
+        # Configure dedup and filter to pass through
+        mock_services["dedup"].find_duplicates.return_value = ([paper], [])
+        mock_services["filter"].filter_and_rank.return_value = [paper]
+
+        # Configure PDF and LLM to succeed
+        mock_services["fallback_pdf"].extract_with_fallback.return_value = Mock(
+            success=True, content="# Test content", backend="test"
+        )
+        mock_services["llm"].extract.return_value = PaperExtraction(
+            paper_id=paper.paper_id,
+            extraction_results=[],
+            tokens_used=100,
+            cost_usd=0.001,
+        )
+
+        results = []
+        async for result in pipeline_with_registry.process_papers_concurrent(
+            papers=[paper],
+            targets=targets,
+            run_id="test-run",
+            query="test",
+            topic_slug="test-topic",
+        ):
+            results.append(result)
+
+        # Verify registry was called
+        mock_registry_service.determine_action.assert_called_once()
+
+        # Verify processing result was added
+        processing_results = pipeline_with_registry.get_processing_results()
+        assert len(processing_results) >= 1
+        assert any(r.status == ProcessingStatus.NEW for r in processing_results)
+
+    @pytest.mark.asyncio
+    async def test_process_with_registry_skip(
+        self, pipeline_with_registry, mock_services, mock_registry_service
+    ):
+        """Test processing papers with registry returning SKIP."""
+        from src.models.registry import ProcessingAction, RegistryEntry
+        from src.models.synthesis import ProcessingStatus
+
+        paper = PaperMetadata(
+            paper_id="existing-paper",
+            title="Existing Paper",
+            url="https://example.com",
+        )
+        targets = [ExtractionTarget(name="summary", description="Summary")]
+
+        # Create mock existing entry
+        existing_entry = Mock(spec=RegistryEntry)
+        existing_entry.paper_id = "existing-paper"
+
+        # Configure registry to return SKIP
+        mock_registry_service.determine_action.return_value = (
+            ProcessingAction.SKIP,
+            existing_entry,
+        )
+
+        # Configure dedup and filter for the empty new_papers list
+        mock_services["dedup"].find_duplicates.return_value = ([], [])
+        mock_services["filter"].filter_and_rank.return_value = []
+
+        results = []
+        async for result in pipeline_with_registry.process_papers_concurrent(
+            papers=[paper],
+            targets=targets,
+            run_id="test-run",
+            query="test",
+            topic_slug="test-topic",
+        ):
+            results.append(result)
+
+        # Verify no actual processing happened (paper was skipped)
+        processing_results = pipeline_with_registry.get_processing_results()
+        assert len(processing_results) == 1
+        assert processing_results[0].status == ProcessingStatus.SKIPPED
+
+    @pytest.mark.asyncio
+    async def test_process_with_registry_backfill(
+        self, pipeline_with_registry, mock_services, mock_registry_service
+    ):
+        """Test processing papers with registry returning BACKFILL."""
+        from src.models.registry import ProcessingAction, RegistryEntry
+        from src.models.synthesis import ProcessingStatus
+
+        paper = PaperMetadata(
+            paper_id="backfill-paper",
+            title="Backfill Paper",
+            abstract="Needs reprocessing",
+            url="https://example.com",
+            open_access_pdf="https://example.com/paper.pdf",
+        )
+        targets = [ExtractionTarget(name="summary", description="Summary")]
+
+        # Create mock existing entry
+        existing_entry = Mock(spec=RegistryEntry)
+        existing_entry.paper_id = "backfill-paper"
+
+        # Configure registry to return BACKFILL
+        mock_registry_service.determine_action.return_value = (
+            ProcessingAction.BACKFILL,
+            existing_entry,
+        )
+
+        # Configure dedup and filter to pass through
+        mock_services["dedup"].find_duplicates.return_value = ([paper], [])
+        mock_services["filter"].filter_and_rank.return_value = [paper]
+
+        # Configure PDF and LLM to succeed
+        mock_services["fallback_pdf"].extract_with_fallback.return_value = Mock(
+            success=True, content="# Test content", backend="test"
+        )
+        mock_services["llm"].extract.return_value = PaperExtraction(
+            paper_id=paper.paper_id,
+            extraction_results=[],
+            tokens_used=100,
+            cost_usd=0.001,
+        )
+
+        results = []
+        async for result in pipeline_with_registry.process_papers_concurrent(
+            papers=[paper],
+            targets=targets,
+            run_id="test-run",
+            query="test",
+            topic_slug="test-topic",
+        ):
+            results.append(result)
+
+        # Verify processing result was added as backfilled
+        processing_results = pipeline_with_registry.get_processing_results()
+        assert len(processing_results) >= 1
+        assert any(r.status == ProcessingStatus.BACKFILLED for r in processing_results)
+
+    @pytest.mark.asyncio
+    async def test_process_with_registry_map_only(
+        self, pipeline_with_registry, mock_services, mock_registry_service
+    ):
+        """Test processing papers with registry returning MAP_ONLY."""
+        from src.models.registry import ProcessingAction, RegistryEntry
+        from src.models.synthesis import ProcessingStatus
+
+        paper = PaperMetadata(
+            paper_id="mapped-paper",
+            title="Mapped Paper",
+            url="https://example.com",
+        )
+        targets = [ExtractionTarget(name="summary", description="Summary")]
+
+        # Create mock existing entry
+        existing_entry = Mock(spec=RegistryEntry)
+        existing_entry.paper_id = "mapped-paper"
+
+        # Configure registry to return MAP_ONLY
+        mock_registry_service.determine_action.return_value = (
+            ProcessingAction.MAP_ONLY,
+            existing_entry,
+        )
+
+        # Configure dedup and filter for the empty new_papers list
+        mock_services["dedup"].find_duplicates.return_value = ([], [])
+        mock_services["filter"].filter_and_rank.return_value = []
+
+        results = []
+        async for result in pipeline_with_registry.process_papers_concurrent(
+            papers=[paper],
+            targets=targets,
+            run_id="test-run",
+            query="test",
+            topic_slug="test-topic",
+        ):
+            results.append(result)
+
+        # Verify processing result was added as mapped
+        processing_results = pipeline_with_registry.get_processing_results()
+        assert len(processing_results) == 1
+        assert processing_results[0].status == ProcessingStatus.MAPPED

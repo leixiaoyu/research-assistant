@@ -6,11 +6,12 @@ Implements async producer-consumer pattern with:
 - Worker pool management
 - Integration with Phase 2.5 FallbackPDFService
 - Integration with Phase 3 intelligence services
+- Integration with Phase 3.5 RegistryService (global identity)
 - Prometheus metrics export (Phase 4)
 """
 
 import asyncio
-from typing import List, AsyncIterator, Optional
+from typing import List, AsyncIterator, Optional, Dict
 from pathlib import Path
 import time
 import structlog
@@ -18,6 +19,8 @@ import structlog
 from src.models.paper import PaperMetadata
 from src.models.extraction import ExtractionTarget, ExtractedPaper
 from src.models.concurrency import ConcurrencyConfig, PipelineStats, WorkerStats
+from src.models.registry import ProcessingAction, RegistryEntry
+from src.models.synthesis import ProcessingResult, ProcessingStatus
 
 # Phase 2.5 integration
 from src.services.pdf_extractors.fallback_service import FallbackPDFService
@@ -28,6 +31,9 @@ from src.services.dedup_service import DeduplicationService
 from src.services.filter_service import FilterService
 from src.services.checkpoint_service import CheckpointService
 from src.services.llm_service import LLMService
+
+# Phase 3.5 integration
+from src.services.registry_service import RegistryService
 
 # Phase 4: Prometheus metrics
 from src.observability.metrics import (
@@ -47,7 +53,7 @@ logger = structlog.get_logger()
 class ConcurrentPipeline:
     """Concurrent paper processing pipeline.
 
-    Coordinates all services (cache, dedup, filter, PDF, LLM, checkpoint)
+    Coordinates all services (cache, dedup, filter, PDF, LLM, checkpoint, registry)
     with concurrent worker pool and intelligent resource management.
     """
 
@@ -60,6 +66,7 @@ class ConcurrentPipeline:
         dedup_service: DeduplicationService,  # Phase 3
         filter_service: FilterService,  # Phase 3
         checkpoint_service: CheckpointService,  # Phase 3
+        registry_service: Optional[RegistryService] = None,  # Phase 3.5
     ):
         """Initialize concurrent pipeline.
 
@@ -71,6 +78,7 @@ class ConcurrentPipeline:
             dedup_service: Deduplication service (Phase 3)
             filter_service: Filtering service (Phase 3)
             checkpoint_service: Checkpoint service (Phase 3)
+            registry_service: Registry service for global identity (Phase 3.5)
         """
         self.config = config
         self.fallback_pdf_service = fallback_pdf_service
@@ -79,6 +87,10 @@ class ConcurrentPipeline:
         self.dedup_service = dedup_service
         self.filter_service = filter_service
         self.checkpoint_service = checkpoint_service
+        self.registry_service = registry_service
+
+        # Processing results for Phase 3.6 synthesis
+        self.processing_results: List[ProcessingResult] = []
 
         # Semaphores for resource limiting
         self.download_sem = asyncio.Semaphore(config.max_concurrent_downloads)
@@ -103,14 +115,16 @@ class ConcurrentPipeline:
         targets: List[ExtractionTarget],
         run_id: str,
         query: str,
+        topic_slug: Optional[str] = None,
     ) -> AsyncIterator[ExtractedPaper]:
         """Process papers concurrently with full intelligence pipeline.
 
         Pipeline stages:
-        1. Deduplication (Phase 3) - Remove papers we've seen
-        2. Filtering (Phase 3) - Apply quality filters
-        3. Cache check (Phase 3) - Skip papers with cached extractions
-        4. Concurrent processing:
+        1. Registry check (Phase 3.5) - Global identity resolution if available
+        2. Deduplication (Phase 3) - Remove papers we've seen (fallback)
+        3. Filtering (Phase 3) - Apply quality filters
+        4. Cache check (Phase 3) - Skip papers with cached extractions
+        5. Concurrent processing:
            a. PDF extraction (Phase 2.5 multi-backend)
            b. LLM extraction
            c. Checkpoint (Phase 3)
@@ -120,18 +134,80 @@ class ConcurrentPipeline:
             targets: Extraction targets
             run_id: Unique run identifier
             query: Search query (for relevance ranking)
+            topic_slug: Topic slug for registry affiliation (Phase 3.5)
 
         Yields:
             ExtractedPaper as they complete (unordered)
         """
         start_time = time.time()
 
+        # Clear processing results for this run
+        self.processing_results = []
+
         logger.info(
             "concurrent_processing_started", run_id=run_id, total_papers=len(papers)
         )
 
-        # Stage 1: Deduplication
-        new_papers, duplicates = self.dedup_service.find_duplicates(papers)
+        # Stage 1: Registry-based identity resolution (Phase 3.5)
+        new_papers: List[PaperMetadata] = []
+        duplicates: List[PaperMetadata] = []
+        # Track existing entries for backfill persistence
+        backfill_entries: Dict[str, RegistryEntry] = {}
+
+        if self.registry_service and topic_slug:
+            # Use global registry for identity resolution
+            for paper in papers:
+                action, existing_entry = self.registry_service.determine_action(
+                    paper, topic_slug, targets
+                )
+
+                if action == ProcessingAction.FULL_PROCESS:
+                    new_papers.append(paper)
+                    self._add_processing_result(paper, ProcessingStatus.NEW, topic_slug)
+                elif action == ProcessingAction.BACKFILL:
+                    new_papers.append(paper)  # Process it
+                    self._add_processing_result(
+                        paper, ProcessingStatus.BACKFILLED, topic_slug
+                    )
+                    # Store existing entry for persistence update
+                    if existing_entry:
+                        backfill_entries[paper.paper_id] = existing_entry
+                elif action == ProcessingAction.MAP_ONLY:
+                    # Just add topic affiliation, no processing needed
+                    duplicates.append(paper)
+                    self._add_processing_result(
+                        paper, ProcessingStatus.MAPPED, topic_slug
+                    )
+                    # Register topic affiliation for MAP_ONLY
+                    if existing_entry:
+                        self.registry_service.add_topic_affiliation(
+                            existing_entry, topic_slug
+                        )
+                else:  # SKIP
+                    duplicates.append(paper)
+                    self._add_processing_result(
+                        paper, ProcessingStatus.SKIPPED, topic_slug
+                    )
+
+            logger.info(
+                "registry_resolution_complete",
+                total=len(papers),
+                new=sum(
+                    1
+                    for r in self.processing_results
+                    if r.status == ProcessingStatus.NEW
+                ),
+                backfill=sum(
+                    1
+                    for r in self.processing_results
+                    if r.status == ProcessingStatus.BACKFILLED
+                ),
+                skipped=len(duplicates),
+            )
+        else:
+            # Fallback to legacy deduplication (Phase 3)
+            new_papers, duplicates = self.dedup_service.find_duplicates(papers)
+
         self.stats.total_papers = len(papers)
         self.stats.papers_deduplicated = len(duplicates)
 
@@ -211,6 +287,31 @@ class ConcurrentPipeline:
             completed += 1
             self.stats.papers_completed = completed
             processed_paper_ids.append(result.metadata.paper_id)
+
+            # Phase 3.5: Persist to global registry after successful extraction
+            if self.registry_service and topic_slug:
+                paper_id = result.metadata.paper_id
+                existing_entry = backfill_entries.get(paper_id)
+
+                # Get PDF path from result if available
+                pdf_path = None
+                if hasattr(result, "pdf_path") and result.pdf_path:
+                    pdf_path = str(result.pdf_path)
+
+                self.registry_service.register_paper(
+                    paper=result.metadata,
+                    topic_slug=topic_slug,
+                    extraction_targets=targets,
+                    pdf_path=pdf_path,
+                    existing_entry=existing_entry,  # For backfill updates
+                )
+
+                logger.debug(
+                    "registry_paper_persisted",
+                    paper_id=paper_id,
+                    is_backfill=existing_entry is not None,
+                    topic=topic_slug,
+                )
 
             # Update metrics
             PAPERS_PROCESSED.labels(status="success").inc()
@@ -569,3 +670,44 @@ class ConcurrentPipeline:
     def get_stats(self) -> PipelineStats:
         """Get current pipeline statistics"""
         return self.stats
+
+    def get_processing_results(self) -> List[ProcessingResult]:
+        """Get processing results for Phase 3.6 synthesis.
+
+        Returns:
+            List of ProcessingResult objects from the current run.
+        """
+        return self.processing_results
+
+    def _add_processing_result(
+        self,
+        paper: PaperMetadata,
+        status: ProcessingStatus,
+        topic_slug: str,
+        quality_score: float = 0.0,
+        pdf_available: bool = False,
+        extraction_success: bool = False,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Add a processing result for a paper.
+
+        Args:
+            paper: Paper that was processed.
+            status: Processing status.
+            topic_slug: Topic this result belongs to.
+            quality_score: Quality score if available.
+            pdf_available: Whether PDF was available.
+            extraction_success: Whether extraction succeeded.
+            error_message: Error message if failed.
+        """
+        result = ProcessingResult(
+            paper_id=paper.paper_id,
+            title=paper.title or "Untitled",
+            status=status,
+            quality_score=quality_score,
+            pdf_available=pdf_available,
+            extraction_success=extraction_success,
+            topic_slug=topic_slug,
+            error_message=error_message,
+        )
+        self.processing_results.append(result)

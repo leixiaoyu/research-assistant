@@ -255,6 +255,103 @@ This is the summary for topic 2 paper.
             # Should return empty list, not raise
             assert learnings == []
 
+    def test_parse_delta_brief_paper_without_summary(self) -> None:
+        """Test parsing Delta brief when papers have no engineering summary."""
+        # Delta brief with NEW papers section but papers without engineering summaries
+        delta_content = """# Delta Brief: test-topic
+**Run Date:** 2025-01-23
+
+## Summary
+
+| Metric | Count |
+|--------|-------|
+| 🆕 New Papers | 2 |
+
+## 🆕 New Papers
+
+Papers processed for the first time in this run.
+
+### 🆕 Paper Without Summary
+**Quality:** ⭐ Fair (45) | **Source:** 📋 Abstract
+
+No engineering summary here, just metadata.
+
+---
+
+### 🆕 Another Paper Without Summary
+**Quality:** ⭐ Fair (40) | **Source:** 📋 Abstract
+
+Also no summary available.
+
+---
+"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create proper path structure
+            topic_dir = Path(tmpdir) / "output" / "test-topic" / "runs"
+            topic_dir.mkdir(parents=True)
+            file_path = topic_dir / "2025-01-23_Delta.md"
+            file_path.write_text(delta_content)
+
+            parser = ReportParser()
+            learnings = parser.extract_key_learnings(
+                [str(file_path)],
+                max_per_topic=2,
+            )
+
+            # No learnings should be extracted since papers have no summaries
+            assert len(learnings) == 0
+
+    def test_parse_delta_brief_mixed_papers(self) -> None:
+        """Test Delta brief with mix of papers with and without summaries."""
+        delta_content = """# Delta Brief: mixed-topic
+
+## 🆕 New Papers
+
+### 🆕 Paper With Summary
+**Quality:** ⭐⭐ Good (65) | **Source:** 📄 PDF
+
+**Engineering Summary** (confidence: 90%)
+
+This paper has a valid engineering summary that should be extracted.
+
+---
+
+### 🆕 Paper Without Summary
+**Quality:** ⭐ Fair (40) | **Source:** 📋 Abstract
+
+No summary here.
+
+---
+
+### 🆕 Another Paper With Summary
+**Quality:** ⭐⭐ Good (70) | **Source:** 📄 PDF
+
+**Engineering Summary** (confidence: 85%)
+
+Another valid summary to extract from this paper.
+
+---
+"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            topic_dir = Path(tmpdir) / "output" / "mixed-topic" / "runs"
+            topic_dir.mkdir(parents=True)
+            file_path = topic_dir / "2025-01-23_Delta.md"
+            file_path.write_text(delta_content)
+
+            parser = ReportParser()
+            learnings = parser.extract_key_learnings(
+                [str(file_path)],
+                max_per_topic=3,
+            )
+
+            # Only papers WITH summaries should be extracted
+            assert len(learnings) == 2
+            titles = [learning.paper_title for learning in learnings]
+            assert "Paper With Summary" in titles
+            assert "Another Paper With Summary" in titles
+
 
 class TestExtractTopicSlug:
     """Tests for _extract_topic_slug method."""
@@ -282,6 +379,16 @@ class TestExtractTopicSlug:
 
         slug = parser._extract_topic_slug(path)
         assert slug == "topic-name"
+
+    def test_fallback_with_runs_parent_no_output(self) -> None:
+        """Test fallback when 'runs' parent exists but 'output' not in path."""
+        parser = ReportParser()
+        # Path has 'runs' as parent but no 'output' directory in path
+        path = Path("/custom/data/my-research-topic/runs/2025-01-23_Delta.md")
+
+        slug = parser._extract_topic_slug(path)
+        # Should use path.parent.parent.name since path.parent.name == "runs"
+        assert slug == "my-research-topic"
 
 
 class TestCleanTitle:
@@ -509,3 +616,38 @@ No summary here.
         # May return None if no blockquote or engineering summary
         # The implementation extracts blockquotes only if > 50 chars
         assert summary is None
+
+    def test_extract_general_engineering_summary(self) -> None:
+        """Test extracting general engineering summary without confidence score."""
+        parser = ReportParser()
+        # This format uses ENGINEERING_SUMMARY_PATTERN (without confidence)
+        section = """
+### Paper Title
+
+**Engineering_Summary**
+
+This is a general engineering summary without confidence score.
+It should still be extracted using the fallback pattern.
+
+---
+"""
+        summary = parser._extract_summary_from_section(section)
+        assert summary is not None
+        assert "general engineering summary" in summary
+
+    def test_extract_engineering_summary_simple_format(self) -> None:
+        """Test extracting engineering summary in simple format."""
+        parser = ReportParser()
+        # Simple format without confidence - uses ENGINEERING_SUMMARY_PATTERN
+        section = """
+### Another Paper
+
+**EngineeringSummary**
+
+Summary content using underscore-free format.
+
+---
+"""
+        summary = parser._extract_summary_from_section(section)
+        assert summary is not None
+        assert "underscore-free format" in summary

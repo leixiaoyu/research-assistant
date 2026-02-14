@@ -267,13 +267,13 @@ class ReportParser:
         Returns:
             Extracted summary or None.
         """
-        # Try main engineering summary pattern
-        match = self.ENGINEERING_SUMMARY_PATTERN.search(section)
+        # Try extraction result pattern first (more specific with confidence score)
+        match = self.EXTRACTION_RESULT_PATTERN.search(section)
         if match:
             return self._clean_summary(match.group(1))
 
-        # Try extraction result pattern
-        match = self.EXTRACTION_RESULT_PATTERN.search(section)
+        # Fall back to general engineering summary pattern
+        match = self.ENGINEERING_SUMMARY_PATTERN.search(section)
         if match:
             return self._clean_summary(match.group(1))
 

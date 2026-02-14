@@ -691,10 +691,9 @@ class ResearchPipeline:
             result.topics_processed += 1
         else:
             result.topics_failed += 1
-            if topic_result["error"]:
-                result.errors.append(
-                    {"topic": "unknown", "error": topic_result["error"]}
-                )
+            error_msg = topic_result.get("error", "Unknown error")
+            if error_msg:
+                result.errors.append({"topic": "unknown", "error": error_msg})
 
         result.papers_discovered += topic_result["papers_discovered"]
         result.papers_processed += topic_result["papers_processed"]

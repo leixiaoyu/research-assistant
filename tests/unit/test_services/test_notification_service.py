@@ -260,6 +260,39 @@ class TestSlackMessageBuilder:
         mention_block = blocks[0]
         assert "<!channel>" in mention_block["text"]["text"]
 
+    def test_build_pipeline_summary_with_errors(
+        self, builder: SlackMessageBuilder
+    ) -> None:
+        """Test pipeline summary with errors includes error section (Lines 81-82)."""
+        summary = PipelineSummary(
+            date="2025-01-23 09:00 UTC",
+            topics_processed=2,
+            topics_failed=1,
+            papers_discovered=30,
+            papers_processed=25,
+            errors=[
+                {"topic": "failed-topic", "error": "API rate limit exceeded"},
+            ],
+        )
+
+        payload = builder.build_pipeline_summary(summary)
+
+        assert "blocks" in payload
+        blocks = payload["blocks"]
+
+        # Find the errors section block
+        error_section_found = False
+        for block in blocks:
+            if block.get("type") == "section":
+                text = block.get("text", {}).get("text", "")
+                if ":rotating_light:" in text and "Errors" in text:
+                    error_section_found = True
+                    assert "failed-topic" in text
+                    assert "API rate limit exceeded" in text
+                    break
+
+        assert error_section_found, "Errors section not found in payload"
+
 
 class TestNotificationService:
     """Tests for NotificationService class."""

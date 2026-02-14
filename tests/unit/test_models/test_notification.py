@@ -195,6 +195,21 @@ class TestKeyLearning:
         with pytest.raises(ValidationError):
             KeyLearning(paper_title="test", topic="test", summary="")
 
+    def test_summary_non_string_input_rejected(self) -> None:
+        """Test non-string summary is rejected (covers line 138)."""
+        # Test with integer - validator passes through, Pydantic rejects
+        with pytest.raises(ValidationError):
+            KeyLearning(paper_title="test", topic="test", summary=123)  # type: ignore
+
+        # Test with None - validator passes through, Pydantic rejects
+        with pytest.raises(ValidationError):
+            KeyLearning(paper_title="test", topic="test", summary=None)  # type: ignore
+
+        # Test with list - validator passes through, Pydantic rejects
+        with pytest.raises(ValidationError):
+            # type: ignore
+            KeyLearning(paper_title="test", topic="test", summary=["a", "b"])
+
 
 class TestNotificationSettings:
     """Tests for NotificationSettings model."""

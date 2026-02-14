@@ -841,3 +841,70 @@ class TestMergeTopicResult:
         assert result.topics_failed == 1
         # Empty string is falsy, so no error should be added
         assert len(result.errors) == 0
+
+
+class TestResearchPipelinePhase38:
+    """Tests for Phase 3.8 registry integration."""
+
+    def test_extraction_service_initialized_with_registry(self):
+        """Verify ExtractionService accepts registry_service parameter."""
+        from src.services.extraction_service import ExtractionService
+        import inspect
+
+        # Check constructor signature includes registry_service
+        sig = inspect.signature(ExtractionService.__init__)
+        params = list(sig.parameters.keys())
+        assert "registry_service" in params
+
+    def test_research_pipeline_passes_registry_to_extraction(self):
+        """Verify ResearchPipeline._initialize_phase2_services passes registry."""
+        import ast
+
+        # Read the source file to check that registry_service is passed
+        source_file = Path("src/orchestration/research_pipeline.py")
+        source_code = source_file.read_text()
+
+        # Parse the AST to find the ExtractionService call
+        tree = ast.parse(source_code)
+
+        found_registry_arg = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                # Look for ExtractionService(...) call
+                if (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id == "ExtractionService"
+                ):
+                    for keyword in node.keywords:
+                        if keyword.arg == "registry_service":
+                            found_registry_arg = True
+                            break
+
+        assert found_registry_arg, (
+            "ExtractionService call in research_pipeline.py should include "
+            "registry_service parameter"
+        )
+
+    def test_run_extraction_accepts_topic_slug(self):
+        """Verify _run_extraction signature accepts topic_slug."""
+        import inspect
+
+        sig = inspect.signature(ResearchPipeline._run_extraction)
+        params = list(sig.parameters.keys())
+
+        # Should have topic_slug parameter
+        assert "topic_slug" in params
+
+    def test_process_papers_call_includes_topic_slug(self):
+        """Verify that process_papers is called with topic_slug."""
+        # This is a structural test - the actual call happens in _run_extraction
+        # which is tested via integration tests (pragma: no cover)
+        # Here we just verify the API contract exists
+        from src.services.extraction_service import ExtractionService
+        import inspect
+
+        sig = inspect.signature(ExtractionService.process_papers)
+        params = list(sig.parameters.keys())
+
+        # Should have topic_slug parameter
+        assert "topic_slug" in params

@@ -281,6 +281,7 @@ class ResearchPipeline:
             filter_service=filter_service,
             checkpoint_service=checkpoint_service,
             concurrency_config=self._config.settings.concurrency,
+            registry_service=self._registry_service,  # Phase 3.8
         )
 
         # Enhanced Markdown Generator
@@ -347,7 +348,7 @@ class ResearchPipeline:
                 and topic.extraction_targets
             ):
                 extracted_papers, summary_stats = await self._run_extraction(
-                    papers, topic, run_id
+                    papers, topic, run_id, catalog_topic.topic_slug  # Phase 3.8
                 )
                 if summary_stats:
                     topic_result["papers_with_extraction"] = summary_stats[
@@ -419,6 +420,7 @@ class ResearchPipeline:
         papers: List[PaperMetadata],
         topic: ResearchTopic,
         run_id: str,
+        topic_slug: str,  # Phase 3.8: For registry integration
     ) -> Tuple[Any, Optional[Dict[str, Any]]]:
         """Run Phase 2 extraction pipeline.
 
@@ -426,6 +428,7 @@ class ResearchPipeline:
             papers: Papers to process
             topic: Research topic
             run_id: Run identifier
+            topic_slug: Topic slug for registry affiliation (Phase 3.5/3.8)
 
         Returns:
             Tuple of (extracted_papers, summary_stats)
@@ -446,6 +449,7 @@ class ResearchPipeline:
             targets=topic.extraction_targets,
             run_id=run_id,
             query=topic.query,
+            topic_slug=topic_slug,  # Phase 3.8
         )
 
         summary_stats = self._extraction_service.get_extraction_summary(

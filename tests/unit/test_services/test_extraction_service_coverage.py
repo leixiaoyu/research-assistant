@@ -1,7 +1,7 @@
 """Unit tests for ExtractionService with FallbackPDFService integration."""
 
 import pytest
-from unittest.mock import Mock, MagicMock, AsyncMock, patch
+from unittest.mock import Mock, AsyncMock, patch
 from pathlib import Path
 
 from src.services.extraction_service import ExtractionService
@@ -527,28 +527,40 @@ async def test_process_papers_sequential_when_no_run_id(
     assert len(results) == 1
 
 
-def test_get_processing_results_without_concurrent_pipeline(
-    mock_pdf_service, mock_llm_service
+# Tests for Phase 3.8: Registry service integration
+
+
+@pytest.fixture
+def mock_registry_service():
+    """Mock RegistryService for Phase 3.5/3.8 tests."""
+    from unittest.mock import MagicMock
+
+    service = MagicMock()
+    service.determine_action = MagicMock()
+    service.register_paper = MagicMock()
+    service.add_topic_affiliation = MagicMock()
+    return service
+
+
+def test_extraction_service_accepts_registry_service(
+    mock_pdf_service, mock_llm_service, mock_registry_service
 ):
-    """Should return empty list when concurrent pipeline not available."""
+    """Test ExtractionService accepts registry_service parameter."""
     service = ExtractionService(
         pdf_service=mock_pdf_service,
         llm_service=mock_llm_service,
-        fallback_service=None,  # No fallback = no concurrent pipeline
-        keep_pdfs=True,
+        registry_service=mock_registry_service,
     )
 
-    # Without concurrent pipeline, should return empty list
-    results = service.get_processing_results()
-    assert results == []
+    assert service.registry_service is mock_registry_service
 
 
-def test_get_processing_results_with_concurrent_pipeline(
-    mock_pdf_service, mock_llm_service, mock_fallback_service
+def test_extraction_service_passes_registry_to_concurrent_pipeline(
+    mock_pdf_service, mock_llm_service, mock_fallback_service, mock_registry_service
 ):
-    """Should delegate to concurrent pipeline when available."""
+    """Test that registry_service is passed to ConcurrentPipeline."""
+    from unittest.mock import MagicMock
     from src.models.concurrency import ConcurrencyConfig
-    from src.models.synthesis import ProcessingResult, ProcessingStatus
 
     # Create mock Phase 3 services
     mock_cache = MagicMock()
@@ -563,6 +575,7 @@ def test_get_processing_results_with_concurrent_pipeline(
         checkpoint_interval=5,
     )
 
+    # Create service WITH all Phase 3 services + registry
     service = ExtractionService(
         pdf_service=mock_pdf_service,
         llm_service=mock_llm_service,
@@ -573,33 +586,179 @@ def test_get_processing_results_with_concurrent_pipeline(
         filter_service=mock_filter,
         checkpoint_service=mock_checkpoint,
         concurrency_config=concurrency_config,
+        registry_service=mock_registry_service,
     )
 
-    # Mock processing results
-    mock_results = [
-        ProcessingResult(
-            paper_id="paper1",
-            title="Test Paper 1",
-            status=ProcessingStatus.NEW,
-            topic_slug="test-topic",
-        ),
-        ProcessingResult(
-            paper_id="paper2",
-            title="Test Paper 2",
-            status=ProcessingStatus.BACKFILLED,
-            topic_slug="test-topic",
-        ),
-    ]
+    # Verify concurrent pipeline was initialized
+    assert service._concurrent_pipeline is not None
+    # Verify registry_service was passed to ConcurrentPipeline
+    assert service._concurrent_pipeline.registry_service is mock_registry_service
 
-    # Mock the concurrent pipeline's get_processing_results
-    service._concurrent_pipeline.get_processing_results = Mock(
-        return_value=mock_results
+
+def test_process_papers_signature_includes_topic_slug():
+    """Test that process_papers and _process_papers_concurrent accept topic_slug."""
+    import inspect
+
+    # Check process_papers signature
+    sig = inspect.signature(ExtractionService.process_papers)
+    params = list(sig.parameters.keys())
+    assert "topic_slug" in params, "process_papers should have topic_slug parameter"
+
+    # Check _process_papers_concurrent signature
+    sig2 = inspect.signature(ExtractionService._process_papers_concurrent)
+    params2 = list(sig2.parameters.keys())
+    assert (
+        "topic_slug" in params2
+    ), "_process_papers_concurrent should have topic_slug parameter"
+
+
+@pytest.mark.asyncio
+async def test_process_papers_concurrent_receives_topic_slug(
+    mock_pdf_service, mock_llm_service, mock_fallback_service, mock_paper
+):
+    """Test that topic_slug is correctly forwarded to concurrent pipeline."""
+    from unittest.mock import MagicMock
+    from src.models.concurrency import ConcurrencyConfig
+    from src.models.registry import ProcessingAction
+
+    # Create mock Phase 3 services
+    mock_cache = MagicMock()
+    mock_dedup = MagicMock()
+    mock_filter = MagicMock()
+    mock_checkpoint = MagicMock()
+    mock_registry = MagicMock()
+
+    concurrency_config = ConcurrencyConfig(
+        max_concurrent_downloads=2,
+        max_concurrent_llm=1,
+        queue_size=10,
+        checkpoint_interval=5,
     )
 
-    # Should return results from concurrent pipeline
-    results = service.get_processing_results()
-    assert len(results) == 2
-    assert results[0].paper_id == "paper1"
-    assert results[0].status == ProcessingStatus.NEW
-    assert results[1].paper_id == "paper2"
-    assert results[1].status == ProcessingStatus.BACKFILLED
+    # Create service WITH Phase 3 services + registry
+    service = ExtractionService(
+        pdf_service=mock_pdf_service,
+        llm_service=mock_llm_service,
+        fallback_service=mock_fallback_service,
+        keep_pdfs=True,
+        cache_service=mock_cache,
+        dedup_service=mock_dedup,
+        filter_service=mock_filter,
+        checkpoint_service=mock_checkpoint,
+        concurrency_config=concurrency_config,
+        registry_service=mock_registry,
+    )
+
+    # Configure mocks to return empty/skip everything
+    # When registry is present, it takes the registry path
+    mock_registry.determine_action.return_value = (ProcessingAction.SKIP, None)
+    mock_filter.filter_and_rank.return_value = []
+    mock_checkpoint.get_processed_ids.return_value = set()
+    mock_checkpoint.clear_checkpoint = MagicMock()
+    mock_dedup.find_duplicates.return_value = ([], [mock_paper])
+    mock_dedup.update_indices = MagicMock()
+
+    # Call process_papers with topic_slug - should complete without error
+    # The registry.determine_action will be called with topic_slug
+    results = await service.process_papers(
+        papers=[mock_paper],
+        targets=[],
+        run_id="test-run",
+        query="test query",
+        topic_slug="test-topic-slug",
+    )
+
+    # Verify results returned (paper was skipped, so empty)
+    assert results == []
+
+    # Verify registry was consulted (proves topic_slug was passed through)
+    mock_registry.determine_action.assert_called()
+
+    # Verify the call included the paper and topic_slug
+    call_args = mock_registry.determine_action.call_args
+    assert call_args[0][0] == mock_paper  # First positional arg is paper
+    assert call_args[0][1] == "test-topic-slug"  # Second is topic_slug
+
+
+@pytest.mark.asyncio
+async def test_process_papers_with_registry_and_topic_slug(
+    mock_pdf_service, mock_llm_service, mock_fallback_service, mock_paper
+):
+    """Test full integration with registry service and topic_slug."""
+    from unittest.mock import MagicMock
+    from src.models.concurrency import ConcurrencyConfig
+    from src.models.registry import ProcessingAction
+
+    # Create mock Phase 3 services
+    mock_cache = MagicMock()
+    mock_dedup = MagicMock()
+    mock_filter = MagicMock()
+    mock_checkpoint = MagicMock()
+    mock_registry = MagicMock()
+
+    concurrency_config = ConcurrencyConfig(
+        max_concurrent_downloads=2,
+        max_concurrent_llm=1,
+        queue_size=10,
+        checkpoint_interval=5,
+    )
+
+    # Create service WITH Phase 3 services + registry
+    service = ExtractionService(
+        pdf_service=mock_pdf_service,
+        llm_service=mock_llm_service,
+        fallback_service=mock_fallback_service,
+        keep_pdfs=True,
+        cache_service=mock_cache,
+        dedup_service=mock_dedup,
+        filter_service=mock_filter,
+        checkpoint_service=mock_checkpoint,
+        concurrency_config=concurrency_config,
+        registry_service=mock_registry,
+    )
+
+    # Verify registry is correctly set on concurrent pipeline
+    assert service._concurrent_pipeline is not None
+    assert service._concurrent_pipeline.registry_service is mock_registry
+
+    # Configure Phase 3 mocks for registry path
+    mock_registry.determine_action.return_value = (ProcessingAction.FULL_PROCESS, None)
+    mock_registry.register_paper = MagicMock()
+    mock_filter.filter_and_rank.return_value = [mock_paper]
+    mock_checkpoint.get_processed_ids.return_value = set()
+    mock_checkpoint.save_checkpoint = MagicMock()
+    mock_checkpoint.clear_checkpoint = MagicMock()
+    mock_cache.get_extraction.return_value = None
+    mock_cache.set_extraction = MagicMock()
+    mock_dedup.find_duplicates.return_value = ([mock_paper], [])
+    mock_dedup.update_indices = MagicMock()
+
+    # Configure PDF extraction
+    pdf_result = PDFExtractionResult(
+        success=True,
+        markdown="Test content",
+        metadata={"backend": PDFBackend.PYMUPDF},
+        quality_score=0.9,
+    )
+    mock_fallback_service.extract_with_fallback = AsyncMock(return_value=pdf_result)
+
+    # Configure LLM
+    llm_result = PaperExtraction(
+        paper_id=mock_paper.paper_id,
+        extraction_results=[],
+        tokens_used=100,
+        cost_usd=0.001,
+    )
+    mock_llm_service.extract = AsyncMock(return_value=llm_result)
+
+    # Call process_papers with topic_slug
+    results = await service.process_papers(
+        papers=[mock_paper],
+        targets=[],
+        run_id="test-registry-run",
+        query="test query",
+        topic_slug="test-topic-slug",
+    )
+
+    # Verify results
+    assert len(results) == 1

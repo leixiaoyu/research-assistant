@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 from src.utils.security import InputValidation
 from src.models.extraction import ExtractionTarget
 from src.models.concurrency import ConcurrencyConfig
+from src.models.notification import NotificationSettings
 
 
 class TimeframeType(str, Enum):
@@ -287,6 +288,11 @@ class GlobalSettings(BaseModel):
     provider_selection: ProviderSelectionConfig = Field(
         default_factory=lambda: ProviderSelectionConfig(),
         description="Provider selection settings (Phase 3.2)",
+    )
+    # Phase 3.7: Notification settings
+    notification_settings: NotificationSettings = Field(
+        default_factory=lambda: NotificationSettings(),
+        description="Notification settings (Phase 3.7)",
     )
 
 

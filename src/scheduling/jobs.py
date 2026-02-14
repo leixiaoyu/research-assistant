@@ -15,10 +15,11 @@ Usage:
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import structlog
 
 from src.observability.context import set_correlation_id, clear_correlation_id
+from src.models.notification import KeyLearning
 
 logger = structlog.get_logger()
 
@@ -153,17 +154,23 @@ class DailyResearchJob(BaseJob):
         2. Extraction - Download PDFs and extract content via LLM
         3. Report Generation - Generate Obsidian-ready markdown
         4. Catalog Update - Track run history
+        5. Notifications - Send Slack notification (Phase 3.7)
 
         Returns:
             Dictionary with run results including output files
         """
         from src.orchestration.research_pipeline import ResearchPipeline
+        from src.services.config_manager import ConfigManager
 
         logger.info(
             "daily_research_starting",
             config_path=str(self.config_path),
             phase2_enabled=self.enable_phase2,
         )
+
+        # Load config for notification settings
+        config_manager = ConfigManager(config_path=str(self.config_path))
+        config = config_manager.load_config()
 
         # Use shared ResearchPipeline for full feature parity with CLI
         pipeline = ResearchPipeline(
@@ -185,7 +192,72 @@ class DailyResearchJob(BaseJob):
             errors=len(result.errors),
         )
 
+        # Phase 3.7: Send notifications (fail-safe - never breaks pipeline)
+        await self._send_notifications(result, config)
+
         return result.to_dict()
+
+    async def _send_notifications(
+        self,
+        result: Any,
+        config: Any,
+    ) -> None:
+        """Send pipeline notifications (Phase 3.7).
+
+        Notifications are fail-safe - errors are logged but never raised.
+
+        Args:
+            result: PipelineResult from pipeline execution.
+            config: ResearchConfig with notification settings.
+        """
+        try:
+            from src.services.notification_service import NotificationService
+            from src.services.report_parser import ReportParser
+
+            notification_settings = config.settings.notification_settings
+
+            # Skip if notifications disabled
+            if not notification_settings.slack.enabled:
+                logger.debug("notifications_disabled")
+                return
+
+            # Extract key learnings from output files
+            learnings: List[KeyLearning] = []
+            if notification_settings.slack.include_key_learnings:
+                parser = ReportParser()
+                learnings = parser.extract_key_learnings(
+                    output_files=result.output_files,
+                    max_per_topic=notification_settings.slack.max_learnings_per_topic,
+                )
+
+            # Create notification service and send
+            service = NotificationService(notification_settings)
+            summary = service.create_summary_from_result(
+                result=result.to_dict(),
+                key_learnings=learnings,
+            )
+
+            notification_result = await service.send_pipeline_summary(summary)
+
+            if notification_result.success:
+                logger.info(
+                    "notification_sent",
+                    provider=notification_result.provider,
+                )
+            else:
+                logger.warning(
+                    "notification_failed",
+                    provider=notification_result.provider,
+                    error=notification_result.error,
+                )
+
+        except Exception as e:
+            # Notifications should never break the pipeline
+            logger.error(
+                "notification_error",
+                error=str(e),
+                exc_info=True,
+            )
 
 
 class CacheCleanupJob(BaseJob):

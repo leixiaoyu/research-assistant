@@ -114,13 +114,27 @@ class TestDailyResearchJob:
     async def test_run_with_mock_services(self):
         """Should run research pipeline with mocked services via ResearchPipeline."""
         from src.orchestration.research_pipeline import PipelineResult
+        from src.models.notification import NotificationSettings
 
         job = DailyResearchJob()
 
-        # Mock ResearchPipeline
-        with patch(
-            "src.orchestration.research_pipeline.ResearchPipeline"
-        ) as mock_pipeline_class:
+        # Mock ConfigManager to return valid config
+        mock_config = MagicMock()
+        mock_config.settings.notification_settings = NotificationSettings()
+
+        # Mock ResearchPipeline and ConfigManager
+        with (
+            patch(
+                "src.services.config_manager.ConfigManager"
+            ) as mock_config_manager_class,
+            patch(
+                "src.orchestration.research_pipeline.ResearchPipeline"
+            ) as mock_pipeline_class,
+        ):
+            mock_config_manager = MagicMock()
+            mock_config_manager.load_config.return_value = mock_config
+            mock_config_manager_class.return_value = mock_config_manager
+
             mock_result = PipelineResult()
             mock_result.topics_processed = 1
             mock_result.papers_discovered = 5
@@ -148,13 +162,27 @@ class TestDailyResearchJobErrors:
     async def test_run_handles_topic_search_error(self):
         """Should handle errors when topic search fails via ResearchPipeline."""
         from src.orchestration.research_pipeline import PipelineResult
+        from src.models.notification import NotificationSettings
 
         job = DailyResearchJob()
 
-        # Mock ResearchPipeline to return error result
-        with patch(
-            "src.orchestration.research_pipeline.ResearchPipeline"
-        ) as mock_pipeline_class:
+        # Mock ConfigManager to return valid config
+        mock_config = MagicMock()
+        mock_config.settings.notification_settings = NotificationSettings()
+
+        # Mock ResearchPipeline and ConfigManager to return error result
+        with (
+            patch(
+                "src.services.config_manager.ConfigManager"
+            ) as mock_config_manager_class,
+            patch(
+                "src.orchestration.research_pipeline.ResearchPipeline"
+            ) as mock_pipeline_class,
+        ):
+            mock_config_manager = MagicMock()
+            mock_config_manager.load_config.return_value = mock_config
+            mock_config_manager_class.return_value = mock_config_manager
+
             mock_result = PipelineResult()
             mock_result.topics_processed = 0
             mock_result.topics_failed = 1
@@ -169,6 +197,177 @@ class TestDailyResearchJobErrors:
         # Should have error recorded
         assert len(result["errors"]) > 0
         assert result["errors"][0]["error"] == "Search failed"
+
+
+class TestDailyResearchJobNotifications:
+    """Tests for DailyResearchJob notification handling (Phase 3.7)."""
+
+    @pytest.mark.asyncio
+    async def test_run_sends_notifications_when_enabled(self):
+        """Should send notifications when Slack is enabled."""
+        from src.orchestration.research_pipeline import PipelineResult
+        from src.models.notification import NotificationSettings, SlackConfig
+
+        job = DailyResearchJob()
+
+        # Mock config with notifications enabled
+        mock_config = MagicMock()
+        mock_config.settings.notification_settings = NotificationSettings(
+            slack=SlackConfig(
+                enabled=True,
+                webhook_url="https://hooks.slack.com/services/test",
+            )
+        )
+
+        with (
+            patch(
+                "src.services.config_manager.ConfigManager"
+            ) as mock_config_manager_class,
+            patch(
+                "src.orchestration.research_pipeline.ResearchPipeline"
+            ) as mock_pipeline_class,
+            patch(
+                "src.services.notification_service.NotificationService"
+            ) as mock_notification_class,
+            patch("src.services.report_parser.ReportParser") as mock_parser_class,
+        ):
+            mock_config_manager = MagicMock()
+            mock_config_manager.load_config.return_value = mock_config
+            mock_config_manager_class.return_value = mock_config_manager
+
+            mock_result = PipelineResult()
+            mock_result.topics_processed = 1
+            mock_result.output_files = ["/tmp/output.md"]
+            mock_result.errors = []
+
+            mock_pipeline = MagicMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_result)
+            mock_pipeline_class.return_value = mock_pipeline
+
+            # Mock parser
+            mock_parser = MagicMock()
+            mock_parser.extract_key_learnings.return_value = []
+            mock_parser_class.return_value = mock_parser
+
+            # Mock notification service
+            mock_notification = MagicMock()
+            mock_notification.create_summary_from_result.return_value = MagicMock()
+            mock_notification.send_pipeline_summary = AsyncMock(
+                return_value=MagicMock(success=True, provider="slack")
+            )
+            mock_notification_class.return_value = mock_notification
+
+            result = await job.run()
+
+            # Verify notification was sent
+            mock_notification.send_pipeline_summary.assert_called_once()
+            assert result["topics_processed"] == 1
+
+    @pytest.mark.asyncio
+    async def test_run_logs_notification_failure(self):
+        """Should log warning when notification fails."""
+        from src.orchestration.research_pipeline import PipelineResult
+        from src.models.notification import NotificationSettings, SlackConfig
+
+        job = DailyResearchJob()
+
+        mock_config = MagicMock()
+        mock_config.settings.notification_settings = NotificationSettings(
+            slack=SlackConfig(
+                enabled=True,
+                webhook_url="https://hooks.slack.com/services/test",
+            )
+        )
+
+        with (
+            patch(
+                "src.services.config_manager.ConfigManager"
+            ) as mock_config_manager_class,
+            patch(
+                "src.orchestration.research_pipeline.ResearchPipeline"
+            ) as mock_pipeline_class,
+            patch(
+                "src.services.notification_service.NotificationService"
+            ) as mock_notification_class,
+            patch("src.services.report_parser.ReportParser") as mock_parser_class,
+        ):
+            mock_config_manager = MagicMock()
+            mock_config_manager.load_config.return_value = mock_config
+            mock_config_manager_class.return_value = mock_config_manager
+
+            mock_result = PipelineResult()
+            mock_result.topics_processed = 1
+            mock_result.output_files = []
+            mock_result.errors = []
+
+            mock_pipeline = MagicMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_result)
+            mock_pipeline_class.return_value = mock_pipeline
+
+            mock_parser = MagicMock()
+            mock_parser.extract_key_learnings.return_value = []
+            mock_parser_class.return_value = mock_parser
+
+            # Mock notification service to return failure
+            mock_notification = MagicMock()
+            mock_notification.create_summary_from_result.return_value = MagicMock()
+            mock_notification.send_pipeline_summary = AsyncMock(
+                return_value=MagicMock(
+                    success=False, provider="slack", error="HTTP 500"
+                )
+            )
+            mock_notification_class.return_value = mock_notification
+
+            # Should not raise, just log warning
+            result = await job.run()
+            assert result["topics_processed"] == 1
+
+    @pytest.mark.asyncio
+    async def test_run_handles_notification_exception(self):
+        """Should handle exceptions in notification sending gracefully."""
+        from src.orchestration.research_pipeline import PipelineResult
+        from src.models.notification import NotificationSettings, SlackConfig
+
+        job = DailyResearchJob()
+
+        mock_config = MagicMock()
+        mock_config.settings.notification_settings = NotificationSettings(
+            slack=SlackConfig(
+                enabled=True,
+                webhook_url="https://hooks.slack.com/services/test",
+            )
+        )
+
+        with (
+            patch(
+                "src.services.config_manager.ConfigManager"
+            ) as mock_config_manager_class,
+            patch(
+                "src.orchestration.research_pipeline.ResearchPipeline"
+            ) as mock_pipeline_class,
+            patch(
+                "src.services.notification_service.NotificationService"
+            ) as mock_notification_class,
+        ):
+            mock_config_manager = MagicMock()
+            mock_config_manager.load_config.return_value = mock_config
+            mock_config_manager_class.return_value = mock_config_manager
+
+            mock_result = PipelineResult()
+            mock_result.topics_processed = 1
+            mock_result.output_files = []
+            mock_result.errors = []
+
+            mock_pipeline = MagicMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_result)
+            mock_pipeline_class.return_value = mock_pipeline
+
+            # Mock notification service to raise exception
+            mock_notification_class.side_effect = RuntimeError("Unexpected error")
+
+            # Should not raise, should return result
+            result = await job.run()
+            assert result["topics_processed"] == 1
 
 
 class TestCacheCleanupJob:

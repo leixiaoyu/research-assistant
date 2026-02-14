@@ -1,7 +1,7 @@
 # Daily Automation Setup Guide
 
-**Version:** 1.0
-**Last Updated:** 2026-02-03
+**Version:** 1.1
+**Last Updated:** 2026-02-14
 
 This guide covers setup, management, and troubleshooting for the ARISP daily research automation on macOS.
 
@@ -151,6 +151,85 @@ cost_limits:
   max_total_spend_usd: 50.0   # Monthly limit
 ```
 
+### Slack Notifications (Phase 3.7)
+
+The pipeline can send Slack notifications after each run with status, statistics, and key learnings extracted from papers.
+
+#### Step 1: Create a Slack Webhook
+
+1. Go to [Slack Apps](https://api.slack.com/apps) and create a new app
+2. Enable **Incoming Webhooks** for your app
+3. Add a new webhook to your desired channel
+4. Copy the webhook URL (format: `https://hooks.slack.com/services/T.../B.../XXX...`)
+
+#### Step 2: Add Webhook to Environment
+
+Add to your `.env` file:
+
+```bash
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T00/B00/XXXXX
+```
+
+#### Step 3: Enable in Configuration
+
+Add `notification_settings` to your config file (e.g., `config/daily_german_mt.yaml`):
+
+```yaml
+notification_settings:
+  slack:
+    enabled: true
+    webhook_url: "${SLACK_WEBHOOK_URL}"  # Uses env variable
+    notify_on_success: true              # Send on successful runs
+    notify_on_failure: true              # Send on failed runs
+    notify_on_partial: true              # Send on partial success
+    include_cost_summary: true           # Include LLM cost in message
+    include_key_learnings: true          # Include paper summaries
+    max_learnings_per_topic: 2           # Learnings shown per topic
+    mention_on_failure: "<!channel>"     # Mention @channel on failure
+    timeout_seconds: 10.0                # HTTP timeout
+```
+
+#### Notification Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `enabled` | `false` | Enable/disable Slack notifications |
+| `webhook_url` | `None` | Slack webhook URL (use env var) |
+| `channel_override` | `None` | Override default channel (e.g., `#alerts`) |
+| `notify_on_success` | `true` | Send notification on success |
+| `notify_on_failure` | `true` | Send notification on failure |
+| `notify_on_partial` | `true` | Send notification on partial success |
+| `include_cost_summary` | `true` | Include LLM token/cost stats |
+| `include_key_learnings` | `true` | Include extracted paper summaries |
+| `max_learnings_per_topic` | `2` | Max learnings per topic (1-10) |
+| `mention_on_failure` | `None` | Slack mention on failure (`<!channel>`, `<!here>`, `<@USER_ID>`) |
+| `timeout_seconds` | `10.0` | HTTP request timeout (1-60 seconds) |
+
+#### Example Slack Message
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ ✅ Daily Research Pipeline Completed Successfully           │
+├─────────────────────────────────────────────────────────────┤
+│ *Date:* 2026-02-14 09:00 UTC                                │
+│ *Topics:* 3 processed, 0 failed                             │
+│ *Papers:* 45 discovered, 38 processed                       │
+│ *Extractions:* 32 with LLM extraction                       │
+├─────────────────────────────────────────────────────────────┤
+│ 💰 *LLM Cost:* $0.0234 (12,500 tokens)                      │
+├─────────────────────────────────────────────────────────────┤
+│ 📚 *Key Learnings*                                          │
+│ *german-mt-advances*                                        │
+│ > _"New approach achieves 2.3 BLEU improvement..."_         │
+├─────────────────────────────────────────────────────────────┤
+│ ARISP Pipeline | 2026-02-14                                 │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### Fail-Safe Behavior
+
+Notifications are **fail-safe**: if Slack is unreachable or the webhook fails, the pipeline continues normally. Errors are logged but never break the pipeline.
+
 ---
 
 ## Management Commands
@@ -282,6 +361,38 @@ launchctl load ~/Library/LaunchAgents/com.arisp.daily-research.plist
      max_daily_spend_usd: 1.0
    ```
 
+### Slack Notifications Not Working
+
+**Symptom:** Pipeline runs but no Slack messages appear
+
+**Check:**
+1. Verify webhook URL is set:
+   ```bash
+   grep SLACK_WEBHOOK_URL .env
+   ```
+2. Verify notifications are enabled in config:
+   ```bash
+   grep -A5 "notification_settings:" config/daily_german_mt.yaml
+   ```
+3. Check logs for notification errors:
+   ```bash
+   grep -i "slack\|notification" logs/daily_run_$(date +%Y-%m-%d).log
+   ```
+4. Test webhook manually:
+   ```bash
+   curl -X POST -H 'Content-type: application/json' \
+     --data '{"text":"Test message"}' \
+     "$SLACK_WEBHOOK_URL"
+   ```
+
+**Common Issues:**
+- Webhook URL contains `${SLACK_WEBHOOK_URL}` placeholder (not resolved)
+- `enabled: false` in config
+- Webhook URL expired or revoked
+- Firewall blocking outbound HTTPS
+
+**Note:** Slack errors are logged but never break the pipeline (fail-safe design).
+
 ---
 
 ## Uninstallation
@@ -351,6 +462,14 @@ rm scripts/com.arisp.daily-research.plist
 ### Q: What's the expected cost per day?
 
 **A:** With default settings (5 topics × 20 papers × engineering_summary only): ~$0.10-0.50/day using Gemini Flash.
+
+### Q: How do I set up Slack notifications?
+
+**A:** Add `SLACK_WEBHOOK_URL` to your `.env` file, then enable `notification_settings.slack.enabled: true` in your config. See the [Slack Notifications](#slack-notifications-phase-37) section for full setup instructions.
+
+### Q: Slack notifications aren't appearing, but the pipeline runs fine?
+
+**A:** This is expected fail-safe behavior. Check logs for notification errors: `grep -i slack logs/daily_run_*.log`. Common causes: webhook URL not set, `enabled: false`, or network issues.
 
 ---
 

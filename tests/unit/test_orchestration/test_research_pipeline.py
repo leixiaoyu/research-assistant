@@ -675,7 +675,11 @@ settings:
                     await pipeline._initialize_services()
 
                     # Mock the extraction service to trigger lines 376-385
-                    pipeline._extraction_service = Mock()
+                    # Must return empty list from get_processing_results to fall
+                    # back to default behavior
+                    mock_extraction_service = Mock()
+                    mock_extraction_service.get_processing_results.return_value = []
+                    pipeline._extraction_service = mock_extraction_service
 
                     # Create output directory
                     topic_dir = output_dir / "test-query"

@@ -63,6 +63,33 @@ def test_research_topic_validation():
         )
 
 
+def test_research_topic_slug_property():
+    """Test ResearchTopic.slug property generates correct slugs (lines 151-153)."""
+    # Simple query
+    topic = ResearchTopic(
+        query="machine learning",
+        timeframe=TimeframeRecent(value="48h"),
+    )
+    slug = topic.slug
+    assert slug is not None
+    assert isinstance(slug, str)
+    assert len(slug) > 0
+    # Slug should be lowercase with hyphens
+    assert slug == slug.lower()
+    assert " " not in slug
+
+    # Complex query with special characters
+    topic2 = ResearchTopic(
+        query="Tree of Thoughts AND neural translation",
+        timeframe=TimeframeRecent(value="7d"),
+    )
+    slug2 = topic2.slug
+    assert slug2 is not None
+    assert isinstance(slug2, str)
+    # Different queries should produce different slugs
+    assert slug != slug2
+
+
 def test_paper_metadata():
     # Valid
     paper = PaperMetadata(

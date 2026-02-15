@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from src.services.filter_service import FilterService
     from src.services.checkpoint_service import CheckpointService
     from src.models.concurrency import ConcurrencyConfig
+    from src.models.synthesis import ProcessingResult
     from src.orchestration.concurrent_pipeline import ConcurrentPipeline  # noqa: F401
 
 logger = structlog.get_logger()
@@ -472,3 +473,17 @@ Extraction is based on abstract only.
         )
 
         return results
+
+    def get_processing_results(self) -> List["ProcessingResult"]:
+        """Get processing results from concurrent pipeline for Phase 3.6 synthesis.
+
+        Returns list of ProcessingResult with proper statuses (NEW, BACKFILLED,
+        SKIPPED, MAPPED) as determined by the RegistryService during processing.
+
+        Returns:
+            List of ProcessingResult from the concurrent pipeline, or empty list
+            if concurrent processing was not used.
+        """
+        if self._concurrent_pipeline is not None:
+            return self._concurrent_pipeline.get_processing_results()
+        return []

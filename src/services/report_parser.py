@@ -53,9 +53,11 @@ class ReportParser:
     )
 
     # Pattern for NEW papers section
+    # Note: Uses ^## with MULTILINE to match only ## at line start,
+    # not ## inside ### headers
     NEW_PAPERS_SECTION = re.compile(
-        r"##\s+(?::new:|🆕)\s*New Papers?\s*\n(.*?)(?=##\s|\Z)",
-        re.IGNORECASE | re.DOTALL,
+        r"^##\s+(?::new:|🆕)\s*New Papers?\s*\n(.*?)(?=^##[^#]|\Z)",
+        re.IGNORECASE | re.DOTALL | re.MULTILINE,
     )
 
     # Pattern for individual new paper entries

@@ -629,7 +629,11 @@ class ResearchPipeline:
         topic_slug: str,
         extracted_papers: Optional[Any] = None,
     ) -> List[ProcessingResult]:
-        """Generate processing results for synthesis.
+        """Get processing results for synthesis from the extraction service.
+
+        Retrieves ProcessingResult objects with proper statuses (NEW, BACKFILLED,
+        SKIPPED, MAPPED) as determined by the RegistryService during concurrent
+        processing. Falls back to basic results only for Phase 1 mode.
 
         Args:
             papers: All discovered papers.
@@ -641,15 +645,23 @@ class ResearchPipeline:
         """
         from src.models.synthesis import ProcessingResult, ProcessingStatus
 
+        # Phase 2/3: Get processing results from extraction service
+        # These have proper statuses from RegistryService (NEW, BACKFILLED, etc.)
+        if self._extraction_service is not None:
+            pipeline_results = self._extraction_service.get_processing_results()
+            # Filter to results for this topic
+            topic_results = [r for r in pipeline_results if r.topic_slug == topic_slug]
+            if topic_results:
+                return topic_results
+
+        # Fallback: Phase 1 mode or extraction service not available
+        # Create basic results with NEW status
         results: List[ProcessingResult] = []
 
-        # If we have extraction results, use them
         if extracted_papers:
+            # Phase 2 without concurrent pipeline - use extracted papers
             for ep in extracted_papers:
-                status = ProcessingStatus.NEW
                 quality_score = 0.0
-
-                # Extract quality score if available
                 if hasattr(ep, "extraction") and ep.extraction:
                     quality_score = getattr(ep.extraction, "quality_score", 0.0)
 
@@ -657,7 +669,7 @@ class ResearchPipeline:
                     ProcessingResult(
                         paper_id=ep.metadata.paper_id,
                         title=ep.metadata.title or "Untitled",
-                        status=status,
+                        status=ProcessingStatus.NEW,
                         quality_score=quality_score,
                         pdf_available=getattr(ep, "pdf_available", False),
                         extraction_success=ep.extraction is not None,

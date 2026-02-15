@@ -164,3 +164,17 @@ settings:
     ttl_api_hours: 24             # 24h for daily runs
     ttl_pdf_days: 7
     ttl_extraction_days: 30
+
+  # Notification Settings (Phase 3.7)
+  # Send Slack notifications after each daily run
+  notification_settings:
+    slack:
+      enabled: true               # Enable for daily automated runs
+      webhook_url: "${SLACK_WEBHOOK_URL}"
+      notify_on_success: true
+      notify_on_failure: true
+      notify_on_partial: true
+      include_cost_summary: true
+      include_key_learnings: true
+      max_learnings_per_topic: 2
+      mention_on_failure: "<!channel>"  # Alert team on failures

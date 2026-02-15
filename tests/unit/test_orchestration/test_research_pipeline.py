@@ -388,6 +388,323 @@ settings:
             Path(f.name).unlink()
 
 
+class TestRunSynthesis:
+    """Tests for _run_synthesis method (Phase 3.6)."""
+
+    @pytest.mark.asyncio
+    async def test_run_synthesis_services_not_initialized(self):
+        """Should skip synthesis when services are not initialized (Lines 581-583)."""
+        pipeline = ResearchPipeline()
+        # Services not initialized - _synthesis_engine and _delta_generator are None
+        pipeline._synthesis_engine = None
+        pipeline._delta_generator = None
+
+        # Should not raise, just log warning and return
+        await pipeline._run_synthesis()
+
+        # No errors should occur
+        assert pipeline._synthesis_engine is None
+
+    @pytest.mark.asyncio
+    async def test_run_synthesis_full_execution(self):
+        """Should execute synthesis for all topics (Lines 591-617)."""
+        pipeline = ResearchPipeline()
+
+        # Create mock synthesis engine
+        mock_stats = Mock()
+        mock_stats.total_papers = 5
+        mock_stats.average_quality = 0.75
+        mock_stats.synthesis_duration_ms = 100
+
+        mock_synthesis_engine = Mock()
+        mock_synthesis_engine.synthesize.return_value = mock_stats
+        pipeline._synthesis_engine = mock_synthesis_engine
+
+        # Create mock delta generator
+        mock_delta_generator = Mock()
+        mock_delta_generator.generate.return_value = Path("/output/topic/delta.md")
+        pipeline._delta_generator = mock_delta_generator
+
+        # Add processing results for a topic
+        from src.models.synthesis import ProcessingResult, ProcessingStatus
+
+        pipeline._topic_processing_results = {
+            "test-topic": [
+                ProcessingResult(
+                    paper_id="paper1",
+                    title="Test Paper",
+                    status=ProcessingStatus.NEW,
+                    topic_slug="test-topic",
+                )
+            ]
+        }
+
+        await pipeline._run_synthesis()
+
+        # Verify delta generator was called
+        mock_delta_generator.generate.assert_called_once()
+        # Verify synthesis engine was called
+        mock_synthesis_engine.synthesize.assert_called_once_with("test-topic")
+
+    @pytest.mark.asyncio
+    async def test_run_synthesis_handles_exception(self):
+        """Should handle synthesis exceptions gracefully (Lines 616-622)."""
+        pipeline = ResearchPipeline()
+
+        # Create mock that raises exception
+        mock_synthesis_engine = Mock()
+        mock_synthesis_engine.synthesize.side_effect = Exception("Synthesis failed")
+        pipeline._synthesis_engine = mock_synthesis_engine
+
+        mock_delta_generator = Mock()
+        mock_delta_generator.generate.return_value = None
+        pipeline._delta_generator = mock_delta_generator
+
+        from src.models.synthesis import ProcessingResult, ProcessingStatus
+
+        pipeline._topic_processing_results = {
+            "failing-topic": [
+                ProcessingResult(
+                    paper_id="paper1",
+                    title="Test Paper",
+                    status=ProcessingStatus.NEW,
+                    topic_slug="failing-topic",
+                )
+            ]
+        }
+
+        # Should not raise, exception is caught and logged
+        await pipeline._run_synthesis()
+
+    @pytest.mark.asyncio
+    async def test_run_synthesis_delta_path_none(self):
+        """Should handle when delta generator returns None."""
+        pipeline = ResearchPipeline()
+
+        mock_stats = Mock()
+        mock_stats.total_papers = 3
+        mock_stats.average_quality = 0.5
+        mock_stats.synthesis_duration_ms = 50
+
+        mock_synthesis_engine = Mock()
+        mock_synthesis_engine.synthesize.return_value = mock_stats
+        pipeline._synthesis_engine = mock_synthesis_engine
+
+        # Delta generator returns None (no delta generated)
+        mock_delta_generator = Mock()
+        mock_delta_generator.generate.return_value = None
+        pipeline._delta_generator = mock_delta_generator
+
+        from src.models.synthesis import ProcessingResult, ProcessingStatus
+
+        pipeline._topic_processing_results = {
+            "topic-no-delta": [
+                ProcessingResult(
+                    paper_id="paper1",
+                    title="Test Paper",
+                    status=ProcessingStatus.NEW,
+                    topic_slug="topic-no-delta",
+                )
+            ]
+        }
+
+        await pipeline._run_synthesis()
+
+        # Should still call synthesize even if no delta
+        mock_synthesis_engine.synthesize.assert_called_once()
+
+
+class TestGetProcessingResults:
+    """Tests for _get_processing_results method."""
+
+    def test_with_extracted_papers(self):
+        """Should create results from extracted papers (Lines 647-666)."""
+        pipeline = ResearchPipeline()
+
+        # Create mock extracted papers
+        mock_extraction = Mock()
+        mock_extraction.quality_score = 0.85
+
+        mock_metadata = Mock()
+        mock_metadata.paper_id = "paper123"
+        mock_metadata.title = "Test Paper Title"
+
+        mock_extracted_paper = Mock()
+        mock_extracted_paper.metadata = mock_metadata
+        mock_extracted_paper.extraction = mock_extraction
+        mock_extracted_paper.pdf_available = True
+
+        extracted_papers = [mock_extracted_paper]
+        papers = []  # Not used when extracted_papers is provided
+
+        results = pipeline._get_processing_results(
+            papers=papers,
+            topic_slug="test-topic",
+            extracted_papers=extracted_papers,
+        )
+
+        assert len(results) == 1
+        assert results[0].paper_id == "paper123"
+        assert results[0].title == "Test Paper Title"
+        assert results[0].quality_score == 0.85
+        assert results[0].pdf_available is True
+        assert results[0].extraction_success is True
+        assert results[0].topic_slug == "test-topic"
+
+    def test_with_extracted_papers_no_extraction(self):
+        """Should handle extracted papers without extraction result."""
+        pipeline = ResearchPipeline()
+
+        mock_metadata = Mock()
+        mock_metadata.paper_id = "paper456"
+        mock_metadata.title = "Paper Without Extraction"
+
+        mock_extracted_paper = Mock()
+        mock_extracted_paper.metadata = mock_metadata
+        mock_extracted_paper.extraction = None  # No extraction
+        mock_extracted_paper.pdf_available = False
+
+        extracted_papers = [mock_extracted_paper]
+
+        results = pipeline._get_processing_results(
+            papers=[],
+            topic_slug="test-topic",
+            extracted_papers=extracted_papers,
+        )
+
+        assert len(results) == 1
+        assert results[0].quality_score == 0.0  # Default when no extraction
+        assert results[0].extraction_success is False
+
+    def test_without_extracted_papers(self):
+        """Should create results from papers in Phase 1 mode (Lines 667-677)."""
+        pipeline = ResearchPipeline()
+
+        # Create mock papers (PaperMetadata)
+        mock_paper1 = Mock()
+        mock_paper1.paper_id = "paper1"
+        mock_paper1.title = "First Paper"
+
+        mock_paper2 = Mock()
+        mock_paper2.paper_id = "paper2"
+        mock_paper2.title = None  # Test Untitled fallback
+
+        papers = [mock_paper1, mock_paper2]
+
+        results = pipeline._get_processing_results(
+            papers=papers,
+            topic_slug="phase1-topic",
+            extracted_papers=None,  # Phase 1 mode
+        )
+
+        assert len(results) == 2
+        assert results[0].paper_id == "paper1"
+        assert results[0].title == "First Paper"
+        assert results[0].topic_slug == "phase1-topic"
+        assert results[1].paper_id == "paper2"
+        assert results[1].title == "Untitled"  # Fallback for None title
+
+    def test_empty_papers_list(self):
+        """Should return empty list when no papers provided."""
+        pipeline = ResearchPipeline()
+
+        results = pipeline._get_processing_results(
+            papers=[],
+            topic_slug="empty-topic",
+            extracted_papers=None,
+        )
+
+        assert results == []
+
+
+class TestProcessTopicWithSynthesis:
+    """Tests for _process_topic with synthesis enabled (Lines 376-385)."""
+
+    @pytest.mark.asyncio
+    async def test_process_topic_stores_synthesis_results(self):
+        """Should store processing results when synthesis enabled (Lines 378-383)."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.yaml"
+            output_dir = Path(temp_dir) / "output"
+            output_dir.mkdir()
+
+            config_content = f"""
+research_topics:
+  - query: "test query"
+    timeframe:
+      type: "recent"
+      value: "7d"
+
+settings:
+  max_papers_per_topic: 10
+  output_base_dir: "{output_dir}"
+  semantic_scholar_api_key: null
+"""
+            config_path.write_text(config_content)
+
+            # Create pipeline with synthesis enabled
+            pipeline = ResearchPipeline(
+                config_path=config_path,
+                enable_phase2=False,
+                enable_synthesis=True,
+            )
+
+            # Create mock paper
+            mock_paper = Mock()
+            mock_paper.title = "Test Paper"
+            mock_paper.paper_id = "123"
+            mock_paper.doi = None
+            mock_paper.abstract = "Abstract"
+            mock_paper.authors = []
+            mock_paper.publication_date = None
+            mock_paper.venue = None
+            mock_paper.open_access_pdf = None
+            mock_paper.citation_count = 0
+
+            with patch("src.services.discovery_service.DiscoveryService") as mock_ds:
+                mock_ds.return_value.search = AsyncMock(return_value=[mock_paper])
+
+                with patch("src.services.catalog_service.CatalogService") as mock_cs:
+                    mock_catalog_topic = Mock(topic_slug="test-query")
+                    mock_cs.return_value.get_or_create_topic.return_value = (
+                        mock_catalog_topic
+                    )
+                    mock_cs.return_value.add_run = Mock()
+
+                    # Initialize services
+                    await pipeline._initialize_services()
+
+                    # Mock the extraction service to trigger lines 376-385
+                    # Must return empty list from get_processing_results to fall
+                    # back to default behavior
+                    mock_extraction_service = Mock()
+                    mock_extraction_service.get_processing_results.return_value = []
+                    pipeline._extraction_service = mock_extraction_service
+
+                    # Create output directory
+                    topic_dir = output_dir / "test-query"
+                    topic_dir.mkdir(parents=True, exist_ok=True)
+
+                    with patch.object(
+                        pipeline._config_manager,
+                        "get_output_path",
+                        return_value=topic_dir,
+                    ):
+                        # Process the topic
+                        from src.models.config import ResearchTopic, TimeframeRecent
+
+                        topic = ResearchTopic(
+                            query="test query",
+                            timeframe=TimeframeRecent(type="recent", value="7d"),
+                        )
+                        result = await pipeline._process_topic(topic)
+
+            # Verify synthesis results were stored
+            assert result["success"] is True
+            assert "test-query" in pipeline._topic_processing_results
+            assert len(pipeline._topic_processing_results["test-query"]) == 1
+
+
 class TestMergeTopicResult:
     """Tests for _merge_topic_result method."""
 
@@ -478,3 +795,49 @@ class TestMergeTopicResult:
         assert result.total_tokens_used == 1500
         assert result.total_cost_usd == 0.75
         assert len(result.output_files) == 2
+
+    def test_merge_failure_missing_error_key(self):
+        """Should handle failure when error key is missing (no KeyError)."""
+        pipeline = ResearchPipeline()
+        result = PipelineResult()
+
+        # Topic result without 'error' key - should not raise KeyError
+        topic_result = {
+            "success": False,
+            "papers_discovered": 0,
+            "papers_processed": 0,
+            "papers_with_extraction": 0,
+            "tokens_used": 0,
+            "cost_usd": 0.0,
+            "output_file": None,
+            # Note: 'error' key intentionally missing
+        }
+
+        pipeline._merge_topic_result(result, topic_result)
+
+        assert result.topics_processed == 0
+        assert result.topics_failed == 1
+        assert len(result.errors) == 1
+        assert result.errors[0]["error"] == "Unknown error"
+
+    def test_merge_failure_empty_error(self):
+        """Should not add error entry when error is empty string."""
+        pipeline = ResearchPipeline()
+        result = PipelineResult()
+
+        topic_result = {
+            "success": False,
+            "papers_discovered": 0,
+            "papers_processed": 0,
+            "papers_with_extraction": 0,
+            "tokens_used": 0,
+            "cost_usd": 0.0,
+            "output_file": None,
+            "error": "",  # Empty error string
+        }
+
+        pipeline._merge_topic_result(result, topic_result)
+
+        assert result.topics_failed == 1
+        # Empty string is falsy, so no error should be added
+        assert len(result.errors) == 0

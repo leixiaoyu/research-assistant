@@ -1,7 +1,7 @@
 """Unit tests for ExtractionService with FallbackPDFService integration."""
 
 import pytest
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import Mock, MagicMock, AsyncMock, patch
 from pathlib import Path
 
 from src.services.extraction_service import ExtractionService
@@ -525,3 +525,81 @@ async def test_process_papers_sequential_when_no_run_id(
 
     # Should have processed the paper using sequential path
     assert len(results) == 1
+
+
+def test_get_processing_results_without_concurrent_pipeline(
+    mock_pdf_service, mock_llm_service
+):
+    """Should return empty list when concurrent pipeline not available."""
+    service = ExtractionService(
+        pdf_service=mock_pdf_service,
+        llm_service=mock_llm_service,
+        fallback_service=None,  # No fallback = no concurrent pipeline
+        keep_pdfs=True,
+    )
+
+    # Without concurrent pipeline, should return empty list
+    results = service.get_processing_results()
+    assert results == []
+
+
+def test_get_processing_results_with_concurrent_pipeline(
+    mock_pdf_service, mock_llm_service, mock_fallback_service
+):
+    """Should delegate to concurrent pipeline when available."""
+    from src.models.concurrency import ConcurrencyConfig
+    from src.models.synthesis import ProcessingResult, ProcessingStatus
+
+    # Create mock Phase 3 services
+    mock_cache = MagicMock()
+    mock_dedup = MagicMock()
+    mock_filter = MagicMock()
+    mock_checkpoint = MagicMock()
+
+    concurrency_config = ConcurrencyConfig(
+        max_concurrent_downloads=2,
+        max_concurrent_llm=1,
+        queue_size=10,
+        checkpoint_interval=5,
+    )
+
+    service = ExtractionService(
+        pdf_service=mock_pdf_service,
+        llm_service=mock_llm_service,
+        fallback_service=mock_fallback_service,
+        keep_pdfs=True,
+        cache_service=mock_cache,
+        dedup_service=mock_dedup,
+        filter_service=mock_filter,
+        checkpoint_service=mock_checkpoint,
+        concurrency_config=concurrency_config,
+    )
+
+    # Mock processing results
+    mock_results = [
+        ProcessingResult(
+            paper_id="paper1",
+            title="Test Paper 1",
+            status=ProcessingStatus.NEW,
+            topic_slug="test-topic",
+        ),
+        ProcessingResult(
+            paper_id="paper2",
+            title="Test Paper 2",
+            status=ProcessingStatus.BACKFILLED,
+            topic_slug="test-topic",
+        ),
+    ]
+
+    # Mock the concurrent pipeline's get_processing_results
+    service._concurrent_pipeline.get_processing_results = Mock(
+        return_value=mock_results
+    )
+
+    # Should return results from concurrent pipeline
+    results = service.get_processing_results()
+    assert len(results) == 2
+    assert results[0].paper_id == "paper1"
+    assert results[0].status == ProcessingStatus.NEW
+    assert results[1].paper_id == "paper2"
+    assert results[1].status == ProcessingStatus.BACKFILLED

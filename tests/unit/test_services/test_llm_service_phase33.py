@@ -251,14 +251,14 @@ class TestFallbackProviderInitialization:
         )
         limits = CostLimits()
 
-        with patch("google.generativeai.GenerativeModel"):
-            with patch("google.generativeai.configure"):
-                with patch("anthropic.AsyncAnthropic") as mock_anthropic:
-                    service = LLMService(config, limits)
+        mock_client = Mock()
+        with patch("google.genai.Client", return_value=mock_client):
+            with patch("anthropic.AsyncAnthropic") as mock_anthropic:
+                service = LLMService(config, limits)
 
-                    assert service.fallback_provider == "anthropic"
-                    assert service.fallback_client is not None
-                    mock_anthropic.assert_called_with(api_key="fallback-anthropic-key")
+                assert service.fallback_provider == "anthropic"
+                assert service.fallback_client is not None
+                mock_anthropic.assert_called_with(api_key="fallback-anthropic-key")
 
     def test_fallback_google_from_config_key(self):
         """Test fallback Google provider with config API key."""
@@ -276,12 +276,12 @@ class TestFallbackProviderInitialization:
         limits = CostLimits()
 
         with patch("anthropic.AsyncAnthropic"):
-            with patch("google.generativeai.GenerativeModel"):
-                with patch("google.generativeai.configure") as mock_configure:
-                    service = LLMService(config, limits)
+            mock_fallback_client = Mock()
+            with patch("google.genai.Client", return_value=mock_fallback_client) as mc:
+                service = LLMService(config, limits)
 
-                    assert service.fallback_provider == "google"
-                    mock_configure.assert_called_with(api_key="fallback-google-key")
+                assert service.fallback_provider == "google"
+                mc.assert_called_with(api_key="fallback-google-key")
 
     def test_fallback_from_environment(self):
         """Test fallback provider uses environment variable."""
@@ -299,13 +299,13 @@ class TestFallbackProviderInitialization:
         limits = CostLimits()
 
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "env-anthropic-key"}):
-            with patch("google.generativeai.GenerativeModel"):
-                with patch("google.generativeai.configure"):
-                    with patch("anthropic.AsyncAnthropic") as mock_anthropic:
-                        service = LLMService(config, limits)
+            mock_client = Mock()
+            with patch("google.genai.Client", return_value=mock_client):
+                with patch("anthropic.AsyncAnthropic") as mock_anthropic:
+                    service = LLMService(config, limits)
 
-                        assert service.fallback_provider == "anthropic"
-                        mock_anthropic.assert_called_with(api_key="env-anthropic-key")
+                    assert service.fallback_provider == "anthropic"
+                    mock_anthropic.assert_called_with(api_key="env-anthropic-key")
 
     def test_fallback_no_api_key_logs_warning(self):
         """Test fallback without API key logs warning."""
@@ -323,12 +323,12 @@ class TestFallbackProviderInitialization:
 
         # Clear environment
         with patch.dict(os.environ, {}, clear=True):
-            with patch("google.generativeai.GenerativeModel"):
-                with patch("google.generativeai.configure"):
-                    service = LLMService(config, limits)
+            mock_client = Mock()
+            with patch("google.genai.Client", return_value=mock_client):
+                service = LLMService(config, limits)
 
-                    # Fallback should not be initialized without API key
-                    assert service.fallback_client is None
+                # Fallback should not be initialized without API key
+                assert service.fallback_client is None
 
     def test_fallback_import_error_anthropic(self):
         """Test handling missing anthropic package for fallback."""
@@ -345,13 +345,13 @@ class TestFallbackProviderInitialization:
         )
         limits = CostLimits()
 
-        with patch("google.generativeai.GenerativeModel"):
-            with patch("google.generativeai.configure"):
-                with patch.dict("sys.modules", {"anthropic": None}):
-                    service = LLMService(config, limits)
+        mock_client = Mock()
+        with patch("google.genai.Client", return_value=mock_client):
+            with patch.dict("sys.modules", {"anthropic": None}):
+                service = LLMService(config, limits)
 
-                    # Should handle gracefully
-                    assert service.fallback_client is None
+                # Should handle gracefully
+                assert service.fallback_client is None
 
 
 class TestFallbackExecution:
@@ -374,9 +374,9 @@ class TestFallbackExecution:
         limits = CostLimits()
 
         with patch("anthropic.AsyncAnthropic"):
-            with patch("google.generativeai.GenerativeModel"):
-                with patch("google.generativeai.configure"):
-                    return LLMService(config, limits)
+            mock_client = Mock()
+            with patch("google.genai.Client", return_value=mock_client):
+                return LLMService(config, limits)
 
     @pytest.mark.asyncio
     async def test_fallback_activated_on_primary_failure(
@@ -557,15 +557,15 @@ class TestFallbackInitializationEdgeCases:
 
         with patch.dict(os.environ, {"GOOGLE_API_KEY": "env-google-key"}):
             with patch("anthropic.AsyncAnthropic"):
-                with patch("google.generativeai.GenerativeModel"):
-                    with patch("google.generativeai.configure") as mock_configure:
-                        service = LLMService(config, limits)
+                mock_client = Mock()
+                with patch("google.genai.Client", return_value=mock_client) as mc:
+                    service = LLMService(config, limits)
 
-                        assert service.fallback_provider == "google"
-                        mock_configure.assert_called_with(api_key="env-google-key")
+                    assert service.fallback_provider == "google"
+                    mc.assert_called_with(api_key="env-google-key")
 
     def test_fallback_import_error_google(self):
-        """Test handling missing google.generativeai package for fallback."""
+        """Test handling missing google-genai package for fallback."""
         config = LLMConfig(
             provider="anthropic",
             model="claude-3-5-sonnet-20250122",
@@ -580,8 +580,8 @@ class TestFallbackInitializationEdgeCases:
         limits = CostLimits()
 
         with patch("anthropic.AsyncAnthropic"):
-            # Mock google.generativeai import to raise ImportError
-            with patch.dict("sys.modules", {"google.generativeai": None}):
+            # Mock google.genai import to raise ImportError
+            with patch.dict("sys.modules", {"google.genai": None, "google": None}):
                 service = LLMService(config, limits)
 
                 # Should handle gracefully

@@ -13,7 +13,7 @@ httpx>=0.25.0
 
 # LLM APIs
 anthropic>=0.18.0
-google-generativeai>=0.3.0
+google-genai>=1.0.0  # New unified SDK (replaces deprecated google-generativeai)
 
 # PDF Processing (Phase 2)
 # NOTE: Requires Python 3.10+ (marker-pdf uses modern type hints)

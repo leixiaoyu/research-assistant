@@ -139,12 +139,10 @@ class TestProviderInitialization:
             api_key="google-test-key",
         )
 
-        with (
-            patch("google.generativeai.configure") as mock_configure,
-            patch("google.generativeai.GenerativeModel") as mock_model,
-        ):
+        mock_client = Mock()
+        with patch("google.genai.Client", return_value=mock_client) as mock_client_cls:
             service = LLMService(config, cost_limits)
 
             assert service.client is not None
-            mock_configure.assert_called_once_with(api_key=config.api_key)
-            mock_model.assert_called_once_with(config.model)
+            mock_client_cls.assert_called_once_with(api_key=config.api_key)
+            assert service._google_model == config.model

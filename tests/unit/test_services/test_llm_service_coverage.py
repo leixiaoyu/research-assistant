@@ -45,11 +45,11 @@ class TestLLMServiceCoverage:
                 LLMService(llm_config, cost_limits)
 
     def test_init_google_import_error(self, llm_config, cost_limits):
-        """Test missing google-generativeai package"""
+        """Test missing google-genai package"""
         llm_config.provider = "google"
-        with patch.dict("sys.modules", {"google.generativeai": None}):
+        with patch.dict("sys.modules", {"google.genai": None, "google": None}):
             with pytest.raises(
-                ExtractionError, match="google-generativeai package not installed"
+                ExtractionError, match="google-genai package not installed"
             ):
                 LLMService(llm_config, cost_limits)
 
@@ -87,13 +87,12 @@ class TestLLMServiceCoverage:
     async def test_call_google_raw_success(self, llm_config, cost_limits):
         """Test Google raw API success path (Phase 3.3)"""
         llm_config.provider = "google"
-        with patch("google.generativeai.GenerativeModel"):
-            with patch("google.generativeai.configure"):
+        mock_client = Mock()
+        mock_response = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+        with patch("google.genai.Client", return_value=mock_client):
+            with patch("google.genai.types"):
                 service = LLMService(llm_config, cost_limits)
-                mock_response = Mock()
-                service.client.generate_content_async = AsyncMock(
-                    return_value=mock_response
-                )
                 response = await service._call_google_raw(service.client, "prompt")
                 assert response == mock_response
 
@@ -101,12 +100,13 @@ class TestLLMServiceCoverage:
     async def test_call_google_raw_error(self, llm_config, cost_limits):
         """Test Google raw API error classification (Phase 3.3)"""
         llm_config.provider = "google"
-        with patch("google.generativeai.GenerativeModel"):
-            with patch("google.generativeai.configure"):
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(
+            side_effect=Exception("API Error")
+        )
+        with patch("google.genai.Client", return_value=mock_client):
+            with patch("google.genai.types"):
                 service = LLMService(llm_config, cost_limits)
-                service.client.generate_content_async = AsyncMock(
-                    side_effect=Exception("API Error")
-                )
                 # Phase 3.3: Errors are classified and re-raised as LLMAPIError
                 with pytest.raises(LLMAPIError, match="API Error"):
                     await service._call_google_raw(service.client, "prompt")
@@ -115,17 +115,14 @@ class TestLLMServiceCoverage:
     async def test_extract_google_path(self, llm_config, cost_limits):
         """Test extract() using Google provider path"""
         llm_config.provider = "google"
-        with patch("google.generativeai.GenerativeModel"):
-            with patch("google.generativeai.configure"):
+        mock_client = Mock()
+        mock_response = Mock()
+        mock_response.text = '{"extractions": []}'
+        mock_response.usage_metadata = Mock(total_token_count=1000)
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+        with patch("google.genai.Client", return_value=mock_client):
+            with patch("google.genai.types"):
                 service = LLMService(llm_config, cost_limits)
-
-                mock_response = Mock()
-                mock_response.text = '{"extractions": []}'
-                mock_response.usage_metadata.total_token_count = 1000
-
-                service.client.generate_content_async = AsyncMock(
-                    return_value=mock_response
-                )
 
                 metadata = Mock(paper_id="123", title="Test", authors=[])
                 result = await service.extract("markdown", [], metadata)
@@ -183,13 +180,13 @@ class TestLLMServiceCoverage:
     def test_parse_response_google_format(self, llm_config, cost_limits):
         """Test Google format"""
         llm_config.provider = "google"
-        with patch("google.generativeai.GenerativeModel"):
-            with patch("google.generativeai.configure"):
-                service = LLMService(llm_config, cost_limits)
-                mock_response = Mock()
-                mock_response.text = '{"extractions": []}'
-                results = service._parse_response(mock_response, [])
-                assert isinstance(results, list)
+        mock_client = Mock()
+        with patch("google.genai.Client", return_value=mock_client):
+            service = LLMService(llm_config, cost_limits)
+            mock_response = Mock()
+            mock_response.text = '{"extractions": []}'
+            results = service._parse_response(mock_response, [])
+            assert isinstance(results, list)
 
     def test_parse_response_markdown_json_variants(self, llm_service):
         """Test various markdown JSON wrappings"""

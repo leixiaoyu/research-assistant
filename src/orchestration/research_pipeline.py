@@ -199,12 +199,12 @@ class ResearchPipeline:
             self._delta_generator = DeltaGenerator(output_base_dir=output_base)
 
         # Phase 2 services (if enabled)
-        if self.enable_phase2:  # pragma: no cover (Phase 2 tested via integration)
+        if self.enable_phase2:
             await self._initialize_phase2_services()
         else:
             self._md_generator = MarkdownGenerator()
 
-    async def _initialize_phase2_services(  # pragma: no cover (Phase 2 integration)
+    async def _initialize_phase2_services(
         self,
     ) -> None:
         """Initialize Phase 2 extraction services."""
@@ -342,7 +342,7 @@ class ResearchPipeline:
             extracted_papers = None
             summary_stats: Optional[Dict[str, Any]] = None
 
-            if (  # pragma: no cover (Phase 2 tested via integration)
+            if (
                 self.enable_phase2
                 and self._extraction_service
                 and topic.extraction_targets
@@ -415,7 +415,7 @@ class ResearchPipeline:
 
         return topic_result
 
-    async def _run_extraction(  # pragma: no cover (Phase 2 tested via integration)
+    async def _run_extraction(
         self,
         papers: List[PaperMetadata],
         topic: ResearchTopic,
@@ -498,9 +498,7 @@ class ResearchPipeline:
         output_file = output_dir / filename
 
         # Generate markdown
-        if (  # pragma: no cover (Phase 2 tested via integration)
-            self.enable_phase2 and extracted_papers is not None
-        ):
+        if self.enable_phase2 and extracted_papers is not None:
             assert isinstance(self._md_generator, EnhancedMarkdownGenerator)
             content = self._md_generator.generate_enhanced(
                 extracted_papers=extracted_papers,
@@ -551,7 +549,7 @@ class ResearchPipeline:
         papers_skipped = 0
         total_cost_usd = 0.0
 
-        if summary_stats:  # pragma: no cover (Phase 2 tested via integration)
+        if summary_stats:
             papers_processed = summary_stats.get("papers_with_extraction", len(papers))
             papers_failed = summary_stats.get("papers_failed", 0)
             papers_skipped = summary_stats.get("papers_skipped", 0)

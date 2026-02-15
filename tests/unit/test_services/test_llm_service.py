@@ -101,15 +101,13 @@ def test_llm_service_initialization_google():
     )
     limits = CostLimits()
 
-    with patch("google.generativeai.configure") as mock_configure:
-        with patch("google.generativeai.GenerativeModel") as mock_model_class:
-            mock_model = Mock()
-            mock_model_class.return_value = mock_model
+    mock_client = Mock()
+    with patch("google.genai.Client", return_value=mock_client) as mock_client_class:
+        service = LLMService(config, limits)
 
-            service = LLMService(config, limits)
-
-            assert service.config.provider == "google"
-            mock_configure.assert_called_once_with(api_key=config.api_key)
+        assert service.config.provider == "google"
+        mock_client_class.assert_called_once_with(api_key=config.api_key)
+        assert service._google_model == "gemini-1.5-pro"
 
 
 def test_build_extraction_prompt(llm_service, paper_metadata, extraction_targets):

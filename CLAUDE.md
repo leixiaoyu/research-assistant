@@ -326,6 +326,26 @@ See [SYSTEM_ARCHITECTURE.md §9 Security](docs/SYSTEM_ARCHITECTURE.md#security) 
 - [ ] `pytest --cov=src --cov-report=term-missing` shows ≥99%
 - [ ] Any uncovered lines documented in verification report
 
+**🚫 Pragma Prohibition (Non-Negotiable):**
+
+The use of `# pragma: no cover` tags is **strictly prohibited** for:
+- **Service orchestration code** (pipelines, coordinators, schedulers)
+- **Persistence logic** (database operations, file I/O, registry updates)
+- **Security-critical paths** (authentication, authorization, input validation)
+- **Error handling paths** (exception handlers, fallback logic)
+
+**Allowed exceptions (require explicit justification):**
+- Platform-specific code that cannot be tested in CI (e.g., Windows-only paths)
+- External library defensive code (e.g., catching impossible exceptions)
+- Type-checking imports (`if TYPE_CHECKING:` blocks)
+
+**If you need pragma exclusion:**
+1. Document the reason in a code comment
+2. Add justification to the verification report
+3. Track as technical debt for future resolution
+
+**Pragma Audit:** The verification script (`verify.sh`) enforces a pragma limit. Excessive pragma usage will fail CI.
+
 ### 🧪 Test-Driven Development (Required)
 
 **No code should be pushed to remote without complete verification.**

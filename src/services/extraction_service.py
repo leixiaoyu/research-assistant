@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from src.services.dedup_service import DeduplicationService
     from src.services.filter_service import FilterService
     from src.services.checkpoint_service import CheckpointService
+    from src.services.registry_service import RegistryService  # Phase 3.5
     from src.models.concurrency import ConcurrencyConfig
     from src.models.synthesis import ProcessingResult
     from src.orchestration.concurrent_pipeline import ConcurrentPipeline  # noqa: F401
@@ -67,6 +68,8 @@ class ExtractionService:
         filter_service: Optional["FilterService"] = None,
         checkpoint_service: Optional["CheckpointService"] = None,
         concurrency_config: Optional["ConcurrencyConfig"] = None,
+        # Phase 3.5: Global paper registry
+        registry_service: Optional["RegistryService"] = None,
     ):
         """Initialize extraction service
 
@@ -80,6 +83,7 @@ class ExtractionService:
             filter_service: Phase 3 filtering service (optional)
             checkpoint_service: Phase 3 checkpoint service (optional)
             concurrency_config: Phase 3.1 concurrency configuration (optional)
+            registry_service: Phase 3.5 global registry service (optional)
         """
         self.pdf_service = pdf_service
         self.llm_service = llm_service
@@ -92,6 +96,7 @@ class ExtractionService:
         self.filter_service = filter_service
         self.checkpoint_service = checkpoint_service
         self.concurrency_config = concurrency_config
+        self.registry_service = registry_service  # Phase 3.5
 
         # Phase 3.1: Eagerly initialize concurrent pipeline when all services available
         self._concurrent_pipeline: Optional["ConcurrentPipeline"] = None
@@ -127,6 +132,7 @@ class ExtractionService:
                 dedup_service=dedup_service,
                 filter_service=filter_service,
                 checkpoint_service=checkpoint_service,
+                registry_service=registry_service,  # Phase 3.5
             )
             self._concurrent_enabled = True
 
@@ -288,6 +294,7 @@ class ExtractionService:
         targets: List[ExtractionTarget],
         run_id: Optional[str] = None,
         query: Optional[str] = None,
+        topic_slug: Optional[str] = None,  # Phase 3.8: For registry integration
     ) -> List[ExtractedPaper]:
         """Process multiple papers with concurrent or sequential processing.
 
@@ -300,6 +307,7 @@ class ExtractionService:
             targets: Extraction targets
             run_id: Unique run identifier for checkpointing (required for concurrent)
             query: Search query for relevance filtering (required for concurrent)
+            topic_slug: Topic slug for registry affiliation (Phase 3.5/3.8)
 
         Returns:
             List of ExtractedPaper objects
@@ -311,6 +319,7 @@ class ExtractionService:
                 targets=targets,
                 run_id=run_id,
                 query=query,
+                topic_slug=topic_slug,  # Phase 3.8
             )
 
         # Fall back to sequential processing
@@ -429,6 +438,7 @@ Extraction is based on abstract only.
         targets: List[ExtractionTarget],
         run_id: str,
         query: str,
+        topic_slug: Optional[str] = None,  # Phase 3.8: For registry integration
     ) -> List[ExtractedPaper]:
         """Internal method for concurrent paper processing.
 
@@ -440,6 +450,7 @@ Extraction is based on abstract only.
             targets: Extraction targets
             run_id: Unique run identifier for checkpointing
             query: Search query for relevance filtering
+            topic_slug: Topic slug for registry affiliation (Phase 3.5/3.8)
 
         Returns:
             List of ExtractedPaper objects
@@ -460,7 +471,11 @@ Extraction is based on abstract only.
         async for (
             extracted_paper
         ) in self._concurrent_pipeline.process_papers_concurrent(
-            papers=papers, targets=targets, run_id=run_id, query=query
+            papers=papers,
+            targets=targets,
+            run_id=run_id,
+            query=query,
+            topic_slug=topic_slug,  # Phase 3.8
         ):
             results.append(extracted_paper)
 

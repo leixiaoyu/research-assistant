@@ -188,6 +188,8 @@ class LLMService:
 
         # Initialize provider-specific client
         self.client: Any = None
+        self._google_model: Optional[str] = None  # For new Google GenAI SDK
+        self._fallback_google_model: Optional[str] = None
         self._init_provider_client(config.provider, config.api_key, config.model)
 
         # Phase 3.3: Initialize retry handler
@@ -229,14 +231,14 @@ class LLMService:
                 )
         elif provider == "google":
             try:
-                import google.generativeai as genai
+                from google import genai
 
-                genai.configure(api_key=api_key)
-                self.client = genai.GenerativeModel(model)
+                self.client = genai.Client(api_key=api_key)
+                self._google_model = model  # Store model name for API calls
             except ImportError:
                 raise ExtractionError(
-                    "google-generativeai package not installed. "
-                    "Run: pip install google-generativeai"
+                    "google-genai package not installed. "
+                    "Run: pip install google-genai"
                 )
 
     def _init_provider_health(self, provider: str) -> None:
@@ -285,10 +287,10 @@ class LLMService:
                 return
         elif fallback_config.provider == "google":
             try:
-                import google.generativeai as genai
+                from google import genai
 
-                genai.configure(api_key=api_key)
-                self.fallback_client = genai.GenerativeModel(fallback_config.model)
+                self.fallback_client = genai.Client(api_key=api_key)
+                self._fallback_google_model = fallback_config.model
             except ImportError:
                 logger.warning("google_genai_not_installed_for_fallback")
                 return
@@ -452,7 +454,12 @@ class LLMService:
                     output_tokens
                 )
             else:
-                tokens_used = getattr(response.usage_metadata, "total_token_count", 0)
+                # New google-genai SDK: usage_metadata has token counts
+                usage = getattr(response, "usage_metadata", None)
+                if usage:
+                    tokens_used = getattr(usage, "total_token_count", 0)
+                else:
+                    tokens_used = 0
                 cost = self._calculate_cost_google(tokens_used)
                 LLM_TOKENS_TOTAL.labels(provider="google", type="total").inc(
                     tokens_used
@@ -563,12 +570,22 @@ class LLMService:
     async def _call_google_raw(self, client: Any, prompt: str) -> Any:
         """Raw API call to Google without retry wrapper."""
         try:
-            response = await client.generate_content_async(
-                prompt,
-                generation_config={
-                    "temperature": self.config.temperature,
-                    "max_output_tokens": self.config.max_tokens,
-                },
+            # Determine model name based on whether this is primary or fallback
+            model_name = getattr(self, "_google_model", None)
+            if client == self.fallback_client:
+                model_name = getattr(self, "_fallback_google_model", model_name)
+            if not model_name:
+                model_name = self.config.model
+
+            from google.genai import types
+
+            response = await client.aio.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=self.config.temperature,
+                    max_output_tokens=self.config.max_tokens,
+                ),
             )
             return response
         except Exception as e:

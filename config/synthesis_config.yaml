@@ -1,0 +1,147 @@
+# Cross-Topic Synthesis Configuration
+# Phase 3.7: Cross-Topic Knowledge Synthesis
+#
+# This configuration defines synthesis questions that span multiple research topics.
+# The system will aggregate papers from the registry, apply filters, and use LLM
+# to synthesize actionable insights.
+
+# Budget and limits
+budget_per_synthesis_usd: 15.0
+max_tokens_per_question: 100000
+output_path: "output/Global_Synthesis.md"
+cache_synthesis_results: true
+incremental_mode: true
+
+# Synthesis questions
+# Each question defines:
+#   - id: Unique slug identifier
+#   - name: Human-readable display name
+#   - prompt: Complete LLM prompt with template variables
+#   - topic_filters: Only include papers from these topics (empty = all)
+#   - topic_exclude: Exclude papers from these topics
+#   - max_papers: Maximum papers to include
+#   - min_quality_score: Minimum quality threshold (0-100)
+#   - priority: Processing order (lower = higher priority)
+#   - enabled: Whether this question is active
+
+questions:
+  - id: "mt-quality-improvement"
+    name: "Machine Translation Quality Improvement"
+    priority: 1
+    enabled: true
+    topic_filters:
+      - "machine-translation"
+      - "neural-mt"
+      - "document-level-mt"
+      - "literary-translation"
+    topic_exclude: []
+    max_papers: 50
+    min_quality_score: 30.0
+    prompt: |
+      You are a research synthesis expert specializing in machine translation.
+
+      I have collected {paper_count} research papers from the following
+      research topics: {topics}.
+
+      Please analyze these papers to answer the following question:
+
+      **How can we improve machine translation quality for literary and
+      long-form content, especially for English-German translation?**
+
+      Focus on:
+      1. Key methodological advances specific to long-form content
+      2. Challenges unique to EN-DE translation (compound words, word order)
+      3. Evaluation metrics suitable for literary/long-form quality
+      4. Practical techniques that can be implemented
+      5. Gaps in current research that need attention
+
+      Cite specific papers when making claims using [Author Year] format.
+
+      ## Paper Summaries
+
+      {paper_summaries}
+
+      ## Your Synthesis
+
+      Provide a structured synthesis with:
+      1. **Executive Summary** (3-5 key insights)
+      2. **Detailed Findings** (organized by focus area)
+      3. **Actionable Recommendations** (prioritized by impact)
+      4. **Research Gaps** (opportunities for future work)
+      5. **Key Citations** (most influential papers to read)
+
+  - id: "prompt-engineering-patterns"
+    name: "Prompt Engineering Best Practices"
+    priority: 2
+    enabled: false  # Disabled example
+    topic_filters: []  # All topics
+    topic_exclude: []
+    max_papers: 40
+    min_quality_score: 40.0
+    prompt: |
+      You are a research synthesis expert specializing in prompt engineering
+      and LLM optimization.
+
+      I have collected {paper_count} papers from: {topics}.
+
+      ## Paper Summaries
+
+      {paper_summaries}
+
+      ## Your Task
+
+      Synthesize the key patterns and best practices for prompt engineering:
+
+      1. **System Prompt Design** - Structure, length, tone
+      2. **Few-Shot Examples** - Selection, formatting, ordering
+      3. **Chain-of-Thought** - When and how to apply
+      4. **Task Decomposition** - Breaking complex tasks
+      5. **Output Formatting** - JSON, structured responses
+
+      Provide actionable recommendations with paper citations.
+
+  - id: "llm-evaluation-methods"
+    name: "LLM Evaluation Methods"
+    priority: 3
+    enabled: false
+    topic_filters:
+      - "llm-evaluation"
+      - "benchmarks"
+      - "metrics"
+    topic_exclude: []
+    max_papers: 30
+    min_quality_score: 50.0
+    prompt: |
+      Analyze {paper_count} papers on LLM evaluation from: {topics}.
+
+      {paper_summaries}
+
+      Synthesize:
+      1. Current evaluation paradigms and their limitations
+      2. Emerging evaluation methods
+      3. Domain-specific evaluation approaches
+      4. Recommendations for practitioners
+
+  - id: "ai-safety-alignment"
+    name: "AI Safety and Alignment Techniques"
+    priority: 4
+    enabled: false
+    topic_filters:
+      - "ai-safety"
+      - "alignment"
+      - "rlhf"
+    topic_exclude: []
+    max_papers: 40
+    min_quality_score: 35.0
+    prompt: |
+      You are an AI safety researcher synthesizing recent work.
+
+      Papers analyzed: {paper_count} from {topics}.
+
+      {paper_summaries}
+
+      Provide:
+      1. Current state of alignment techniques
+      2. Key challenges and open problems
+      3. Promising research directions
+      4. Practical safety recommendations

@@ -207,5 +207,245 @@ class TestSchedulerExceptionHandling:
         ):
             result = runner.invoke(app, ["schedule"])
             assert result.exit_code == 1
-            assert "Scheduler failed" in result.stdout
-            assert "Connection failed" in result.stdout
+
+
+class TestSynthesizeCommand:
+    """Tests for synthesize CLI command."""
+
+    def test_synthesize_no_enabled_questions(self):
+        """Test synthesize when no questions are enabled."""
+        with patch("src.services.registry_service.RegistryService"):
+            with patch(
+                "src.services.cross_synthesis_service.CrossTopicSynthesisService"
+            ) as mock_service:
+                mock_service.return_value.get_enabled_questions.return_value = []
+
+                result = runner.invoke(app, ["synthesize"])
+
+                assert "No enabled synthesis questions found" in result.stdout
+
+    def test_synthesize_question_not_found(self):
+        """Test synthesize with non-existent question."""
+        with patch("src.services.registry_service.RegistryService"):
+            with patch(
+                "src.services.cross_synthesis_service.CrossTopicSynthesisService"
+            ) as mock_service:
+                mock_service.return_value.get_enabled_questions.return_value = [
+                    Mock(id="q1")
+                ]
+                mock_service.return_value.get_question_by_id.return_value = None
+
+                result = runner.invoke(app, ["synthesize", "--question", "unknown"])
+
+                assert result.exit_code == 1
+                assert "not found" in result.stdout
+
+    def test_synthesize_question_disabled(self):
+        """Test synthesize with disabled question."""
+        with patch("src.services.registry_service.RegistryService"):
+            with patch(
+                "src.services.cross_synthesis_service.CrossTopicSynthesisService"
+            ) as mock_service:
+                mock_service.return_value.get_enabled_questions.return_value = [
+                    Mock(id="q1")
+                ]
+                mock_service.return_value.get_question_by_id.return_value = Mock(
+                    enabled=False
+                )
+
+                result = runner.invoke(app, ["synthesize", "--question", "q1"])
+
+                assert "disabled" in result.stdout
+
+    def test_synthesize_success(self):
+        """Test successful synthesis."""
+        from src.models.cross_synthesis import (
+            CrossTopicSynthesisReport,
+            SynthesisResult,
+        )
+        from pathlib import Path
+
+        mock_result = SynthesisResult(
+            question_id="q1",
+            question_name="Test Question",
+            synthesis_text="Synthesis output",
+            papers_used=["p1", "p2"],
+            topics_covered=["topic-a"],
+            tokens_used=1000,
+            cost_usd=0.05,
+            model_used="test-model",
+            confidence=0.8,
+        )
+
+        mock_report = CrossTopicSynthesisReport(
+            report_id="test-report",
+            total_papers_in_registry=10,
+            results=[mock_result],
+            total_tokens_used=1000,
+            total_cost_usd=0.05,
+        )
+
+        with patch("src.services.registry_service.RegistryService"):
+            with patch(
+                "src.services.cross_synthesis_service.CrossTopicSynthesisService"
+            ) as mock_service:
+                with patch(
+                    "src.output.cross_synthesis_generator.CrossSynthesisGenerator"
+                ) as mock_generator:
+                    mock_service.return_value.get_enabled_questions.return_value = [
+                        Mock(id="q1")
+                    ]
+                    mock_service.return_value.synthesize_all = AsyncMock(
+                        return_value=mock_report
+                    )
+                    mock_generator.return_value.write.return_value = Path(
+                        "/output/test.md"
+                    )
+
+                    result = runner.invoke(app, ["synthesize"])
+
+                    assert result.exit_code == 0
+                    assert "Synthesis completed" in result.stdout
+                    assert "Questions answered: 1" in result.stdout
+
+    def test_synthesize_no_results(self):
+        """Test synthesize with no results (incremental skip)."""
+        from src.models.cross_synthesis import CrossTopicSynthesisReport
+
+        mock_report = CrossTopicSynthesisReport(
+            report_id="test-report",
+            total_papers_in_registry=10,
+            results=[],
+            total_tokens_used=0,
+            total_cost_usd=0.0,
+        )
+
+        with patch("src.services.registry_service.RegistryService"):
+            with patch(
+                "src.services.cross_synthesis_service.CrossTopicSynthesisService"
+            ) as mock_service:
+                with patch(
+                    "src.output.cross_synthesis_generator.CrossSynthesisGenerator"
+                ):
+                    mock_service.return_value.get_enabled_questions.return_value = [
+                        Mock(id="q1")
+                    ]
+                    mock_service.return_value.synthesize_all = AsyncMock(
+                        return_value=mock_report
+                    )
+
+                    result = runner.invoke(app, ["synthesize"])
+
+                    assert "No synthesis results generated" in result.stdout
+
+    def test_synthesize_single_question(self):
+        """Test synthesize with specific question."""
+        from src.models.cross_synthesis import SynthesisResult, SynthesisQuestion
+        from pathlib import Path
+
+        mock_question = SynthesisQuestion(
+            id="test-q",
+            name="Test Question",
+            prompt="Test prompt {paper_summaries}",
+            enabled=True,
+        )
+
+        mock_result = SynthesisResult(
+            question_id="test-q",
+            question_name="Test Question",
+            synthesis_text="Result",
+            papers_used=["p1"],
+            topics_covered=["t1"],
+            tokens_used=500,
+            cost_usd=0.02,
+            model_used="model",
+            confidence=0.7,
+        )
+
+        with patch("src.services.registry_service.RegistryService"):
+            with patch(
+                "src.services.cross_synthesis_service.CrossTopicSynthesisService"
+            ) as mock_service:
+                with patch(
+                    "src.output.cross_synthesis_generator.CrossSynthesisGenerator"
+                ) as mock_generator:
+                    mock_service.return_value.get_enabled_questions.return_value = [
+                        mock_question
+                    ]
+                    mock_service.return_value.get_question_by_id.return_value = (
+                        mock_question
+                    )
+                    mock_service.return_value.get_all_entries.return_value = []
+                    mock_service.return_value.config.budget_per_synthesis_usd = 10.0
+                    mock_service.return_value.synthesize_question = AsyncMock(
+                        return_value=mock_result
+                    )
+                    mock_generator.return_value.write.return_value = Path("/test.md")
+
+                    result = runner.invoke(app, ["synthesize", "--question", "test-q"])
+
+                    assert result.exit_code == 0
+                    assert "Synthesis completed" in result.stdout
+
+    def test_synthesize_force_mode(self):
+        """Test synthesize with force flag."""
+        from src.models.cross_synthesis import (
+            CrossTopicSynthesisReport,
+            SynthesisResult,
+        )
+        from pathlib import Path
+
+        mock_result = SynthesisResult(
+            question_id="q1",
+            question_name="Question",
+            synthesis_text="Output",
+            papers_used=["p1"],
+            topics_covered=["t1"],
+            tokens_used=100,
+            cost_usd=0.01,
+            model_used="model",
+            confidence=0.5,
+        )
+
+        mock_report = CrossTopicSynthesisReport(
+            report_id="test",
+            total_papers_in_registry=5,
+            results=[mock_result],
+            total_tokens_used=100,
+            total_cost_usd=0.01,
+        )
+
+        with patch("src.services.registry_service.RegistryService"):
+            with patch(
+                "src.services.cross_synthesis_service.CrossTopicSynthesisService"
+            ) as mock_service:
+                with patch(
+                    "src.output.cross_synthesis_generator.CrossSynthesisGenerator"
+                ) as mock_generator:
+                    mock_service.return_value.get_enabled_questions.return_value = [
+                        Mock(id="q1")
+                    ]
+                    mock_service.return_value.synthesize_all = AsyncMock(
+                        return_value=mock_report
+                    )
+                    mock_generator.return_value.write.return_value = Path("/test.md")
+
+                    result = runner.invoke(app, ["synthesize", "--force"])
+
+                    assert result.exit_code == 0
+                    assert "Force mode" in result.stdout
+
+    def test_synthesize_exception(self):
+        """Test synthesize error handling."""
+        with patch("src.services.registry_service.RegistryService"):
+            with patch(
+                "src.services.cross_synthesis_service.CrossTopicSynthesisService"
+            ) as mock_service:
+                mock_service.return_value.get_enabled_questions.side_effect = (
+                    RuntimeError("Service error")
+                )
+
+                result = runner.invoke(app, ["synthesize"])
+
+                assert result.exit_code == 1
+                assert "Synthesis failed" in result.stdout

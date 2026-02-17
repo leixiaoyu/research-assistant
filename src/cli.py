@@ -482,5 +482,153 @@ def health(
     run_health_server(host=host, port=port)  # pragma: no cover
 
 
+@app.command()
+def synthesize(
+    config_path: Path = typer.Option(
+        "config/synthesis_config.yaml",
+        "--config",
+        "-c",
+        help="Path to synthesis config YAML",
+    ),
+    question: Optional[str] = typer.Option(
+        None,
+        "--question",
+        "-q",
+        help="Run only specific question by ID",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Force full synthesis (ignore incremental mode)",
+    ),
+):
+    """Run cross-topic knowledge synthesis.
+
+    Synthesizes insights across multiple research topics using LLM.
+    Generates Global_Synthesis.md with answers to configured questions.
+
+    Examples:
+        # Run all enabled synthesis questions
+        python -m src.cli synthesize
+
+        # Run with custom config
+        python -m src.cli synthesize --config my_synthesis.yaml
+
+        # Run specific question only
+        python -m src.cli synthesize --question mt-quality-improvement
+
+        # Force full synthesis (ignore incremental mode)
+        python -m src.cli synthesize --force
+    """
+    try:
+        from src.services.registry_service import RegistryService
+        from src.services.cross_synthesis_service import CrossTopicSynthesisService
+        from src.output.cross_synthesis_generator import CrossSynthesisGenerator
+
+        typer.secho("Starting cross-topic synthesis...", fg=typer.colors.CYAN)
+
+        # Initialize services
+        registry_service = RegistryService()
+        synthesis_service = CrossTopicSynthesisService(
+            registry_service=registry_service,
+            config_path=config_path,
+        )
+        generator = CrossSynthesisGenerator()
+
+        # Check for enabled questions
+        enabled_questions = synthesis_service.get_enabled_questions()
+        if not enabled_questions:
+            typer.secho("No enabled synthesis questions found.", fg=typer.colors.YELLOW)
+            return
+
+        # If specific question requested, validate it exists
+        if question:
+            target_question = synthesis_service.get_question_by_id(question)
+            if not target_question:
+                typer.secho(
+                    f"Question '{question}' not found in config.",
+                    fg=typer.colors.RED,
+                )
+                raise typer.Exit(code=1)
+            if not target_question.enabled:
+                typer.secho(
+                    f"Question '{question}' is disabled in config.",
+                    fg=typer.colors.YELLOW,
+                )
+                return
+
+        typer.echo(f"Config: {config_path}")
+        typer.echo(f"Enabled questions: {len(enabled_questions)}")
+        if force:
+            typer.secho(
+                "Force mode: ignoring incremental checks", fg=typer.colors.YELLOW
+            )
+
+        # Run synthesis
+        async def run_synthesis():
+            if question:
+                target_q = synthesis_service.get_question_by_id(question)
+                if target_q:
+                    budget = synthesis_service.config.budget_per_synthesis_usd
+                    result = await synthesis_service.synthesize_question(
+                        question=target_q,
+                        budget_remaining=budget,
+                    )
+                    # Create report with single result
+                    from src.models.cross_synthesis import CrossTopicSynthesisReport
+
+                    report = CrossTopicSynthesisReport(
+                        report_id=f"syn-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}",
+                        total_papers_in_registry=len(
+                            synthesis_service.get_all_entries()
+                        ),
+                        results=[result],
+                        total_tokens_used=result.tokens_used,
+                        total_cost_usd=result.cost_usd,
+                        incremental=False,
+                    )
+                    return report
+                return None
+            else:
+                return await synthesis_service.synthesize_all(force=force)
+
+        report = asyncio.run(run_synthesis())
+
+        if not report or not report.results:
+            typer.secho(
+                "No synthesis results generated "
+                "(may be skipped due to incremental mode).",
+                fg=typer.colors.YELLOW,
+            )
+            return
+
+        # Write output
+        output_path = generator.write(report=report, incremental=not force)
+
+        # Display results
+        typer.echo("")
+        typer.secho("Synthesis completed!", fg=typer.colors.GREEN, bold=True)
+        typer.echo(f"  Questions answered: {report.questions_answered}")
+        typer.echo(f"  Total tokens used: {report.total_tokens_used:,}")
+        typer.echo(f"  Total cost: ${report.total_cost_usd:.4f}")
+        if output_path:
+            typer.echo(f"  Output: {output_path}")
+
+        if report.results:
+            typer.echo("\nSynthesis results:")
+            for result in report.results:
+                status = "✓" if result.tokens_used > 0 else "○"
+                typer.echo(
+                    f"  {status} {result.question_name}: "
+                    f"{len(result.papers_used)} papers, ${result.cost_usd:.4f}"
+                )
+
+    except Exception as e:
+        logger.exception("synthesis_failed")
+        typer.secho(f"Synthesis failed: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
     app()  # pragma: no cover

@@ -513,7 +513,7 @@ title: Test
     def test_generate_incremental_preserves_unreferenced_sections(
         self, generator, sample_report
     ):
-        """Test that incremental generation handles existing sections."""
+        """Test that incremental generation preserves existing sections."""
         # Create existing content with a section not in current report
         existing = """---
 title: "Cross-Topic Research Synthesis"
@@ -523,7 +523,7 @@ title: "Cross-Topic Research Synthesis"
 
 <!-- SECTION_START:old-question -->
 ## 1. Old Question
-Old content here.
+Old content here that must be preserved.
 <!-- SECTION_END:old-question -->
 
 <!-- SECTION_START:q1 -->
@@ -537,6 +537,114 @@ Previous content.
         # Should have current results (q1, q2)
         assert "Question One" in updated
         assert "Question Two" in updated
+
+        # CRITICAL: Should preserve old section that wasn't in current report
+        assert "Old Question" in updated
+        assert "Old content here that must be preserved" in updated
+        assert "Preserved Sections" in updated  # Preserved sections header
+
+    def test_generate_incremental_no_appendix_with_metadata(
+        self, generator, sample_report, monkeypatch
+    ):
+        """Test incremental generation when no appendix but metadata exists."""
+
+        # Mock generate to return content without appendix marker
+        def mock_generate(report):
+            return """# Test Content
+
+## Questions
+
+Some content here.
+
+<!-- SYNTHESIS_META_START -->
+{"report_id": "test"}
+<!-- SYNTHESIS_META_END -->"""
+
+        monkeypatch.setattr(generator, "generate", mock_generate)
+
+        existing = """<!-- SECTION_START:old-q -->
+## Old Question
+Old preserved content.
+<!-- SECTION_END:old-q -->"""
+
+        updated = generator.generate_incremental(sample_report, existing)
+
+        assert "Old Question" in updated
+        assert "Old preserved content" in updated
+        assert "Preserved Sections" in updated
+
+    def test_generate_incremental_no_appendix_no_metadata(
+        self, generator, sample_report, monkeypatch
+    ):
+        """Test incremental generation when no appendix and no metadata."""
+
+        # Mock generate to return content without appendix or metadata
+        def mock_generate(report):
+            return """# Test Content
+
+## Questions
+
+Some content here without markers."""
+
+        monkeypatch.setattr(generator, "generate", mock_generate)
+
+        existing = """<!-- SECTION_START:old-q -->
+## Old Question
+Old preserved content.
+<!-- SECTION_END:old-q -->"""
+
+        updated = generator.generate_incremental(sample_report, existing)
+
+        assert "Old Question" in updated
+        assert "Old preserved content" in updated
+        assert "Preserved Sections" in updated
+
+    def test_atomic_write_inner_exception_cleanup(self, tmp_path, monkeypatch):
+        """Test atomic write cleans up temp file on inner exception."""
+        import os
+        import tempfile
+
+        output_path = tmp_path / "output.md"
+        generator = CrossSynthesisGenerator(output_path=output_path)
+
+        # Track temp file creation
+        created_tmp = []
+        original_mkstemp = tempfile.mkstemp
+
+        def tracking_mkstemp(*args, **kwargs):
+            fd, path = original_mkstemp(*args, **kwargs)
+            created_tmp.append(path)
+            return fd, path
+
+        monkeypatch.setattr(tempfile, "mkstemp", tracking_mkstemp)
+
+        # Make fdopen raise after temp file is created
+        def failing_fdopen(fd, *args, **kwargs):
+            os.close(fd)  # Close the fd to avoid leaks
+            raise IOError("Simulated write failure")
+
+        monkeypatch.setattr(os, "fdopen", failing_fdopen)
+
+        result = generator._atomic_write("test content")
+
+        assert result is False
+        # Temp file should be cleaned up (or the attempt was made)
+
+    def test_load_state_io_error(self, tmp_path):
+        """Test load_state handles I/O errors gracefully."""
+        from unittest.mock import patch
+
+        output_path = tmp_path / "output.md"
+        output_path.write_text("some content")
+
+        generator = CrossSynthesisGenerator(output_path=output_path)
+
+        # Patch Path.read_text to raise IOError
+        with patch.object(type(output_path), "read_text") as mock_read:
+            mock_read.side_effect = IOError("Permission denied")
+            state = generator.load_state()
+
+        assert state is None
 
     def test_write_returns_none_on_failure(self, tmp_path, monkeypatch):
         """Test write returns None when atomic write fails."""

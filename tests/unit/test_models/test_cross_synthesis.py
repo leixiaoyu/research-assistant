@@ -332,6 +332,41 @@ class TestSynthesisConfig:
         with pytest.raises(ValueError, match="Path traversal"):
             SynthesisConfig(output_path="output/../sensitive.md")
 
+    def test_config_output_path_absolute_blocked(self):
+        """Test that absolute paths are blocked."""
+        # Unix absolute paths
+        with pytest.raises(ValueError, match="Absolute paths"):
+            SynthesisConfig(output_path="/etc/passwd")
+
+        with pytest.raises(ValueError, match="Absolute paths"):
+            SynthesisConfig(output_path="/tmp/output.md")
+
+        # Windows-style paths
+        with pytest.raises(ValueError, match="Absolute paths"):
+            SynthesisConfig(output_path="\\windows\\system32")
+
+    def test_config_output_path_windows_drive_blocked(self):
+        """Test that Windows drive letters are blocked."""
+        with pytest.raises(ValueError, match="Absolute paths"):
+            SynthesisConfig(output_path="C:\\Windows\\System32")
+
+        with pytest.raises(ValueError, match="Absolute paths"):
+            SynthesisConfig(output_path="D:\\output.md")
+
+    def test_config_output_path_null_bytes_blocked(self):
+        """Test that null bytes are blocked."""
+        with pytest.raises(ValueError, match="Null bytes"):
+            SynthesisConfig(output_path="output/file\0.md")
+
+    def test_config_output_path_valid(self):
+        """Test valid relative paths are allowed."""
+        # Valid relative paths
+        c1 = SynthesisConfig(output_path="output/synthesis.md")
+        assert c1.output_path == "output/synthesis.md"
+
+        c2 = SynthesisConfig(output_path="reports/2025/output.md")
+        assert c2.output_path == "reports/2025/output.md"
+
     def test_config_budget_bounds(self):
         """Test budget validation bounds."""
         # Valid bounds
@@ -461,6 +496,36 @@ class TestPaperSummary:
 
         with pytest.raises(ValueError):
             PaperSummary(paper_id="p", title="T", quality_score=101.0)
+
+    def test_summary_prompt_format_with_nonstring_extraction_values(self):
+        """Test to_prompt_format filters out non-string extraction values."""
+        summary = PaperSummary(
+            paper_id="p1",
+            title="Test Paper",
+            topics=["topic-a"],
+            extraction_summary={
+                "string_value": "This should appear",
+                "int_value": 123,
+                "none_value": None,
+                "empty_string": "",
+                "list_value": ["a", "b"],
+            },
+        )
+
+        formatted = summary.to_prompt_format()
+
+        # String value should appear
+        assert "string_value" in formatted
+        assert "This should appear" in formatted
+
+        # Non-string values should be filtered out
+        assert "int_value" not in formatted
+        assert "123" not in formatted
+        assert "none_value" not in formatted
+        assert "list_value" not in formatted
+
+        # Empty string should not appear (falsy)
+        assert "empty_string" not in formatted
 
 
 class TestSynthesisState:

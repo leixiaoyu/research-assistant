@@ -357,21 +357,59 @@ class CrossSynthesisGenerator:
         # Merge results - new results override existing
         current_question_ids = {r.question_id for r in report.results}
 
-        # Keep existing sections not in current report
-        for question_id, section in existing_sections.items():
+        # Build preserved sections list for questions not in current report
+        preserved_sections: List[str] = []
+        for question_id, section_content in existing_sections.items():
             if question_id not in current_question_ids:
-                # Create a placeholder result for the existing section
-                # This preserves the section in output
                 logger.debug(
                     "preserving_existing_section",
                     question_id=question_id,
                 )
-                # Note: We don't add placeholder results, just regenerate
-                # with current results. This is intentional - incremental
-                # updates replace sections for processed questions.
+                preserved_sections.append(section_content)
 
-        # Generate full document with merged results
-        return self.generate(report)
+        # Generate base document with current results
+        base_content = self.generate(report)
+
+        # If no preserved sections, return base content
+        if not preserved_sections:
+            return base_content
+
+        # Insert preserved sections before the appendix
+        appendix_marker = "## Appendix: Papers Referenced"
+        if appendix_marker in base_content:
+            # Insert preserved sections before appendix
+            parts = base_content.split(appendix_marker)
+            preserved_content = "\n\n".join(preserved_sections)
+            return (
+                parts[0].rstrip()
+                + "\n\n---\n\n## Preserved Sections\n\n"
+                + preserved_content
+                + "\n\n---\n\n"
+                + appendix_marker
+                + parts[1]
+            )
+        else:
+            # No appendix, append at end before metadata
+            metadata_marker = METADATA_START
+            if metadata_marker in base_content:
+                parts = base_content.split(metadata_marker)
+                preserved_content = "\n\n".join(preserved_sections)
+                return (
+                    parts[0].rstrip()
+                    + "\n\n---\n\n## Preserved Sections\n\n"
+                    + preserved_content
+                    + "\n\n"
+                    + metadata_marker
+                    + parts[1]
+                )
+            else:
+                # Append at end
+                preserved_content = "\n\n".join(preserved_sections)
+                return (
+                    base_content.rstrip()
+                    + "\n\n---\n\n## Preserved Sections\n\n"
+                    + preserved_content
+                )
 
     def _atomic_write(self, content: str) -> bool:
         """Atomically write content to output file.

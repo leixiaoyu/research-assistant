@@ -235,10 +235,29 @@ class SynthesisConfig(BaseModel):
     @field_validator("output_path")
     @classmethod
     def validate_output_path(cls, v: str) -> str:
-        """Validate output path is safe."""
+        """Validate output path is safe.
+
+        Blocks:
+        - Path traversal (..)
+        - Absolute paths (starting with / or drive letters)
+        - Null bytes and other injection characters
+        """
         # Block path traversal
         if ".." in v:
             raise ValueError("Path traversal (..) not allowed in output_path")
+
+        # Block absolute paths (Unix and Windows)
+        if v.startswith("/") or v.startswith("\\"):
+            raise ValueError("Absolute paths not allowed in output_path")
+
+        # Block Windows drive letters (e.g., C:\)
+        if len(v) >= 2 and v[1] == ":":
+            raise ValueError("Absolute paths not allowed in output_path")
+
+        # Block null bytes and other dangerous characters
+        if "\0" in v:
+            raise ValueError("Null bytes not allowed in output_path")
+
         return v
 
 

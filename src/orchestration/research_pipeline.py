@@ -18,6 +18,7 @@ from src.models.catalog import CatalogRun
 from src.models.config import ResearchConfig, ResearchTopic
 from src.models.paper import PaperMetadata
 from src.models.synthesis import ProcessingResult
+from src.models.cross_synthesis import CrossTopicSynthesisReport
 from src.services.providers.base import APIError
 from src.output.markdown_generator import MarkdownGenerator
 from src.output.enhanced_generator import EnhancedMarkdownGenerator
@@ -31,8 +32,10 @@ if TYPE_CHECKING:
     from src.services.catalog_service import CatalogService
     from src.services.extraction_service import ExtractionService
     from src.services.registry_service import RegistryService
+    from src.services.cross_synthesis_service import CrossTopicSynthesisService
     from src.output.synthesis_engine import SynthesisEngine
     from src.output.delta_generator import DeltaGenerator
+    from src.output.cross_synthesis_generator import CrossSynthesisGenerator
     from src.models.catalog import TopicCatalogEntry
 
 logger = structlog.get_logger()
@@ -51,10 +54,12 @@ class PipelineResult:
         self.total_cost_usd: float = 0.0
         self.output_files: List[str] = []
         self.errors: List[Dict[str, str]] = []
+        # Phase 3.7: Cross-topic synthesis report
+        self.cross_synthesis_report: Optional[CrossTopicSynthesisReport] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for logging/serialization."""
-        return {
+        result = {
             "topics_processed": self.topics_processed,
             "topics_failed": self.topics_failed,
             "papers_discovered": self.papers_discovered,
@@ -65,6 +70,14 @@ class PipelineResult:
             "output_files": self.output_files,
             "errors": self.errors,
         }
+        # Include cross-synthesis info if available
+        if self.cross_synthesis_report:
+            result["cross_synthesis"] = {
+                "questions_answered": self.cross_synthesis_report.questions_answered,
+                "synthesis_cost_usd": self.cross_synthesis_report.total_cost_usd,
+                "synthesis_tokens": self.cross_synthesis_report.total_tokens_used,
+            }
+        return result
 
 
 class ResearchPipeline:
@@ -80,6 +93,7 @@ class ResearchPipeline:
         config_path: Path to research configuration file
         enable_phase2: Whether to enable Phase 2 features (PDF/LLM extraction)
         enable_synthesis: Whether to enable Phase 3.6 synthesis
+        enable_cross_synthesis: Whether to enable Phase 3.7 cross-topic synthesis
     """
 
     def __init__(
@@ -87,6 +101,7 @@ class ResearchPipeline:
         config_path: Optional[Path] = None,
         enable_phase2: bool = True,
         enable_synthesis: bool = True,
+        enable_cross_synthesis: bool = True,
     ) -> None:
         """Initialize the research pipeline.
 
@@ -94,10 +109,12 @@ class ResearchPipeline:
             config_path: Path to research config (default: config/research_config.yaml)
             enable_phase2: Enable Phase 2 PDF/LLM extraction (default: True)
             enable_synthesis: Enable Phase 3.6 synthesis (default: True)
+            enable_cross_synthesis: Enable Phase 3.7 cross-topic synthesis
         """
         self.config_path = config_path or Path("config/research_config.yaml")
         self.enable_phase2 = enable_phase2
         self.enable_synthesis = enable_synthesis
+        self.enable_cross_synthesis = enable_cross_synthesis
 
         # Services (initialized on run)
         self._config: Optional[ResearchConfig] = None
@@ -111,6 +128,9 @@ class ResearchPipeline:
         self._md_generator: Optional[
             Union[MarkdownGenerator, EnhancedMarkdownGenerator]
         ] = None
+        # Phase 3.7: Cross-topic synthesis services
+        self._cross_synthesis_service: Optional["CrossTopicSynthesisService"] = None
+        self._cross_synthesis_generator: Optional["CrossSynthesisGenerator"] = None
 
         # Processing results for synthesis (Phase 3.6)
         self._topic_processing_results: Dict[str, List[ProcessingResult]] = {}
@@ -139,6 +159,7 @@ class ResearchPipeline:
                 config_path=str(self.config_path),
                 phase2_enabled=self.enable_phase2,
                 synthesis_enabled=self.enable_synthesis,
+                cross_synthesis_enabled=self.enable_cross_synthesis,
                 topics_count=len(self._config.research_topics),
             )
 
@@ -151,6 +172,12 @@ class ResearchPipeline:
             if self.enable_synthesis:
                 await self._run_synthesis()
 
+            # Phase 3.7: Run cross-topic synthesis
+            if self.enable_cross_synthesis:
+                cross_report = await self._run_cross_synthesis()
+                if cross_report:
+                    result.cross_synthesis_report = cross_report
+
             logger.info(
                 "pipeline_completed",
                 topics_processed=result.topics_processed,
@@ -158,6 +185,11 @@ class ResearchPipeline:
                 papers_processed=result.papers_processed,
                 output_files=len(result.output_files),
                 errors=len(result.errors),
+                cross_synthesis_questions=(
+                    result.cross_synthesis_report.questions_answered
+                    if result.cross_synthesis_report
+                    else 0
+                ),
             )
 
         except Exception as e:
@@ -197,6 +229,18 @@ class ResearchPipeline:
                 output_base_dir=output_base,
             )
             self._delta_generator = DeltaGenerator(output_base_dir=output_base)
+
+        # Phase 3.7: Cross-topic synthesis services
+        if self.enable_cross_synthesis:
+            from src.services.cross_synthesis_service import CrossTopicSynthesisService
+            from src.output.cross_synthesis_generator import CrossSynthesisGenerator
+
+            self._cross_synthesis_generator = CrossSynthesisGenerator()
+            # Note: LLM service will be set after Phase 2 initialization
+            self._cross_synthesis_service = CrossTopicSynthesisService(
+                registry_service=self._registry_service,
+                llm_service=None,  # Set later if Phase 2 enabled
+            )
 
         # Phase 2 services (if enabled)
         if self.enable_phase2:
@@ -286,6 +330,10 @@ class ResearchPipeline:
 
         # Enhanced Markdown Generator
         self._md_generator = EnhancedMarkdownGenerator()
+
+        # Phase 3.7: Update cross-synthesis service with LLM service
+        if self._cross_synthesis_service is not None:
+            self._cross_synthesis_service.llm_service = llm_service
 
         logger.info("phase2_services_initialized")
 
@@ -624,6 +672,63 @@ class ResearchPipeline:
                 )
 
         logger.info("synthesis_completed")
+
+    async def _run_cross_synthesis(self) -> Optional[CrossTopicSynthesisReport]:
+        """Run Phase 3.7 cross-topic synthesis.
+
+        Generates Global_Synthesis.md with insights across all research topics.
+
+        Returns:
+            CrossTopicSynthesisReport if successful, None otherwise.
+        """
+        if not self._cross_synthesis_service or not self._cross_synthesis_generator:
+            logger.warning(
+                "cross_synthesis_skipped",
+                reason="services not initialized",
+            )
+            return None
+
+        # Check if there are enabled questions
+        enabled_questions = self._cross_synthesis_service.get_enabled_questions()
+        if not enabled_questions:
+            logger.info("cross_synthesis_skipped", reason="no enabled questions")
+            return None
+
+        logger.info(
+            "cross_synthesis_starting",
+            enabled_questions=len(enabled_questions),
+        )
+
+        try:
+            # Run synthesis for all enabled questions
+            report = await self._cross_synthesis_service.synthesize_all()
+
+            # Write output file
+            if report.results:
+                output_path = self._cross_synthesis_generator.write(
+                    report=report,
+                    incremental=True,
+                )
+
+                if output_path:
+                    logger.info(
+                        "cross_synthesis_completed",
+                        questions_answered=report.questions_answered,
+                        total_cost_usd=report.total_cost_usd,
+                        output_path=str(output_path),
+                    )
+                else:
+                    logger.warning("cross_synthesis_write_failed")
+
+            return report
+
+        except Exception as e:
+            logger.error(
+                "cross_synthesis_failed",
+                error=str(e),
+                exc_info=True,
+            )
+            return None
 
     def _get_processing_results(
         self,

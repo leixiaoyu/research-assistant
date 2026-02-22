@@ -21,6 +21,7 @@ from src.models.synthesis import (
 )
 from src.models.registry import RegistryEntry
 from src.services.registry_service import RegistryService
+from src.utils.author_utils import normalize_authors
 from src.utils.security import PathSanitizer
 
 logger = structlog.get_logger()
@@ -112,10 +113,8 @@ class SynthesisEngine:
         # Get quality score from metadata
         quality_score = metadata.get("quality_score", 0.0)
 
-        # Get authors
-        authors = metadata.get("authors", [])
-        if isinstance(authors, str):
-            authors = [authors]
+        # Get authors (handles List[dict], List[str], str, None)
+        authors = normalize_authors(metadata.get("authors"))
 
         return KnowledgeBaseEntry(
             paper_id=entry.paper_id,

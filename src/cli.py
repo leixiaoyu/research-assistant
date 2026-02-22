@@ -137,10 +137,92 @@ def run(
             for err in result.errors:
                 typer.echo(f"  - {err}")
 
+        # Send notifications (Phase 3.7)
+        asyncio.run(_send_notifications(result, config, phase2_enabled))
+
     except Exception as e:
         logger.exception("pipeline_failed")
         typer.secho(f"Pipeline failed: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+
+
+async def _send_notifications(result, config, phase2_enabled: bool) -> None:
+    """Send pipeline notifications (Phase 3.7).
+
+    Notifications are fail-safe - errors are logged but never raised.
+
+    Args:
+        result: PipelineResult from pipeline execution.
+        config: ResearchConfig with notification settings.
+        phase2_enabled: Whether Phase 2 features are enabled.
+    """
+    from typing import List
+
+    try:
+        # Check if notification settings exist
+        if not hasattr(config.settings, "notification_settings"):
+            logger.debug("notification_settings_not_configured")
+            return
+
+        notification_settings = config.settings.notification_settings
+        if notification_settings is None:
+            logger.debug("notification_settings_none")
+            return
+
+        # Skip if Slack notifications disabled
+        if not notification_settings.slack.enabled:
+            logger.debug("slack_notifications_disabled")
+            return
+
+        from src.services.notification_service import NotificationService
+        from src.services.report_parser import ReportParser
+        from src.models.notification import KeyLearning
+
+        # Extract key learnings from output files
+        learnings: List[KeyLearning] = []
+        if notification_settings.slack.include_key_learnings:
+            parser = ReportParser()
+            learnings = parser.extract_key_learnings(
+                output_files=result.output_files,
+                max_per_topic=notification_settings.slack.max_learnings_per_topic,
+            )
+
+        # Create notification service and send
+        service = NotificationService(notification_settings)
+        summary = service.create_summary_from_result(
+            result=result.to_dict(),
+            key_learnings=learnings,
+        )
+
+        notification_result = await service.send_pipeline_summary(summary)
+
+        if notification_result.success:
+            logger.info(
+                "notification_sent",
+                provider=notification_result.provider,
+            )
+            typer.secho("Slack notification sent", fg=typer.colors.GREEN)
+        else:
+            logger.warning(
+                "notification_failed",
+                provider=notification_result.provider,
+                error=notification_result.error,
+            )
+            typer.secho(
+                f"⚠ Slack notification failed: {notification_result.error}",
+                fg=typer.colors.YELLOW,
+            )
+
+    except Exception as e:
+        # Notifications should never break the pipeline
+        logger.error(
+            "notification_error",
+            error=str(e),
+        )
+        typer.secho(
+            f"⚠ Notification error: {e}",
+            fg=typer.colors.YELLOW,
+        )
 
 
 # Legacy function kept for backwards compatibility

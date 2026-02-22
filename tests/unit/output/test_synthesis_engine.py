@@ -153,6 +153,57 @@ class TestEntryToKBEntry:
         assert kb_entry.authors == ["Single Author Name"]
         assert kb_entry.quality_score == 70.0
 
+    def test_handles_authors_as_dict_list(self, engine):
+        """Regression test: handles serialized Author objects (List[dict]).
+
+        This tests the bug fix where registry entries contain authors
+        as List[dict] from model_dump() serialization, which must be
+        converted to List[str] for KnowledgeBaseEntry.
+        """
+        entry = RegistryEntry(
+            paper_id="dict-author-id",
+            title_normalized="paper with dict authors",
+            extraction_target_hash="sha256:jkl",
+            metadata_snapshot={
+                "title": "Paper With Dict Authors",
+                "authors": [
+                    {"name": "John Doe", "authorId": "12345", "affiliation": "MIT"},
+                    {
+                        "name": "Jane Smith",
+                        "authorId": "67890",
+                        "affiliation": "Stanford",
+                    },
+                ],
+                "quality_score": 90.0,
+            },
+        )
+
+        kb_entry = engine._entry_to_kb_entry(entry)
+
+        # Must convert List[dict] to List[str] correctly
+        assert kb_entry.authors == ["John Doe", "Jane Smith"]
+        assert kb_entry.quality_score == 90.0
+
+    def test_handles_mixed_authors_list(self, engine):
+        """Test converting entry with mixed authors (dicts and strings)."""
+        entry = RegistryEntry(
+            paper_id="mixed-author-id",
+            title_normalized="paper with mixed authors",
+            extraction_target_hash="sha256:mno",
+            metadata_snapshot={
+                "title": "Paper With Mixed Authors",
+                "authors": [
+                    {"name": "Dict Author"},
+                    "String Author",
+                ],
+                "quality_score": 75.0,
+            },
+        )
+
+        kb_entry = engine._entry_to_kb_entry(entry)
+
+        assert kb_entry.authors == ["Dict Author", "String Author"]
+
 
 class TestExtractUserNotes:
     """Tests for user note extraction."""

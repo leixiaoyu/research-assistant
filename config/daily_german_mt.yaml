@@ -108,6 +108,60 @@ research_topics:
         output_format: "text"
         required: true
 
+  # -------------------------------------------------------------------------
+  # Topic 6: LLM Reasoning (Chain-of-Thought, Tree-of-Thoughts)
+  # -------------------------------------------------------------------------
+  # Research on reasoning capabilities in LLMs: CoT prompting,
+  # Tree-of-Thoughts, self-consistency, reasoning chains.
+  - query: 'chain-of-thought reasoning large language model'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "30d"
+    max_papers: 25
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on reasoning techniques, prompt patterns, and practical applications of CoT/ToT in LLMs"
+        output_format: "text"
+        required: true
+
+  # -------------------------------------------------------------------------
+  # Topic 7: Retrieval-Augmented Generation (RAG)
+  # -------------------------------------------------------------------------
+  # RAG systems, knowledge grounding, retrieval mechanisms,
+  # and hybrid retrieval-generation architectures.
+  - query: 'retrieval augmented generation knowledge grounding'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "30d"
+    max_papers: 25
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on RAG architectures, retrieval strategies, knowledge integration, and practical implementation patterns"
+        output_format: "text"
+        required: true
+
+  # -------------------------------------------------------------------------
+  # Topic 8: LLM Agents and Tool Use
+  # -------------------------------------------------------------------------
+  # Autonomous LLM agents, function calling, tool use,
+  # multi-agent systems, and agentic workflows.
+  - query: 'large language model agent tool use function calling'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "30d"
+    max_papers: 25
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on agent architectures, tool integration patterns, function calling mechanisms, and multi-agent coordination"
+        output_format: "text"
+        required: true
+
 # =============================================================================
 # Global Settings
 # =============================================================================
@@ -145,16 +199,16 @@ settings:
     max_total_spend_usd: 50.0     # Monthly safety limit
 
   # Concurrency Settings
-  # Conservative for background execution to avoid rate limits
+  # ULTRA CONSERVATIVE for free tier (5 req/min limit)
   concurrency:
-    max_concurrent_downloads: 3
-    max_concurrent_conversions: 2
+    max_concurrent_downloads: 2
+    max_concurrent_conversions: 1
     max_concurrent_llm: 1         # Single LLM call at a time
-    queue_size: 50
-    checkpoint_interval: 5
+    queue_size: 20
+    checkpoint_interval: 3
     worker_timeout_seconds: 600
     enable_backpressure: true
-    backpressure_threshold: 0.8
+    backpressure_threshold: 0.8   # Standard threshold
 
   # Cache Settings
   # Longer TTLs for daily runs to maximize cache hits

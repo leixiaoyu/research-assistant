@@ -1,0 +1,670 @@
+# Deep Research Configuration
+# ============================
+#
+# Optimized for COMPREHENSIVE paper discovery with longer timeframes.
+# Trades speed for thoroughness - may take hours to days to complete.
+#
+# Key differences from daily config:
+#   - Extended timeframes (90d to 1 year)
+#   - Broader queries with multiple variations
+#   - Higher max_papers limits
+#   - Multiple queries per topic area
+#
+# Usage:
+#   python -m src.cli run --config config/deep_research.yaml
+#
+# Estimated time: 2-6 hours depending on paper count
+# Estimated cost: $1-5 per full run
+
+research_topics:
+  # =========================================================================
+  # TOPIC AREA 1: Machine Translation (EN to FIGS Focus)
+  # =========================================================================
+  # FIGS = French, Italian, German, Spanish
+  # Focus on multilingual NMT with emphasis on Romance language challenges.
+
+  # 1a. Multilingual NMT with FIGS focus
+  - query: 'neural machine translation multilingual French Italian German Spanish'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "90d"
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on multilingual architectures for FIGS languages, transfer learning, and low-resource adaptation techniques"
+        output_format: "text"
+        required: true
+
+  # 1b. Romance language NMT challenges (gender agreement, register)
+  - query: 'neural machine translation Romance languages gender agreement'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on grammatical gender handling, morphological agreement, and register challenges in French, Italian, Spanish translation"
+        output_format: "text"
+        required: true
+
+  # 1c. Document-level MT (broader query)
+  - query: 'document level neural machine translation'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "90d"
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on document context modeling, coherence, and discourse-aware translation"
+        output_format: "text"
+        required: true
+
+  # 1d. Context-aware translation (simplified query)
+  - query: 'context aware machine translation'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "90d"
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on context modeling, attention mechanisms, and cross-sentence dependencies"
+        output_format: "text"
+        required: true
+
+  # 1e. English to French/Spanish NMT adaptation
+  - query: 'English French Spanish machine translation adaptation'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2021
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on EN-FR and EN-ES translation pairs, domain adaptation, and language-specific challenges"
+        output_format: "text"
+        required: true
+
+  # =========================================================================
+  # TOPIC AREA 2: Literary & Long-Form Translation
+  # =========================================================================
+  # Specialized techniques for translating books, novels, memoirs, and literary texts.
+  # Key challenges: style preservation, narrative coherence, cultural adaptation,
+  # stylistic fidelity, and narrative flow.
+
+  # 2a. Literary translation with stylistic fidelity
+  - query: 'literary machine translation stylistic fidelity'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on literary style preservation, stylistic fidelity, figurative language handling, and creative text translation with authorial voice retention"
+        output_format: "text"
+        required: true
+
+  # 2b. Novel translation with narrative flow
+  - query: 'novel translation narrative flow coherence'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on chapter-level coherence, character voice consistency, narrative flow, and stylistic fidelity in novel translation"
+        output_format: "text"
+        required: true
+
+  # 2c. Memoir and autobiographical translation
+  - query: 'memoir autobiographical translation first person narrative'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2018
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on first-person voice preservation, narrative consistency, autobiographical authenticity, and personal tone retention"
+        output_format: "text"
+        required: true
+
+  # 2d. Gastronomic and culinary translation (EN to FIGS)
+  - query: 'culinary food translation localization menu'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2018
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on menu translation, ingredient nomenclature, untranslatable food terms, cultural food references, and gastronomic localization for French, Italian, German, Spanish"
+        output_format: "text"
+        required: true
+
+  # 2c. Long document translation
+  - query: 'long document translation coherence'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "180d"
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on handling long context, maintaining consistency across chapters, and memory mechanisms"
+        output_format: "text"
+        required: true
+
+  # 2d. Discourse and narrative translation
+  - query: 'discourse translation narrative'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on discourse markers, anaphora resolution, and narrative structure preservation"
+        output_format: "text"
+        required: true
+
+  # 2e. Style transfer in translation
+  - query: 'style preservation machine translation'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on authorial voice, register consistency, and stylistic fidelity"
+        output_format: "text"
+        required: true
+
+  # 2f. Cultural adaptation in translation
+  - query: 'cultural adaptation machine translation localization'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on cultural references, idiom translation, and localization strategies"
+        output_format: "text"
+        required: true
+
+  # =========================================================================
+  # TOPIC AREA 3: LLM for Translation
+  # =========================================================================
+
+  # 3a. LLM translation (broad)
+  - query: 'large language model machine translation'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "90d"
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on using LLMs for translation: prompting strategies, fine-tuning, and quality improvements"
+        output_format: "text"
+        required: true
+
+  # 2b. In-context learning for translation
+  - query: 'in-context learning translation'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "180d"
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on few-shot translation, example selection, and prompt optimization"
+        output_format: "text"
+        required: true
+
+  # 2c. Translation quality and evaluation
+  - query: 'machine translation quality estimation'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "90d"
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on quality metrics, human evaluation, and automatic quality estimation"
+        output_format: "text"
+        required: true
+
+  # =========================================================================
+  # TOPIC AREA 4: LLM Reasoning (Multiple Query Variations)
+  # =========================================================================
+
+  # 3a. Chain-of-thought (simplified)
+  - query: 'chain of thought prompting'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2023
+    max_papers: 75
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on CoT prompting techniques, zero-shot CoT, and reasoning improvements"
+        output_format: "text"
+        required: true
+
+  # 3b. Tree of thoughts / reasoning trees
+  - query: 'tree of thoughts reasoning'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2023
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on tree-based reasoning, search strategies, and deliberative problem solving"
+        output_format: "text"
+        required: true
+
+  # 3c. LLM reasoning (broad)
+  - query: 'large language model reasoning'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "90d"
+    max_papers: 75
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on reasoning capabilities, logical inference, and multi-step problem solving"
+        output_format: "text"
+        required: true
+
+  # 3d. Self-consistency and verification
+  - query: 'self consistency language model'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2023
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on self-consistency decoding, answer verification, and confidence estimation"
+        output_format: "text"
+        required: true
+
+  # =========================================================================
+  # TOPIC AREA 5: RAG (Multiple Query Variations)
+  # =========================================================================
+
+  # 4a. RAG core (simplified)
+  - query: 'retrieval augmented generation'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "90d"
+    max_papers: 75
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on RAG architectures, retriever-generator integration, and knowledge grounding"
+        output_format: "text"
+        required: true
+
+  # 4b. Dense retrieval for LLMs
+  - query: 'dense retrieval language model'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "90d"
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on dense retrievers, embedding models, and retrieval optimization"
+        output_format: "text"
+        required: true
+
+  # 4c. Knowledge-grounded generation
+  - query: 'knowledge grounded generation'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "180d"
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on knowledge integration, factuality, and hallucination reduction"
+        output_format: "text"
+        required: true
+
+  # 4d. Chunking and indexing strategies
+  - query: 'document chunking embedding retrieval'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2023
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on chunking strategies, semantic segmentation, and index optimization"
+        output_format: "text"
+        required: true
+
+  # =========================================================================
+  # TOPIC AREA 6: LLM Agents (Multiple Query Variations)
+  # =========================================================================
+
+  # 5a. LLM agents (broad)
+  - query: 'large language model agent'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "90d"
+    max_papers: 75
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on agent architectures, planning, memory, and autonomous behavior"
+        output_format: "text"
+        required: true
+
+  # 5b. Tool use and function calling
+  - query: 'language model tool use'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2023
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on tool integration, API calling, and external system interaction"
+        output_format: "text"
+        required: true
+
+  # 5c. Multi-agent systems
+  - query: 'multi agent language model'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2023
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on multi-agent coordination, communication, and collaborative problem solving"
+        output_format: "text"
+        required: true
+
+  # 5d. Code generation and execution
+  - query: 'code generation language model execution'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "90d"
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on code generation, execution feedback, and iterative refinement"
+        output_format: "text"
+        required: true
+
+  # =========================================================================
+  # TOPIC AREA 7: Prompt Engineering
+  # =========================================================================
+
+  # 6a. Prompt engineering (broad)
+  - query: 'prompt engineering large language model'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "90d"
+    max_papers: 75
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on prompt design patterns, optimization techniques, and best practices"
+        output_format: "text"
+        required: true
+
+  # 6b. Instruction tuning
+  - query: 'instruction tuning language model'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "90d"
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on instruction following, RLHF, and alignment techniques"
+        output_format: "text"
+        required: true
+
+  # 6c. System prompts and personas
+  - query: 'system prompt language model behavior'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2023
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on system prompt design, role-playing, and behavioral control"
+        output_format: "text"
+        required: true
+
+  # =========================================================================
+  # TOPIC AREA 8: Style and Coherence
+  # =========================================================================
+
+  # 7a. Style transfer (NLP)
+  - query: 'text style transfer neural'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "180d"
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on style transfer techniques, disentanglement, and controlled generation"
+        output_format: "text"
+        required: true
+
+  # 7b. Coherence in long-form generation
+  - query: 'long form text generation coherence'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "180d"
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on maintaining coherence, consistency, and narrative structure"
+        output_format: "text"
+        required: true
+
+  # 7c. Controllable text generation
+  - query: 'controllable text generation'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "90d"
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on attribute control, steering, and fine-grained generation control"
+        output_format: "text"
+        required: true
+
+  # =========================================================================
+  # TOPIC AREA 9: Foundational ML & Statistics for LLMs
+  # =========================================================================
+  # Mathematical and statistical foundations for team ramp-up on LLM development.
+  # Covers transformer architecture, evaluation metrics, and probabilistic modeling.
+
+  # 9a. Transformer architecture mathematical foundations
+  - query: 'transformer architecture attention mechanism mathematical'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 60
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on mathematical foundations of transformers, self-attention mechanisms, positional encodings, and architectural innovations"
+        output_format: "text"
+        required: true
+
+  # 9b. Statistical evaluation of machine translation
+  - query: 'machine translation evaluation BLEU COMET metrics'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on MT evaluation metrics including BLEU, COMET, BLEURT, chrF, and neural evaluation methods. Statistical significance testing and human correlation analysis"
+        output_format: "text"
+        required: true
+
+  # 9c. Probabilistic modeling and decoding
+  - query: 'probabilistic language model decoding Bayes'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on probabilistic modeling in NMT, Bayes risk minimization, beam search, sampling strategies, and minimum Bayes risk decoding"
+        output_format: "text"
+        required: true
+
+  # 9d. Neural network optimization and training
+  - query: 'neural network optimization transformer training'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2021
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on optimization techniques for transformers, learning rate schedules, gradient accumulation, mixed precision training, and convergence analysis"
+        output_format: "text"
+        required: true
+
+  # 9e. Embeddings and representation learning
+  - query: 'word embeddings representation learning neural'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on embedding techniques, contextual representations, subword tokenization, and multilingual embeddings"
+        output_format: "text"
+        required: true
+
+# =============================================================================
+# Global Settings (Optimized for Deep Research)
+# =============================================================================
+settings:
+  output_base_dir: "./output"
+  enable_duplicate_detection: true
+
+  semantic_scholar_api_key: "${SEMANTIC_SCHOLAR_API_KEY}"
+
+  # PDF Processing - keep PDFs for reference
+  pdf_settings:
+    temp_dir: "./temp"
+    keep_pdfs: true           # Keep PDFs for later reference
+    max_file_size_mb: 100     # Allow larger files
+    timeout_seconds: 600      # Longer timeout
+
+  # LLM Configuration
+  llm_settings:
+    provider: "${LLM_PROVIDER}"
+    model: "${LLM_MODEL}"
+    api_key: "${LLM_API_KEY}"
+    max_tokens: 100000        # Higher limit for thorough extraction
+    temperature: 0.0
+    timeout: 600              # Longer timeout
+
+  # Cost Controls - more generous for deep research
+  cost_limits:
+    max_tokens_per_paper: 100000
+    max_daily_spend_usd: 20.0    # Higher daily limit
+    max_total_spend_usd: 100.0   # Higher monthly limit
+
+  # Concurrency Settings - conservative but steady
+  concurrency:
+    max_concurrent_downloads: 3
+    max_concurrent_conversions: 2
+    max_concurrent_llm: 2        # Parallel LLM calls
+    queue_size: 100              # Larger queue
+    checkpoint_interval: 5       # More frequent checkpoints
+    worker_timeout_seconds: 900  # 15 min timeout per paper
+    enable_backpressure: true
+    backpressure_threshold: 0.9
+
+  # Cache Settings - longer TTLs for deep research
+  cache:
+    enabled: true
+    cache_dir: "./cache"
+    ttl_api_hours: 168           # 1 week cache for API
+    ttl_pdf_days: 30             # 1 month for PDFs
+    ttl_extraction_days: 90      # 3 months for extractions
+
+  # Notifications
+  notification_settings:
+    slack:
+      enabled: true
+      webhook_url: "${SLACK_WEBHOOK_URL}"
+      notify_on_success: true
+      notify_on_failure: true
+      notify_on_partial: true
+      include_cost_summary: true
+      include_key_learnings: true
+      max_learnings_per_topic: 3
+      mention_on_failure: "<!channel>"

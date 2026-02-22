@@ -449,3 +449,316 @@ class TestSynthesizeCommand:
 
                 assert result.exit_code == 1
                 assert "Synthesis failed" in result.stdout
+
+
+class TestDryRunPhase1:
+    """Tests for dry-run with Phase 1 (Phase 2 disabled)."""
+
+    def test_dry_run_phase1_only(self):
+        """Test dry run with Phase 2 features disabled."""
+        with patch("src.cli.ConfigManager") as mock_cm:
+            mock_config = Mock()
+            # Phase 2 NOT configured - None values
+            mock_config.settings.pdf_settings = None
+            mock_config.settings.llm_settings = None
+            mock_config.settings.cost_limits = None
+            mock_config.settings.semantic_scholar_api_key = "key"
+
+            mock_config.research_topics = [
+                Mock(query="topic1", timeframe=Mock(type="recent"))
+            ]
+
+            mock_cm.return_value.load_config.return_value = mock_config
+
+            result = runner.invoke(app, ["run", "--dry-run"])
+            assert result.exit_code == 0
+            assert "Phase 2 Features: Disabled" in result.stdout
+
+
+class TestNoSynthesisFlag:
+    """Tests for --no-synthesis flag."""
+
+    def test_run_with_no_synthesis_flag(self):
+        """Test run with --no-synthesis flag shows disabled message."""
+        with patch("src.cli.ConfigManager") as mock_cm:
+            mock_config = Mock()
+            mock_config.settings.pdf_settings = Mock(keep_pdfs=True)
+            mock_config.settings.llm_settings = Mock(provider="gemini")
+            mock_config.settings.cost_limits = Mock()
+            mock_config.settings.semantic_scholar_api_key = "key"
+
+            topic = Mock(query="topic1", extraction_targets=[])
+            topic.timeframe.value = "7d"
+            mock_config.research_topics = [topic]
+
+            mock_cm.return_value.load_config.return_value = mock_config
+
+            with patch(
+                "src.orchestration.research_pipeline.ResearchPipeline"
+            ) as mock_pipeline_class:
+                mock_result = PipelineResult()
+                mock_result.topics_processed = 1
+                mock_result.papers_discovered = 5
+                mock_result.papers_processed = 3
+                mock_result.papers_with_extraction = 0
+                mock_result.total_tokens_used = 0
+                mock_result.total_cost_usd = 0
+                mock_result.output_files = []
+                mock_result.errors = []
+
+                mock_pipeline = Mock()
+                mock_pipeline.run = AsyncMock(return_value=mock_result)
+                mock_pipeline_class.return_value = mock_pipeline
+
+                result = runner.invoke(app, ["run", "--no-synthesis"])
+                assert result.exit_code == 0
+                assert "synthesis disabled" in result.stdout
+
+
+class TestValidateCommand:
+    """Tests for validate command."""
+
+    def test_validate_success(self):
+        """Test validate command with valid config."""
+        with patch("src.cli.ConfigManager") as mock_cm:
+            mock_cm.return_value.load_config.return_value = Mock()
+
+            result = runner.invoke(app, ["validate", "config/test.yaml"])
+            assert result.exit_code == 0
+            assert "valid" in result.stdout
+
+    def test_validate_failure(self):
+        """Test validate command with invalid config."""
+        with patch("src.cli.ConfigManager") as mock_cm:
+            mock_cm.return_value.load_config.side_effect = ConfigValidationError(
+                "Invalid YAML"
+            )
+
+            result = runner.invoke(app, ["validate", "config/bad.yaml"])
+            assert result.exit_code == 1
+            assert "Validation failed" in result.stdout
+
+
+class TestCatalogShow:
+    """Tests for catalog show action."""
+
+    def test_catalog_show_with_topics(self):
+        """Test catalog show displays all topics."""
+        with patch("src.cli.ConfigManager") as mock_cm:
+            mock_topic = Mock()
+            mock_topic.query = "test query"
+            mock_topic.runs = [Mock(), Mock()]
+
+            mock_catalog = Mock()
+            mock_catalog.topics = {"test-topic": mock_topic}
+            mock_cm.return_value.load_catalog.return_value = mock_catalog
+
+            result = runner.invoke(app, ["catalog", "show"])
+            assert "1 topics" in result.stdout
+            assert "test-topic" in result.stdout
+            assert "2 runs" in result.stdout
+
+
+class TestCatalogHistoryWithTopic:
+    """Tests for catalog history with valid topic."""
+
+    def test_catalog_history_valid_topic(self):
+        """Test catalog history with existing topic."""
+        with patch("src.cli.ConfigManager") as mock_cm:
+            mock_run = Mock()
+            mock_run.date = "2025-01-01"
+            mock_run.papers_found = 10
+            mock_run.output_file = "/output/test.md"
+
+            mock_topic = Mock()
+            mock_topic.query = "test query"
+            mock_topic.runs = [mock_run]
+
+            mock_catalog = Mock()
+            mock_catalog.topics = {"test-topic": mock_topic}
+            mock_cm.return_value.load_catalog.return_value = mock_catalog
+
+            result = runner.invoke(app, ["catalog", "history", "--topic", "test-topic"])
+            assert "History for test query" in result.stdout
+            assert "Found 10 papers" in result.stdout
+
+
+class TestSynthesizeQuestionReturnsNone:
+    """Tests for synthesize when question lookup returns None after initial check."""
+
+    def test_synthesize_question_returns_none_on_second_lookup(self):
+        """Test synthesize handles None from second get_question_by_id call."""
+        with patch("src.services.registry_service.RegistryService"):
+            with patch(
+                "src.services.cross_synthesis_service.CrossTopicSynthesisService"
+            ) as mock_service:
+                # First call returns question (validation passes)
+                # Second call in run_synthesis returns None
+                mock_question = Mock(id="test-q", enabled=True)
+                mock_service.return_value.get_enabled_questions.return_value = [
+                    mock_question
+                ]
+                mock_service.return_value.get_question_by_id.side_effect = [
+                    mock_question,  # First call - validation
+                    None,  # Second call - in run_synthesis
+                ]
+
+                result = runner.invoke(app, ["synthesize", "--question", "test-q"])
+
+                # Should handle None gracefully
+                assert "No synthesis results" in result.stdout
+
+
+class TestSendNotifications:
+    """Tests for _send_notifications function in CLI."""
+
+    import pytest
+
+    @pytest.mark.asyncio
+    async def test_notification_settings_not_configured(self):
+        """Test notification skipped when settings attribute missing."""
+        from src.cli import _send_notifications
+
+        # Mock result
+        mock_result = Mock()
+        mock_result.output_files = []
+        mock_result.to_dict.return_value = {}
+
+        # Mock config without notification_settings attribute
+        mock_config = Mock(spec=["settings"])
+        mock_config.settings = Mock(spec=[])  # No notification_settings attr
+
+        # Should return without error
+        await _send_notifications(mock_result, mock_config, True)
+
+    @pytest.mark.asyncio
+    async def test_notification_settings_none(self):
+        """Test notification skipped when settings is None."""
+        from src.cli import _send_notifications
+
+        mock_result = Mock()
+        mock_result.output_files = []
+        mock_result.to_dict.return_value = {}
+
+        mock_config = Mock()
+        mock_config.settings.notification_settings = None
+
+        await _send_notifications(mock_result, mock_config, True)
+
+    @pytest.mark.asyncio
+    async def test_slack_notifications_disabled(self):
+        """Test notification skipped when Slack is disabled."""
+        from src.cli import _send_notifications
+
+        mock_result = Mock()
+        mock_result.output_files = []
+        mock_result.to_dict.return_value = {}
+
+        mock_config = Mock()
+        mock_config.settings.notification_settings.slack.enabled = False
+
+        await _send_notifications(mock_result, mock_config, True)
+
+    @pytest.mark.asyncio
+    async def test_notification_success(self):
+        """Test successful notification sends and logs success."""
+        from src.cli import _send_notifications
+        from src.models.notification import NotificationResult
+
+        mock_result = Mock()
+        mock_result.output_files = ["output/test.md"]
+        mock_result.to_dict.return_value = {
+            "topics_processed": 5,
+            "papers_discovered": 100,
+        }
+
+        mock_config = Mock()
+        mock_config.settings.notification_settings.slack.enabled = True
+        mock_config.settings.notification_settings.slack.include_key_learnings = False
+
+        with patch("src.services.notification_service.NotificationService") as mock_svc:
+            with patch("src.services.report_parser.ReportParser"):
+                mock_svc.return_value.create_summary_from_result.return_value = Mock()
+                mock_svc.return_value.send_pipeline_summary = AsyncMock(
+                    return_value=NotificationResult(
+                        success=True, provider="slack", response_status=200
+                    )
+                )
+
+                await _send_notifications(mock_result, mock_config, True)
+
+                mock_svc.return_value.send_pipeline_summary.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_notification_failure(self):
+        """Test failed notification logs warning."""
+        from src.cli import _send_notifications
+        from src.models.notification import NotificationResult
+
+        mock_result = Mock()
+        mock_result.output_files = []
+        mock_result.to_dict.return_value = {}
+
+        mock_config = Mock()
+        mock_config.settings.notification_settings.slack.enabled = True
+        mock_config.settings.notification_settings.slack.include_key_learnings = False
+
+        with patch("src.services.notification_service.NotificationService") as mock_svc:
+            with patch("src.services.report_parser.ReportParser"):
+                mock_svc.return_value.create_summary_from_result.return_value = Mock()
+                mock_svc.return_value.send_pipeline_summary = AsyncMock(
+                    return_value=NotificationResult(
+                        success=False, provider="slack", error="Webhook error"
+                    )
+                )
+
+                await _send_notifications(mock_result, mock_config, True)
+
+    @pytest.mark.asyncio
+    async def test_notification_exception(self):
+        """Test exception during notification is caught and logged."""
+        from src.cli import _send_notifications
+
+        mock_result = Mock()
+        mock_result.output_files = []
+        mock_result.to_dict.return_value = {}
+
+        mock_config = Mock()
+        mock_config.settings.notification_settings.slack.enabled = True
+        mock_config.settings.notification_settings.slack.include_key_learnings = False
+
+        with patch("src.services.notification_service.NotificationService") as mock_svc:
+            with patch("src.services.report_parser.ReportParser"):
+                mock_svc.return_value.create_summary_from_result.side_effect = (
+                    RuntimeError("Unexpected error")
+                )
+
+                # Should not raise - notifications are fail-safe
+                await _send_notifications(mock_result, mock_config, True)
+
+    @pytest.mark.asyncio
+    async def test_notification_with_key_learnings(self):
+        """Test notification extracts key learnings when enabled."""
+        from src.cli import _send_notifications
+        from src.models.notification import NotificationResult
+
+        mock_result = Mock()
+        mock_result.output_files = ["output/topic1/Knowledge_Base.md"]
+        mock_result.to_dict.return_value = {}
+
+        mock_config = Mock()
+        mock_config.settings.notification_settings.slack.enabled = True
+        mock_config.settings.notification_settings.slack.include_key_learnings = True
+        mock_config.settings.notification_settings.slack.max_learnings_per_topic = 2
+
+        with patch("src.services.notification_service.NotificationService") as mock_svc:
+            with patch("src.services.report_parser.ReportParser") as mock_parser:
+                mock_parser.return_value.extract_key_learnings.return_value = []
+                mock_svc.return_value.create_summary_from_result.return_value = Mock()
+                mock_svc.return_value.send_pipeline_summary = AsyncMock(
+                    return_value=NotificationResult(success=True, provider="slack")
+                )
+
+                await _send_notifications(mock_result, mock_config, True)
+
+                mock_parser.return_value.extract_key_learnings.assert_called_once()

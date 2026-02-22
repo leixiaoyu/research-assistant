@@ -18,11 +18,13 @@
 
 research_topics:
   # =========================================================================
-  # TOPIC AREA 1: Machine Translation (German Focus)
+  # TOPIC AREA 1: Machine Translation (EN to FIGS Focus)
   # =========================================================================
+  # FIGS = French, Italian, German, Spanish
+  # Focus on multilingual NMT with emphasis on Romance language challenges.
 
-  # 1a. Low-resource and multilingual NMT
-  - query: 'neural machine translation multilingual'
+  # 1a. Multilingual NMT with FIGS focus
+  - query: 'neural machine translation multilingual French Italian German Spanish'
     provider: "semantic_scholar"
     auto_select_provider: false
     timeframe:
@@ -31,11 +33,25 @@ research_topics:
     max_papers: 50
     extraction_targets:
       - name: "engineering_summary"
-        description: "Focus on multilingual architectures, transfer learning, and low-resource adaptation techniques"
+        description: "Focus on multilingual architectures for FIGS languages, transfer learning, and low-resource adaptation techniques"
         output_format: "text"
         required: true
 
-  # 1b. Document-level MT (broader query)
+  # 1b. Romance language NMT challenges (gender agreement, register)
+  - query: 'neural machine translation Romance languages gender agreement'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on grammatical gender handling, morphological agreement, and register challenges in French, Italian, Spanish translation"
+        output_format: "text"
+        required: true
+
+  # 1c. Document-level MT (broader query)
   - query: 'document level neural machine translation'
     provider: "semantic_scholar"
     auto_select_provider: false
@@ -49,7 +65,7 @@ research_topics:
         output_format: "text"
         required: true
 
-  # 1c. Context-aware translation (simplified query)
+  # 1d. Context-aware translation (simplified query)
   - query: 'context aware machine translation'
     provider: "semantic_scholar"
     auto_select_provider: false
@@ -63,14 +79,29 @@ research_topics:
         output_format: "text"
         required: true
 
+  # 1e. English to French/Spanish NMT adaptation
+  - query: 'English French Spanish machine translation adaptation'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2021
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on EN-FR and EN-ES translation pairs, domain adaptation, and language-specific challenges"
+        output_format: "text"
+        required: true
+
   # =========================================================================
   # TOPIC AREA 2: Literary & Long-Form Translation
   # =========================================================================
-  # Specialized techniques for translating books, novels, and literary texts.
-  # Key challenges: style preservation, narrative coherence, cultural adaptation.
+  # Specialized techniques for translating books, novels, memoirs, and literary texts.
+  # Key challenges: style preservation, narrative coherence, cultural adaptation,
+  # stylistic fidelity, and narrative flow.
 
-  # 2a. Literary translation (core)
-  - query: 'literary machine translation'
+  # 2a. Literary translation with stylistic fidelity
+  - query: 'literary machine translation stylistic fidelity'
     provider: "semantic_scholar"
     auto_select_provider: false
     timeframe:
@@ -79,12 +110,12 @@ research_topics:
     max_papers: 50
     extraction_targets:
       - name: "engineering_summary"
-        description: "Focus on literary style preservation, figurative language handling, and creative text translation"
+        description: "Focus on literary style preservation, stylistic fidelity, figurative language handling, and creative text translation with authorial voice retention"
         output_format: "text"
         required: true
 
-  # 2b. Book and novel translation
-  - query: 'book translation neural machine translation'
+  # 2b. Novel translation with narrative flow
+  - query: 'novel translation narrative flow coherence'
     provider: "semantic_scholar"
     auto_select_provider: false
     timeframe:
@@ -93,7 +124,35 @@ research_topics:
     max_papers: 40
     extraction_targets:
       - name: "engineering_summary"
-        description: "Focus on chapter-level coherence, character voice consistency, and narrative flow"
+        description: "Focus on chapter-level coherence, character voice consistency, narrative flow, and stylistic fidelity in novel translation"
+        output_format: "text"
+        required: true
+
+  # 2c. Memoir and autobiographical translation
+  - query: 'memoir autobiographical translation first person narrative'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2018
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on first-person voice preservation, narrative consistency, autobiographical authenticity, and personal tone retention"
+        output_format: "text"
+        required: true
+
+  # 2d. Gastronomic and culinary translation (EN to FIGS)
+  - query: 'culinary food translation localization menu'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2018
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on menu translation, ingredient nomenclature, untranslatable food terms, cultural food references, and gastronomic localization for French, Italian, German, Spanish"
         output_format: "text"
         required: true
 
@@ -468,6 +527,82 @@ research_topics:
     extraction_targets:
       - name: "engineering_summary"
         description: "Focus on attribute control, steering, and fine-grained generation control"
+        output_format: "text"
+        required: true
+
+  # =========================================================================
+  # TOPIC AREA 9: Foundational ML & Statistics for LLMs
+  # =========================================================================
+  # Mathematical and statistical foundations for team ramp-up on LLM development.
+  # Covers transformer architecture, evaluation metrics, and probabilistic modeling.
+
+  # 9a. Transformer architecture mathematical foundations
+  - query: 'transformer architecture attention mechanism mathematical'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 60
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on mathematical foundations of transformers, self-attention mechanisms, positional encodings, and architectural innovations"
+        output_format: "text"
+        required: true
+
+  # 9b. Statistical evaluation of machine translation
+  - query: 'machine translation evaluation BLEU COMET metrics'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on MT evaluation metrics including BLEU, COMET, BLEURT, chrF, and neural evaluation methods. Statistical significance testing and human correlation analysis"
+        output_format: "text"
+        required: true
+
+  # 9c. Probabilistic modeling and decoding
+  - query: 'probabilistic language model decoding Bayes'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on probabilistic modeling in NMT, Bayes risk minimization, beam search, sampling strategies, and minimum Bayes risk decoding"
+        output_format: "text"
+        required: true
+
+  # 9d. Neural network optimization and training
+  - query: 'neural network optimization transformer training'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2021
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on optimization techniques for transformers, learning rate schedules, gradient accumulation, mixed precision training, and convergence analysis"
+        output_format: "text"
+        required: true
+
+  # 9e. Embeddings and representation learning
+  - query: 'word embeddings representation learning neural'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on embedding techniques, contextual representations, subword tokenization, and multilingual embeddings"
         output_format: "text"
         required: true
 

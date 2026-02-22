@@ -116,13 +116,15 @@ class TestValidateQuery:
         assert result == "transformer OR attention"
 
     def test_invalid_query_special_chars(self, provider):
-        """Test invalid query with special characters."""
-        with pytest.raises(ValueError, match="forbidden characters"):
+        """Test invalid query with special characters (injection attempt)."""
+        # Centralized InputValidation detects command injection patterns
+        with pytest.raises(ValueError, match="forbidden pattern.*injection"):
             provider.validate_query("test; rm -rf /")
 
     def test_invalid_query_shell_injection(self, provider):
         """Test query rejects shell injection attempts."""
-        with pytest.raises(ValueError, match="forbidden characters"):
+        # Centralized InputValidation rejects $ as outside allowed charset
+        with pytest.raises(ValueError, match="characters outside allowed"):
             provider.validate_query("$HOME")
 
     def test_invalid_query_too_short(self, provider):
@@ -621,3 +623,130 @@ class TestIntegrationWithDiscoveryService:
         assert hasattr(provider, "validate_query")
         assert hasattr(provider, "name")
         assert hasattr(provider, "requires_api_key")
+
+
+class TestExtractSearchTerms:
+    """Test search term extraction with quoted phrases."""
+
+    def test_extract_simple_keywords(self, provider):
+        """Test extraction of simple keywords."""
+        terms = provider._extract_search_terms("machine learning")
+        assert "machine" in terms
+        assert "learning" in terms
+
+    def test_extract_quoted_phrase(self, provider):
+        """Test extraction preserves quoted phrases."""
+        terms = provider._extract_search_terms('"machine learning" transformer')
+        assert "machine learning" in terms
+        assert "transformer" in terms
+
+    def test_extract_multiple_quoted_phrases(self, provider):
+        """Test extraction of multiple quoted phrases."""
+        terms = provider._extract_search_terms('"large language" "neural network"')
+        assert "large language" in terms
+        assert "neural network" in terms
+
+    def test_extract_removes_operators(self, provider):
+        """Test extraction removes AND/OR/NOT operators."""
+        terms = provider._extract_search_terms("machine AND learning OR NOT test")
+        assert "machine" in terms
+        assert "learning" in terms
+        assert "test" in terms
+        assert "AND" not in terms
+        assert "OR" not in terms
+        assert "NOT" not in terms
+
+    def test_extract_filters_short_words(self, provider):
+        """Test extraction filters words with 2 or fewer chars."""
+        terms = provider._extract_search_terms("a to machine learning")
+        assert "a" not in terms
+        assert "to" not in terms
+        assert "machine" in terms
+        assert "learning" in terms
+
+    def test_extract_empty_query(self, provider):
+        """Test extraction of empty/operator-only query."""
+        terms = provider._extract_search_terms("AND OR NOT")
+        assert terms == []
+
+
+class TestFilterByQueryAndSemantics:
+    """Test AND semantics in query filtering."""
+
+    def test_filter_requires_all_keywords(self, provider):
+        """Test filter requires ALL keywords to match (AND semantics)."""
+        papers = [
+            PaperMetadata(
+                paper_id="1",
+                title="Machine Learning Paper",
+                abstract="About neural networks",
+                url="https://arxiv.org/abs/1",
+            ),
+            PaperMetadata(
+                paper_id="2",
+                title="Deep Learning Paper",
+                abstract="About transformers",
+                url="https://arxiv.org/abs/2",
+            ),
+        ]
+        # Both "machine" AND "neural" must be present
+        filtered = provider._filter_by_query(papers, "machine neural")
+        assert len(filtered) == 1
+        assert filtered[0].paper_id == "1"
+
+    def test_filter_quoted_phrase_matching(self, provider):
+        """Test filter matches quoted phrases exactly."""
+        papers = [
+            PaperMetadata(
+                paper_id="1",
+                title="Large Language Models",
+                abstract="About LLMs",
+                url="https://arxiv.org/abs/1",
+            ),
+            PaperMetadata(
+                paper_id="2",
+                title="Large Vision Models",
+                abstract="About language understanding",
+                url="https://arxiv.org/abs/2",
+            ),
+        ]
+        # "large language" as a phrase should only match paper 1
+        filtered = provider._filter_by_query(papers, '"large language"')
+        assert len(filtered) == 1
+        assert filtered[0].paper_id == "1"
+
+
+class TestValidatePdfUrl:
+    """Test PDF URL validation."""
+
+    def test_validate_valid_url(self, provider):
+        """Test validation of valid ArXiv PDF URL."""
+        url = "https://arxiv.org/pdf/2602.12345.pdf"
+        result = provider._validate_pdf_url(url)
+        assert result == url
+
+    def test_validate_upgrades_http_to_https(self, provider):
+        """Test HTTP is upgraded to HTTPS."""
+        url = "http://arxiv.org/pdf/2602.12345.pdf"
+        result = provider._validate_pdf_url(url)
+        assert result.startswith("https://")
+
+    def test_validate_url_without_pdf_extension(self, provider):
+        """Test URL without .pdf extension is valid."""
+        url = "https://arxiv.org/pdf/2602.12345"
+        result = provider._validate_pdf_url(url)
+        assert result == url
+
+    def test_validate_rejects_invalid_domain(self, provider):
+        """Test validation rejects non-ArXiv URLs."""
+        from src.utils.security import SecurityError
+
+        with pytest.raises(SecurityError, match="Invalid ArXiv PDF URL"):
+            provider._validate_pdf_url("https://malicious.com/pdf/2602.12345.pdf")
+
+    def test_validate_rejects_path_traversal(self, provider):
+        """Test validation rejects path traversal attempts."""
+        from src.utils.security import SecurityError
+
+        with pytest.raises(SecurityError, match="Invalid ArXiv PDF URL"):
+            provider._validate_pdf_url("https://arxiv.org/pdf/../../../etc/passwd")

@@ -35,9 +35,11 @@ from src.models.config import (
     TimeframeRecent,
     TimeframeSinceYear,
     TimeframeDateRange,
+    Timeframe,
 )
 from src.models.paper import PaperMetadata, Author
 from src.utils.rate_limiter import RateLimiter
+from src.utils.security import InputValidation, SecurityError
 
 logger = structlog.get_logger()
 
@@ -83,10 +85,10 @@ class HuggingFaceProvider(DiscoveryProvider):
         return False
 
     def validate_query(self, query: str) -> str:
-        """Validate search query.
+        """Validate search query using centralized security validation.
 
-        HuggingFace API doesn't support query-based search directly,
-        so we validate the query format for keyword matching.
+        Delegates to InputValidation.validate_query() for consistent security
+        checks across all providers, including command injection detection.
 
         Args:
             query: User-provided search query.
@@ -95,20 +97,19 @@ class HuggingFaceProvider(DiscoveryProvider):
             Validated and sanitized query string.
 
         Raises:
-            ValueError: If query contains invalid characters.
+            ValueError: If query contains invalid or dangerous characters.
         """
-        # Basic validation - alphanumeric, spaces, common operators
-        if not re.match(r'^[a-zA-Z0-9\s\-_+.,"():|]+$', query):
-            raise ValueError("Invalid query syntax: contains forbidden characters")
+        # Use centralized security validation (checks injection patterns + whitelist)
+        validated = InputValidation.validate_query(query)
 
-        # Check for reasonable length
-        if len(query) < 2:
+        # Additional length checks specific to HuggingFace filtering
+        if len(validated) < 2:
             raise ValueError("Query too short (minimum 2 characters)")
 
-        if len(query) > 500:
+        if len(validated) > 500:
             raise ValueError("Query too long (maximum 500 characters)")
 
-        return query.strip()
+        return validated
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session."""
@@ -288,7 +289,9 @@ class HuggingFaceProvider(DiscoveryProvider):
 
                 # URLs - use ArXiv URLs since papers are ArXiv-based
                 url = f"{self.ARXIV_ABS_BASE}/{paper_id}"
-                pdf_url = f"{self.ARXIV_PDF_BASE}/{paper_id}.pdf"
+                pdf_url = self._validate_pdf_url(
+                    f"{self.ARXIV_PDF_BASE}/{paper_id}.pdf"
+                )
 
                 # Metrics
                 upvotes = paper_data.get("upvotes", 0)
@@ -333,44 +336,80 @@ class HuggingFaceProvider(DiscoveryProvider):
     def _filter_by_query(
         self, papers: List[PaperMetadata], query: str
     ) -> List[PaperMetadata]:
-        """Filter papers by query keywords.
+        """Filter papers by query keywords using AND semantics.
 
         Since HuggingFace API doesn't support server-side search,
-        we filter locally by checking if query terms appear in
-        title or abstract.
+        we filter locally by checking if ALL query terms appear in
+        title or abstract. Supports quoted phrases for exact matching.
 
         Args:
             papers: List of papers to filter.
-            query: Search query with keywords.
+            query: Search query with keywords and optional quoted phrases.
 
         Returns:
-            Filtered list of papers matching the query.
+            Filtered list of papers where ALL terms match.
         """
-        # Extract keywords from query (split by operators and whitespace)
-        # Remove common operators: AND, OR, NOT
-        query_clean = re.sub(r"\b(AND|OR|NOT)\b", " ", query, flags=re.IGNORECASE)
+        # Extract search terms: quoted phrases and individual keywords
+        terms = self._extract_search_terms(query)
+
+        if not terms:
+            return papers
+
+        filtered = []
+        for paper in papers:
+            # Pre-compute lowercase text once per paper (efficiency)
+            text = f"{paper.title} {paper.abstract or ''}".lower()
+
+            # AND logic: ALL terms must match
+            if all(term in text for term in terms):
+                filtered.append(paper)
+
+        return filtered
+
+    def _extract_search_terms(self, query: str) -> List[str]:
+        """Extract search terms from query, preserving quoted phrases.
+
+        Handles:
+        - Quoted phrases: "machine learning" -> ["machine learning"]
+        - Individual words: transformer model -> ["transformer", "model"]
+        - Removes boolean operators: AND, OR, NOT
+
+        Args:
+            query: Raw search query string.
+
+        Returns:
+            List of lowercase search terms (phrases and keywords).
+        """
+        terms = []
+
+        # 1. Extract quoted phrases first (preserve as single terms)
+        quoted_pattern = r'"([^"]+)"'
+        quoted_matches = re.findall(quoted_pattern, query)
+        for phrase in quoted_matches:
+            phrase_clean = phrase.strip().lower()
+            if len(phrase_clean) > 2:
+                terms.append(phrase_clean)
+
+        # 2. Remove quoted portions from query for keyword extraction
+        query_without_quotes = re.sub(quoted_pattern, " ", query)
+
+        # 3. Remove boolean operators
+        query_clean = re.sub(
+            r"\b(AND|OR|NOT)\b", " ", query_without_quotes, flags=re.IGNORECASE
+        )
+
+        # 4. Extract individual keywords (min 3 chars to filter noise)
         keywords = [
             kw.strip().lower()
             for kw in re.split(r"[\s,()]+", query_clean)
             if kw.strip() and len(kw.strip()) > 2
         ]
+        terms.extend(keywords)
 
-        if not keywords:
-            return papers
-
-        filtered = []
-        for paper in papers:
-            # Combine title and abstract for matching
-            text = f"{paper.title} {paper.abstract or ''}".lower()
-
-            # Check if any keyword matches
-            if any(kw in text for kw in keywords):
-                filtered.append(paper)
-
-        return filtered
+        return terms
 
     def _filter_by_timeframe(
-        self, papers: List[PaperMetadata], timeframe
+        self, papers: List[PaperMetadata], timeframe: Timeframe
     ) -> List[PaperMetadata]:
         """Filter papers by publication timeframe.
 
@@ -428,3 +467,30 @@ class HuggingFaceProvider(DiscoveryProvider):
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         return dt
+
+    def _validate_pdf_url(self, url: str) -> str:
+        """Validate and sanitize PDF URL for security.
+
+        Ensures URLs point to legitimate ArXiv PDF endpoints and use HTTPS.
+
+        Args:
+            url: Raw PDF URL string.
+
+        Returns:
+            Validated HTTPS URL.
+
+        Raises:
+            SecurityError: If URL doesn't match expected ArXiv pattern.
+        """
+        # Upgrade HTTP to HTTPS
+        if url.startswith("http://"):
+            url = url.replace("http://", "https://", 1)
+
+        # Validate URL matches ArXiv PDF pattern
+        # Pattern: https://arxiv.org/pdf/{id}.pdf
+        # where id is alphanumeric with dots/hyphens
+        pattern = r"^https://arxiv\.org/pdf/[\w\-\.]+(\.pdf)?$"
+        if not re.match(pattern, url):
+            raise SecurityError(f"Invalid ArXiv PDF URL: {url}")
+
+        return url

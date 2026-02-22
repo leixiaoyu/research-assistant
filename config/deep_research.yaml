@@ -64,10 +64,100 @@ research_topics:
         required: true
 
   # =========================================================================
-  # TOPIC AREA 2: LLM for Translation
+  # TOPIC AREA 2: Literary & Long-Form Translation
+  # =========================================================================
+  # Specialized techniques for translating books, novels, and literary texts.
+  # Key challenges: style preservation, narrative coherence, cultural adaptation.
+
+  # 2a. Literary translation (core)
+  - query: 'literary machine translation'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on literary style preservation, figurative language handling, and creative text translation"
+        output_format: "text"
+        required: true
+
+  # 2b. Book and novel translation
+  - query: 'book translation neural machine translation'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on chapter-level coherence, character voice consistency, and narrative flow"
+        output_format: "text"
+        required: true
+
+  # 2c. Long document translation
+  - query: 'long document translation coherence'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "180d"
+    max_papers: 50
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on handling long context, maintaining consistency across chapters, and memory mechanisms"
+        output_format: "text"
+        required: true
+
+  # 2d. Discourse and narrative translation
+  - query: 'discourse translation narrative'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on discourse markers, anaphora resolution, and narrative structure preservation"
+        output_format: "text"
+        required: true
+
+  # 2e. Style transfer in translation
+  - query: 'style preservation machine translation'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on authorial voice, register consistency, and stylistic fidelity"
+        output_format: "text"
+        required: true
+
+  # 2f. Cultural adaptation in translation
+  - query: 'cultural adaptation machine translation localization'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "since_year"
+      value: 2020
+    max_papers: 40
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on cultural references, idiom translation, and localization strategies"
+        output_format: "text"
+        required: true
+
+  # =========================================================================
+  # TOPIC AREA 3: LLM for Translation
   # =========================================================================
 
-  # 2a. LLM translation (broad)
+  # 3a. LLM translation (broad)
   - query: 'large language model machine translation'
     provider: "semantic_scholar"
     auto_select_provider: false
@@ -110,7 +200,7 @@ research_topics:
         required: true
 
   # =========================================================================
-  # TOPIC AREA 3: LLM Reasoning (Multiple Query Variations)
+  # TOPIC AREA 4: LLM Reasoning (Multiple Query Variations)
   # =========================================================================
 
   # 3a. Chain-of-thought (simplified)
@@ -170,7 +260,7 @@ research_topics:
         required: true
 
   # =========================================================================
-  # TOPIC AREA 4: RAG (Multiple Query Variations)
+  # TOPIC AREA 5: RAG (Multiple Query Variations)
   # =========================================================================
 
   # 4a. RAG core (simplified)
@@ -230,7 +320,7 @@ research_topics:
         required: true
 
   # =========================================================================
-  # TOPIC AREA 5: LLM Agents (Multiple Query Variations)
+  # TOPIC AREA 6: LLM Agents (Multiple Query Variations)
   # =========================================================================
 
   # 5a. LLM agents (broad)
@@ -290,7 +380,7 @@ research_topics:
         required: true
 
   # =========================================================================
-  # TOPIC AREA 6: Prompt Engineering
+  # TOPIC AREA 7: Prompt Engineering
   # =========================================================================
 
   # 6a. Prompt engineering (broad)
@@ -336,7 +426,7 @@ research_topics:
         required: true
 
   # =========================================================================
-  # TOPIC AREA 7: Style and Coherence
+  # TOPIC AREA 8: Style and Coherence
   # =========================================================================
 
   # 7a. Style transfer (NLP)

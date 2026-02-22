@@ -8,6 +8,7 @@ import structlog
 from src.services.providers.base import DiscoveryProvider, APIError
 from src.services.providers.semantic_scholar import SemanticScholarProvider
 from src.services.providers.arxiv import ArxivProvider
+from src.services.providers.huggingface import HuggingFaceProvider
 from src.models.config import (
     ResearchTopic,
     ProviderType,
@@ -64,6 +65,9 @@ class DiscoveryService:
             )
         else:
             logger.info("semantic_scholar_disabled", reason="no_api_key")
+
+        # Initialize HuggingFace (Always available - no API key required)
+        self.providers[ProviderType.HUGGINGFACE] = HuggingFaceProvider()
 
         # Initialize provider selector
         self._selector = ProviderSelector(

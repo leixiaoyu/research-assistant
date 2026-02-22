@@ -69,7 +69,8 @@ class TestDiscoveryServiceInitialization:
         ds = DiscoveryService(api_key="test_key_1234567890")
         providers = ds.available_providers
         assert isinstance(providers, list)
-        assert len(providers) == 2
+        # ArXiv, Semantic Scholar, and HuggingFace
+        assert len(providers) == 3
 
 
 class TestAutoSelection:
@@ -457,14 +458,30 @@ class TestCompareProviders:
                 )
                 mock_ss.return_value = [paper2]
 
-                comparison = await ds.compare_providers(topic)
+                hf_path = "src.services.providers.huggingface"
+                with patch(
+                    f"{hf_path}.HuggingFaceProvider.search",
+                    new_callable=AsyncMock,
+                ) as mock_hf:
+                    paper3 = PaperMetadata(
+                        paper_id="test789",
+                        title="Paper 3",
+                        abstract="Abstract 3",
+                        authors=[Author(name="Author Three")],
+                        url="https://example.com/paper3",
+                        doi="10.1234/test3",
+                    )
+                    mock_hf.return_value = [paper3]
 
-                assert isinstance(comparison, ProviderComparison)
-                assert len(comparison.providers_queried) == 2
-                assert len(comparison.metrics) == 2
-                assert comparison.total_unique_papers == 2
-                assert comparison.fastest_provider is not None
-                assert comparison.most_results_provider is not None
+                    comparison = await ds.compare_providers(topic)
+
+                    assert isinstance(comparison, ProviderComparison)
+                    # Now includes ArXiv, Semantic Scholar, and HuggingFace
+                    assert len(comparison.providers_queried) == 3
+                    assert len(comparison.metrics) == 3
+                    assert comparison.total_unique_papers == 3
+                    assert comparison.fastest_provider is not None
+                    assert comparison.most_results_provider is not None
 
     @pytest.mark.asyncio
     async def test_compare_providers_with_overlap(self, mock_paper):
@@ -519,16 +536,24 @@ class TestCompareProviders:
             ) as mock_ss:
                 mock_ss.side_effect = Exception("SS Error")
 
-                comparison = await ds.compare_providers(topic)
+                hf_path = "src.services.providers.huggingface"
+                with patch(
+                    f"{hf_path}.HuggingFaceProvider.search",
+                    new_callable=AsyncMock,
+                ) as mock_hf:
+                    mock_hf.return_value = []
 
-                assert len(comparison.metrics) == 2
-                ss_metric = next(
-                    m
-                    for m in comparison.metrics
-                    if m.provider == ProviderType.SEMANTIC_SCHOLAR
-                )
-                assert ss_metric.success is False
-                assert ss_metric.error is not None
+                    comparison = await ds.compare_providers(topic)
+
+                    # Now includes 3 providers
+                    assert len(comparison.metrics) == 3
+                    ss_metric = next(
+                        m
+                        for m in comparison.metrics
+                        if m.provider == ProviderType.SEMANTIC_SCHOLAR
+                    )
+                    assert ss_metric.success is False
+                    assert ss_metric.error is not None
 
 
 class TestProviderUnavailable:

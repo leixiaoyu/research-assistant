@@ -468,6 +468,8 @@ class TestDiscoveryServiceBenchmarkDeduplication:
         service.providers[ProviderType.ARXIV].search = AsyncMock(
             return_value=arxiv_papers
         )
+        # Mock HuggingFace provider to return empty list (not relevant to this test)
+        service.providers[ProviderType.HUGGINGFACE].search = AsyncMock(return_value=[])
 
         topic = ResearchTopic(
             query="test",

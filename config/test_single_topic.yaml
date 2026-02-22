@@ -1,0 +1,72 @@
+# Test Config: Single Topic for Free Tier Testing
+# ================================================
+# Designed to work within Gemini free tier (5 req/min)
+# Run: python -m src.cli run --config config/test_single_topic.yaml
+
+research_topics:
+  - query: 'chain-of-thought reasoning large language model'
+    provider: "semantic_scholar"
+    auto_select_provider: false
+    timeframe:
+      type: "recent"
+      value: "7d"
+    max_papers: 5  # Only 5 papers to stay within rate limits
+    extraction_targets:
+      - name: "engineering_summary"
+        description: "Focus on reasoning techniques and practical applications"
+        output_format: "text"
+        required: true
+
+settings:
+  output_base_dir: "./output"
+  enable_duplicate_detection: true
+  semantic_scholar_api_key: "${SEMANTIC_SCHOLAR_API_KEY}"
+
+  pdf_settings:
+    temp_dir: "./temp"
+    keep_pdfs: false
+    max_file_size_mb: 50
+    timeout_seconds: 300
+
+  llm_settings:
+    provider: "${LLM_PROVIDER}"
+    model: "${LLM_MODEL}"
+    api_key: "${LLM_API_KEY}"
+    max_tokens: 50000
+    temperature: 0.0
+    timeout: 300
+
+  cost_limits:
+    max_tokens_per_paper: 50000
+    max_daily_spend_usd: 5.0
+    max_total_spend_usd: 50.0
+
+  # Ultra conservative for free tier
+  concurrency:
+    max_concurrent_downloads: 1
+    max_concurrent_conversions: 1
+    max_concurrent_llm: 1
+    queue_size: 10
+    checkpoint_interval: 1
+    worker_timeout_seconds: 600
+    enable_backpressure: true
+    backpressure_threshold: 0.5
+
+  cache:
+    enabled: true
+    cache_dir: "./cache"
+    ttl_api_hours: 24
+    ttl_pdf_days: 7
+    ttl_extraction_days: 30
+
+  notification_settings:
+    slack:
+      enabled: true
+      webhook_url: "${SLACK_WEBHOOK_URL}"
+      notify_on_success: true
+      notify_on_failure: true
+      notify_on_partial: true
+      include_cost_summary: true
+      include_key_learnings: true
+      max_learnings_per_topic: 2
+      mention_on_failure: "<!channel>"

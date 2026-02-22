@@ -25,6 +25,7 @@ from src.models.cross_synthesis import (
 )
 from src.models.registry import RegistryEntry
 from src.services.registry_service import RegistryService
+from src.utils.author_utils import normalize_authors
 from src.utils.exceptions import CostLimitExceeded
 
 logger = structlog.get_logger()
@@ -146,17 +147,8 @@ class CrossTopicSynthesisService:
         """
         metadata = entry.metadata_snapshot or {}
 
-        # Extract authors
-        authors = metadata.get("authors", [])
-        if isinstance(authors, list):
-            # Handle list of author dicts or strings
-            author_names = []
-            for a in authors:
-                if isinstance(a, dict):
-                    author_names.append(a.get("name", str(a)))
-                else:
-                    author_names.append(str(a))
-            authors = author_names
+        # Extract authors (handles List[dict], List[str], str, None)
+        authors = normalize_authors(metadata.get("authors"))
 
         # Extract quality score
         quality_score = metadata.get("quality_score", 0.0)

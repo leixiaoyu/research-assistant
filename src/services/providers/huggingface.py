@@ -13,7 +13,8 @@ Key Features:
 
 import aiohttp
 import re
-from typing import List, Optional
+from typing import List, Optional, Iterator
+from itertools import islice
 from datetime import datetime, timedelta, timezone
 import structlog
 from tenacity import (
@@ -172,17 +173,17 @@ class HuggingFaceProvider(DiscoveryProvider):
             logger.error("huggingface_network_error", error=str(e))
             raise APIError(f"HuggingFace request failed: {e}")
 
-        # 5. Parse response
-        papers = self._parse_response(data)
+        # 5. Parse response using generator (O(1) memory)
+        parsed_papers = self._parse_response(data)
 
-        # 6. Filter by query keywords and timeframe
-        filtered_papers = self._filter_by_query(papers, safe_query)
-        filtered_papers = self._filter_by_timeframe(filtered_papers, topic.timeframe)
+        # 6. Filter by query keywords and timeframe using generators
+        filtered_gen = self._filter_by_query(parsed_papers, safe_query)
+        filtered_gen = self._filter_by_timeframe(filtered_gen, topic.timeframe)
 
-        # 7. Limit results
-        filtered_papers = filtered_papers[: topic.max_papers]
+        # 7. Materialize with limit using islice (avoids full list allocation)
+        filtered_papers = list(islice(filtered_gen, topic.max_papers))
 
-        # Log results
+        # Log results (data already fetched for count)
         pdf_count = sum(1 for p in filtered_papers if p.pdf_available)
         pdf_rate = (pdf_count / len(filtered_papers) * 100) if filtered_papers else 0.0
 
@@ -191,7 +192,7 @@ class HuggingFaceProvider(DiscoveryProvider):
             query=topic.query,
             count=len(filtered_papers),
             provider="huggingface",
-            total_fetched=len(papers),
+            total_fetched=len(data),  # Use raw data length
             pdf_available=pdf_count,
             pdf_rate=f"{pdf_rate:.1f}%",
         )
@@ -222,17 +223,18 @@ class HuggingFaceProvider(DiscoveryProvider):
 
         return params
 
-    def _parse_response(self, data: List[dict]) -> List[PaperMetadata]:
+    def _parse_response(self, data: List[dict]) -> Iterator[PaperMetadata]:
         """Parse HuggingFace API response into PaperMetadata objects.
+
+        Uses generator pattern for O(1) peak memory usage, future-proofing
+        against larger trending windows or batch processing.
 
         Args:
             data: Raw API response (list of paper objects).
 
-        Returns:
-            List of PaperMetadata objects.
+        Yields:
+            PaperMetadata objects parsed from API response.
         """
-        papers = []
-
         for item in data:
             try:
                 # Extract nested paper object
@@ -296,8 +298,8 @@ class HuggingFaceProvider(DiscoveryProvider):
                 # Metrics
                 upvotes = paper_data.get("upvotes", 0)
 
-                # Create PaperMetadata
-                paper = PaperMetadata(
+                # Yield PaperMetadata (generator pattern)
+                yield PaperMetadata(
                     paper_id=paper_id,
                     arxiv_id=paper_id,
                     title=title,
@@ -315,7 +317,6 @@ class HuggingFaceProvider(DiscoveryProvider):
                     pdf_available=True,
                     pdf_source="arxiv",
                 )
-                papers.append(paper)
 
             except Exception as e:
                 # Safely extract paper_id for logging (item may be None or malformed)
@@ -331,40 +332,37 @@ class HuggingFaceProvider(DiscoveryProvider):
                 )
                 continue
 
-        return papers
-
     def _filter_by_query(
-        self, papers: List[PaperMetadata], query: str
-    ) -> List[PaperMetadata]:
+        self, papers: Iterator[PaperMetadata], query: str
+    ) -> Iterator[PaperMetadata]:
         """Filter papers by query keywords using AND semantics.
 
-        Since HuggingFace API doesn't support server-side search,
-        we filter locally by checking if ALL query terms appear in
-        title or abstract. Supports quoted phrases for exact matching.
+        Uses generator pattern for O(1) peak memory usage. Since HuggingFace
+        API doesn't support server-side search, we filter locally by checking
+        if ALL query terms appear in title or abstract.
 
         Args:
-            papers: List of papers to filter.
+            papers: Iterator of papers to filter.
             query: Search query with keywords and optional quoted phrases.
 
-        Returns:
-            Filtered list of papers where ALL terms match.
+        Yields:
+            Papers where ALL search terms match.
         """
         # Extract search terms: quoted phrases and individual keywords
         terms = self._extract_search_terms(query)
 
-        if not terms:
-            return papers
-
-        filtered = []
         for paper in papers:
+            # If no terms, yield all papers
+            if not terms:
+                yield paper
+                continue
+
             # Pre-compute lowercase text once per paper (efficiency)
             text = f"{paper.title} {paper.abstract or ''}".lower()
 
             # AND logic: ALL terms must match
             if all(term in text for term in terms):
-                filtered.append(paper)
-
-        return filtered
+                yield paper
 
     def _extract_search_terms(self, query: str) -> List[str]:
         """Extract search terms from query, preserving quoted phrases.
@@ -409,20 +407,19 @@ class HuggingFaceProvider(DiscoveryProvider):
         return terms
 
     def _filter_by_timeframe(
-        self, papers: List[PaperMetadata], timeframe: Timeframe
-    ) -> List[PaperMetadata]:
+        self, papers: Iterator[PaperMetadata], timeframe: Timeframe
+    ) -> Iterator[PaperMetadata]:
         """Filter papers by publication timeframe.
 
+        Uses generator pattern for O(1) peak memory usage.
+
         Args:
-            papers: List of papers to filter.
+            papers: Iterator of papers to filter.
             timeframe: Timeframe configuration.
 
-        Returns:
-            Filtered list of papers within timeframe.
+        Yields:
+            Papers within the specified timeframe.
         """
-        if not papers:
-            return papers
-
         # Use timezone-aware datetime for comparison
         now = datetime.now(timezone.utc)
 
@@ -434,17 +431,22 @@ class HuggingFaceProvider(DiscoveryProvider):
             elif value.endswith("d"):
                 delta = timedelta(days=int(value[:-1]))
             else:
-                return papers
+                # Invalid format - yield all papers
+                yield from papers
+                return
 
             cutoff = now - delta
-            return [
-                p
-                for p in papers
-                if p.publication_date and self._make_aware(p.publication_date) >= cutoff
-            ]
+            for p in papers:
+                if (
+                    p.publication_date
+                    and self._make_aware(p.publication_date) >= cutoff
+                ):
+                    yield p
 
         elif isinstance(timeframe, TimeframeSinceYear):
-            return [p for p in papers if p.year and p.year >= timeframe.value]
+            for p in papers:
+                if p.year and p.year >= timeframe.value:
+                    yield p
 
         elif isinstance(timeframe, TimeframeDateRange):
             start = datetime.combine(
@@ -453,14 +455,16 @@ class HuggingFaceProvider(DiscoveryProvider):
             end = datetime.combine(
                 timeframe.end_date, datetime.max.time(), tzinfo=timezone.utc
             )
-            return [
-                p
-                for p in papers
-                if p.publication_date
-                and start <= self._make_aware(p.publication_date) <= end
-            ]
+            for p in papers:
+                if (
+                    p.publication_date
+                    and start <= self._make_aware(p.publication_date) <= end
+                ):
+                    yield p
 
-        return papers
+        else:
+            # Unknown timeframe type - yield all papers
+            yield from papers
 
     def _make_aware(self, dt: datetime) -> datetime:
         """Make a datetime timezone-aware (UTC) if it isn't already."""

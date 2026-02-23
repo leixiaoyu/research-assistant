@@ -697,3 +697,125 @@ class TestModelIntegration:
         assert len(comparison.providers_queried) == 2
         assert comparison.total_unique_papers == 25
         assert comparison.overlap_count == 5
+
+
+class TestResultAwareFallback:
+    """Test result-aware fallback for sampling providers."""
+
+    @pytest.mark.asyncio
+    async def test_sampling_provider_empty_triggers_fallback(self, mock_paper):
+        """Test that HuggingFace returning empty results triggers fallback.
+
+        Sampling providers (like HuggingFace) only return trending papers.
+        Empty results should trigger fallback to comprehensive providers.
+        """
+        config = ProviderSelectionConfig(fallback_enabled=True)
+        ds = DiscoveryService(api_key="test_key_1234567890", config=config)
+
+        topic = ResearchTopic(
+            query="niche research topic",
+            provider=ProviderType.HUGGINGFACE,
+            timeframe=TimeframeRecent(value="48h"),
+            auto_select_provider=False,
+        )
+
+        hf_path = "src.services.providers.huggingface"
+        with patch(
+            f"{hf_path}.HuggingFaceProvider.search",
+            new_callable=AsyncMock,
+        ) as mock_hf:
+            # HuggingFace returns empty (topic not trending)
+            mock_hf.return_value = []
+
+            with patch(
+                "src.services.providers.arxiv.ArxivProvider.search",
+                new_callable=AsyncMock,
+            ) as mock_arxiv:
+                # ArXiv has results
+                mock_arxiv.return_value = [mock_paper]
+
+                result = await ds.search(topic)
+
+                # Should have used ArXiv fallback
+                assert len(result) == 1
+                mock_hf.assert_called_once()
+                mock_arxiv.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_sampling_provider_with_results_no_fallback(self, mock_paper):
+        """Test that HuggingFace with results does not trigger fallback."""
+        config = ProviderSelectionConfig(fallback_enabled=True)
+        ds = DiscoveryService(api_key="test_key_1234567890", config=config)
+
+        topic = ResearchTopic(
+            query="machine learning",
+            provider=ProviderType.HUGGINGFACE,
+            timeframe=TimeframeRecent(value="48h"),
+            auto_select_provider=False,
+        )
+
+        hf_path = "src.services.providers.huggingface"
+        with patch(
+            f"{hf_path}.HuggingFaceProvider.search",
+            new_callable=AsyncMock,
+        ) as mock_hf:
+            # HuggingFace returns results
+            mock_hf.return_value = [mock_paper]
+
+            with patch(
+                "src.services.providers.arxiv.ArxivProvider.search",
+                new_callable=AsyncMock,
+            ) as mock_arxiv:
+                result = await ds.search(topic)
+
+                # Should use HuggingFace results, no fallback
+                assert len(result) == 1
+                mock_hf.assert_called_once()
+                mock_arxiv.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_comprehensive_provider_empty_no_fallback(self):
+        """Test that ArXiv returning empty does NOT trigger result-aware fallback.
+
+        ArXiv is a comprehensive provider, so empty results mean the topic
+        genuinely has no papers. Only sampling providers trigger fallback.
+        """
+        config = ProviderSelectionConfig(fallback_enabled=True)
+        ds = DiscoveryService(api_key="test_key_1234567890", config=config)
+
+        topic = ResearchTopic(
+            query="extremely niche topic",
+            provider=ProviderType.ARXIV,
+            timeframe=TimeframeRecent(value="48h"),
+            auto_select_provider=False,
+        )
+
+        with patch(
+            "src.services.providers.arxiv.ArxivProvider.search",
+            new_callable=AsyncMock,
+        ) as mock_arxiv:
+            # ArXiv returns empty
+            mock_arxiv.return_value = []
+
+            ss_path = "src.services.providers.semantic_scholar"
+            with patch(
+                f"{ss_path}.SemanticScholarProvider.search",
+                new_callable=AsyncMock,
+            ) as mock_ss:
+                result = await ds.search(topic)
+
+                # Should return empty, no fallback for comprehensive providers
+                assert len(result) == 0
+                mock_arxiv.assert_called_once()
+                # Semantic Scholar should NOT be called (no result-aware fallback)
+                mock_ss.assert_not_called()
+
+    def test_sampling_providers_constant(self):
+        """Test SAMPLING_PROVIDERS constant is defined correctly."""
+        from src.services.discovery_service import DiscoveryService
+
+        assert hasattr(DiscoveryService, "SAMPLING_PROVIDERS")
+        assert ProviderType.HUGGINGFACE in DiscoveryService.SAMPLING_PROVIDERS
+        # ArXiv and Semantic Scholar are comprehensive, not sampling
+        assert ProviderType.ARXIV not in DiscoveryService.SAMPLING_PROVIDERS
+        assert ProviderType.SEMANTIC_SCHOLAR not in DiscoveryService.SAMPLING_PROVIDERS

@@ -174,11 +174,15 @@ class TestBuildQueryParams:
 
 
 class TestParseResponse:
-    """Test response parsing."""
+    """Test response parsing.
+
+    Note: _parse_response returns a generator for O(1) memory usage.
+    Tests must call list() to materialize results for assertions.
+    """
 
     def test_parse_valid_response(self, provider, mock_hf_response):
         """Test parsing valid API response."""
-        papers = provider._parse_response(mock_hf_response)
+        papers = list(provider._parse_response(mock_hf_response))
         assert len(papers) == 2
 
         # First paper
@@ -196,25 +200,25 @@ class TestParseResponse:
 
     def test_parse_response_with_organization(self, provider, mock_hf_response):
         """Test parsing response with organization info."""
-        papers = provider._parse_response(mock_hf_response)
+        papers = list(provider._parse_response(mock_hf_response))
         # First paper has organization
         assert papers[0].authors[0].affiliation == "OpenAI Research"
 
     def test_parse_response_missing_id(self, provider):
         """Test parsing response with missing paper ID."""
         response = [{"paper": {"title": "No ID Paper"}}]
-        papers = provider._parse_response(response)
+        papers = list(provider._parse_response(response))
         assert len(papers) == 0  # Should skip paper without ID
 
     def test_parse_response_missing_title(self, provider):
         """Test parsing response with missing title."""
         response = [{"paper": {"id": "12345"}}]
-        papers = provider._parse_response(response)
+        papers = list(provider._parse_response(response))
         assert len(papers) == 0  # Should skip paper without title
 
     def test_parse_response_empty_list(self, provider):
         """Test parsing empty response."""
-        papers = provider._parse_response([])
+        papers = list(provider._parse_response([]))
         assert len(papers) == 0
 
     def test_parse_response_malformed_date(self, provider):
@@ -228,7 +232,7 @@ class TestParseResponse:
                 }
             }
         ]
-        papers = provider._parse_response(response)
+        papers = list(provider._parse_response(response))
         assert len(papers) == 1
         assert papers[0].publication_date is None
         assert papers[0].year is None
@@ -248,57 +252,67 @@ class TestParseResponse:
             },
             None,  # Will cause exception
         ]
-        papers = provider._parse_response(response)
+        papers = list(provider._parse_response(response))
         # Should parse the valid paper and skip the invalid one
         assert len(papers) == 1
 
 
 class TestFilterByQuery:
-    """Test keyword filtering."""
+    """Test keyword filtering.
+
+    Note: _filter_by_query returns a generator for O(1) memory usage.
+    Tests must call list() to materialize results for assertions.
+    """
 
     def test_filter_matches_title(self, provider, mock_hf_response):
         """Test filter matches keywords in title."""
         papers = provider._parse_response(mock_hf_response)
         # "language" is only in the first paper
-        filtered = provider._filter_by_query(papers, "language")
+        filtered = list(provider._filter_by_query(papers, "language"))
         assert len(filtered) == 1
         assert "Language Models" in filtered[0].title
 
     def test_filter_matches_abstract(self, provider, mock_hf_response):
         """Test filter matches keywords in abstract."""
         papers = provider._parse_response(mock_hf_response)
-        filtered = provider._filter_by_query(papers, "optimization methods")
+        filtered = list(provider._filter_by_query(papers, "optimization methods"))
         assert len(filtered) == 1
         assert "Optimization" in filtered[0].title
 
     def test_filter_case_insensitive(self, provider, mock_hf_response):
         """Test filter is case insensitive."""
         papers = provider._parse_response(mock_hf_response)
-        filtered = provider._filter_by_query(papers, "TRANSFORMER")
+        filtered = list(provider._filter_by_query(papers, "TRANSFORMER"))
         assert len(filtered) == 1
 
     def test_filter_removes_operators(self, provider, mock_hf_response):
         """Test filter removes AND/OR/NOT operators."""
         papers = provider._parse_response(mock_hf_response)
         # After removing operators, "language" is the keyword - only in first paper
-        filtered = provider._filter_by_query(papers, "language AND advances")
+        filtered = list(provider._filter_by_query(papers, "language AND advances"))
         assert len(filtered) == 1
 
     def test_filter_no_keywords(self, provider, mock_hf_response):
         """Test filter with no valid keywords returns all."""
         papers = provider._parse_response(mock_hf_response)
-        filtered = provider._filter_by_query(papers, "a b")  # Too short keywords
+        filtered = list(provider._filter_by_query(papers, "a b"))  # Too short keywords
         assert len(filtered) == 2  # Returns all when no keywords
 
     def test_filter_no_matches(self, provider, mock_hf_response):
         """Test filter with no matches returns empty."""
         papers = provider._parse_response(mock_hf_response)
-        filtered = provider._filter_by_query(papers, "quantum computing blockchain")
+        filtered = list(
+            provider._filter_by_query(papers, "quantum computing blockchain")
+        )
         assert len(filtered) == 0
 
 
 class TestFilterByTimeframe:
-    """Test timeframe filtering."""
+    """Test timeframe filtering.
+
+    Note: _filter_by_timeframe returns a generator for O(1) memory usage.
+    Tests must call list() to materialize results for assertions.
+    """
 
     def test_filter_recent_hours(self, provider):
         """Test filtering by recent hours."""
@@ -318,7 +332,7 @@ class TestFilterByTimeframe:
             ),
         ]
         timeframe = TimeframeRecent(value="48h")
-        filtered = provider._filter_by_timeframe(papers, timeframe)
+        filtered = list(provider._filter_by_timeframe(iter(papers), timeframe))
         assert len(filtered) == 1
         assert filtered[0].paper_id == "1"
 
@@ -340,7 +354,7 @@ class TestFilterByTimeframe:
             ),
         ]
         timeframe = TimeframeRecent(value="7d")
-        filtered = provider._filter_by_timeframe(papers, timeframe)
+        filtered = list(provider._filter_by_timeframe(iter(papers), timeframe))
         assert len(filtered) == 1
         assert filtered[0].paper_id == "1"
 
@@ -361,7 +375,7 @@ class TestFilterByTimeframe:
             ),
         ]
         timeframe = TimeframeSinceYear(value=2025)
-        filtered = provider._filter_by_timeframe(papers, timeframe)
+        filtered = list(provider._filter_by_timeframe(iter(papers), timeframe))
         assert len(filtered) == 1
         assert filtered[0].paper_id == "1"
 
@@ -385,14 +399,14 @@ class TestFilterByTimeframe:
             start_date=date(2026, 2, 10),
             end_date=date(2026, 2, 20),
         )
-        filtered = provider._filter_by_timeframe(papers, timeframe)
+        filtered = list(provider._filter_by_timeframe(iter(papers), timeframe))
         assert len(filtered) == 1
         assert filtered[0].paper_id == "1"
 
     def test_filter_empty_list(self, provider):
         """Test filtering empty list."""
         timeframe = TimeframeRecent(value="48h")
-        filtered = provider._filter_by_timeframe([], timeframe)
+        filtered = list(provider._filter_by_timeframe(iter([]), timeframe))
         assert len(filtered) == 0
 
     def test_filter_no_publication_date(self, provider):
@@ -406,7 +420,7 @@ class TestFilterByTimeframe:
             ),
         ]
         timeframe = TimeframeRecent(value="48h")
-        filtered = provider._filter_by_timeframe(papers, timeframe)
+        filtered = list(provider._filter_by_timeframe(iter(papers), timeframe))
         assert len(filtered) == 0  # Papers without date are excluded
 
 
@@ -671,7 +685,11 @@ class TestExtractSearchTerms:
 
 
 class TestFilterByQueryAndSemantics:
-    """Test AND semantics in query filtering."""
+    """Test AND semantics in query filtering.
+
+    Note: _filter_by_query returns a generator for O(1) memory usage.
+    Tests must call list() to materialize results for assertions.
+    """
 
     def test_filter_requires_all_keywords(self, provider):
         """Test filter requires ALL keywords to match (AND semantics)."""
@@ -690,7 +708,7 @@ class TestFilterByQueryAndSemantics:
             ),
         ]
         # Both "machine" AND "neural" must be present
-        filtered = provider._filter_by_query(papers, "machine neural")
+        filtered = list(provider._filter_by_query(iter(papers), "machine neural"))
         assert len(filtered) == 1
         assert filtered[0].paper_id == "1"
 
@@ -711,7 +729,7 @@ class TestFilterByQueryAndSemantics:
             ),
         ]
         # "large language" as a phrase should only match paper 1
-        filtered = provider._filter_by_query(papers, '"large language"')
+        filtered = list(provider._filter_by_query(iter(papers), '"large language"'))
         assert len(filtered) == 1
         assert filtered[0].paper_id == "1"
 

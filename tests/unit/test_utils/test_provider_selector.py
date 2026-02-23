@@ -6,6 +6,7 @@ from src.utils.provider_selector import (
     PROVIDER_CAPABILITIES,
     ARXIV_TERMS,
     CROSS_DISCIPLINARY_TERMS,
+    HUGGINGFACE_TERMS,
 )
 from src.models.config import ResearchTopic, TimeframeRecent, ProviderType
 
@@ -33,6 +34,7 @@ class TestProviderCapabilities:
         """Verify all providers have capability entries."""
         assert ProviderType.ARXIV in PROVIDER_CAPABILITIES
         assert ProviderType.SEMANTIC_SCHOLAR in PROVIDER_CAPABILITIES
+        assert ProviderType.HUGGINGFACE in PROVIDER_CAPABILITIES
 
     def test_capability_matrix_arxiv_values(self):
         """Verify ArXiv capability values."""
@@ -47,6 +49,14 @@ class TestProviderCapabilities:
         assert ss_caps["citation_support"] is True
         assert ss_caps["pdf_access_rate"] == 0.6
         assert ss_caps["api_key_required"] is True
+
+    def test_capability_matrix_huggingface_values(self):
+        """Verify HuggingFace capability values."""
+        hf_caps = PROVIDER_CAPABILITIES[ProviderType.HUGGINGFACE]
+        assert hf_caps["citation_support"] is False
+        assert hf_caps["pdf_access_rate"] == 1.0
+        assert hf_caps["api_key_required"] is False
+        assert hf_caps["trending_support"] is True
 
 
 class TestGetCapability:
@@ -382,6 +392,17 @@ class TestInternalMethods:
         assert selector._has_cross_disciplinary_terms("general query") is False
         assert selector._has_cross_disciplinary_terms("cs.ai research") is False
 
+    def test_has_huggingface_terms_true(self, selector):
+        """Test _has_huggingface_terms returns True."""
+        assert selector._has_huggingface_terms("llm training") is True
+        assert selector._has_huggingface_terms("transformers library") is True
+        assert selector._has_huggingface_terms("stable diffusion model") is True
+
+    def test_has_huggingface_terms_false(self, selector):
+        """Test _has_huggingface_terms returns False."""
+        assert selector._has_huggingface_terms("general query") is False
+        assert selector._has_huggingface_terms("medicine research") is False
+
 
 class TestTermConstants:
     """Test term constant sets."""
@@ -399,3 +420,62 @@ class TestTermConstants:
         assert "psychology" in CROSS_DISCIPLINARY_TERMS
         assert "sociology" in CROSS_DISCIPLINARY_TERMS
         assert "neuroscience" in CROSS_DISCIPLINARY_TERMS
+
+    def test_huggingface_terms_contains_expected(self):
+        """Test HUGGINGFACE_TERMS contains expected terms."""
+        assert "huggingface" in HUGGINGFACE_TERMS
+        assert "llm" in HUGGINGFACE_TERMS
+        assert "transformers" in HUGGINGFACE_TERMS
+        assert "diffusion" in HUGGINGFACE_TERMS
+        assert "rlhf" in HUGGINGFACE_TERMS
+
+
+class TestHuggingFaceTermsDetection:
+    """Test HuggingFace-specific term detection."""
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "huggingface transformers",
+            "large language model llm",
+            "gpt fine-tuning",
+            "stable diffusion",
+            "rlhf training",
+            "multimodal vision language model",
+            "rag retrieval augmented generation",
+        ],
+    )
+    def test_huggingface_terms_detected(self, selector, query):
+        """Test various HuggingFace terms are detected."""
+        topic = ResearchTopic(
+            query=query,
+            provider=ProviderType.ARXIV,
+            timeframe=TimeframeRecent(value="48h"),
+        )
+        result = selector.select_provider(
+            topic,
+            [
+                ProviderType.ARXIV,
+                ProviderType.SEMANTIC_SCHOLAR,
+                ProviderType.HUGGINGFACE,
+            ],
+        )
+        assert result == ProviderType.HUGGINGFACE
+
+    def test_huggingface_recommendation_reason(self, selector):
+        """Test recommendation reason for HuggingFace."""
+        topic = ResearchTopic(
+            query="llm fine-tuning",
+            provider=ProviderType.ARXIV,
+            timeframe=TimeframeRecent(value="48h"),
+        )
+        provider, reason = selector.get_recommendation(
+            topic,
+            [
+                ProviderType.ARXIV,
+                ProviderType.SEMANTIC_SCHOLAR,
+                ProviderType.HUGGINGFACE,
+            ],
+        )
+        assert provider == ProviderType.HUGGINGFACE
+        assert "HuggingFace" in reason or "AI/ML trending" in reason

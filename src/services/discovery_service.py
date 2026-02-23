@@ -8,6 +8,7 @@ import structlog
 from src.services.providers.base import DiscoveryProvider, APIError
 from src.services.providers.semantic_scholar import SemanticScholarProvider
 from src.services.providers.arxiv import ArxivProvider
+from src.services.providers.huggingface import HuggingFaceProvider
 from src.models.config import (
     ResearchTopic,
     ProviderType,
@@ -35,7 +36,15 @@ class DiscoveryService:
     - Quality-first paper ranking
     - PDF availability tracking and statistics
     - ArXiv supplement mode for PDF gaps
+
+    Provider Categories:
+    - Comprehensive: ArXiv, SemanticScholar (query-based, can return 0 for niche)
+    - Sampling: HuggingFace (trending-based, often returns 0 for non-trending)
     """
+
+    # Sampling providers return trending/curated results only.
+    # Empty results from these providers should trigger fallback.
+    SAMPLING_PROVIDERS = {ProviderType.HUGGINGFACE}
 
     def __init__(
         self,
@@ -64,6 +73,9 @@ class DiscoveryService:
             )
         else:
             logger.info("semantic_scholar_disabled", reason="no_api_key")
+
+        # Initialize HuggingFace (Always available - no API key required)
+        self.providers[ProviderType.HUGGINGFACE] = HuggingFaceProvider()
 
         # Initialize provider selector
         self._selector = ProviderSelector(
@@ -149,7 +161,11 @@ class DiscoveryService:
         primary_provider: DiscoveryProvider,
         primary_type: ProviderType,
     ) -> List[PaperMetadata]:
-        """Execute search with automatic fallback on failure.
+        """Execute search with automatic fallback on failure or empty results.
+
+        For "sampling" providers (like HuggingFace) that only return trending
+        papers, empty results trigger fallback since the topic may exist in
+        comprehensive providers like ArXiv or Semantic Scholar.
 
         Args:
             topic: Research topic.
@@ -165,6 +181,19 @@ class DiscoveryService:
                 primary_provider.search(topic),
                 timeout=self.config.fallback_timeout_seconds,
             )
+
+            # Result-aware fallback: sampling providers returning empty
+            # results should trigger fallback since the topic may exist
+            # in comprehensive providers (ArXiv, Semantic Scholar)
+            if not result and primary_type in self.SAMPLING_PROVIDERS:
+                logger.info(
+                    "sampling_provider_empty_results",
+                    provider=primary_type,
+                    query=topic.query[:50],
+                    reason="topic_not_trending",
+                )
+                return await self._fallback_search(topic, primary_type)
+
             return result
         except asyncio.TimeoutError:
             logger.warning(

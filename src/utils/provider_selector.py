@@ -23,6 +23,14 @@ PROVIDER_CAPABILITIES = {
         "api_key_required": True,
         "rate_limit": 1.67,  # 100 per minute
     },
+    ProviderType.HUGGINGFACE: {
+        "coverage": "AI/ML trending papers (community curated)",
+        "citation_support": False,  # Uses upvotes instead
+        "pdf_access_rate": 1.0,  # ArXiv-based, 100% open access
+        "api_key_required": False,
+        "rate_limit": 0.5,  # 30 per minute (conservative)
+        "trending_support": True,  # Unique: community engagement metrics
+    },
 }
 
 # ArXiv-specific terms that suggest ArXiv is the best provider
@@ -74,6 +82,39 @@ CROSS_DISCIPLINARY_TERMS = {
     "behavioral",
 }
 
+# HuggingFace-specific terms (AI/ML trending topics)
+HUGGINGFACE_TERMS = {
+    "huggingface",
+    "hugging face",
+    "transformers",
+    "llm",
+    "large language model",
+    "gpt",
+    "claude",
+    "gemini",
+    "llama",
+    "mistral",
+    "diffusion",
+    "stable diffusion",
+    "trending",
+    "sota",
+    "state-of-the-art",
+    "benchmark",
+    "leaderboard",
+    "fine-tuning",
+    "rlhf",
+    "instruction tuning",
+    "chat model",
+    "multimodal",
+    "vision language",
+    "text-to-image",
+    "embedding",
+    "rag",
+    "retrieval augmented",
+    "agent",
+    "agentic",
+}
+
 
 class ProviderSelector:
     """Selects optimal provider based on query characteristics."""
@@ -91,6 +132,7 @@ class ProviderSelector:
         self.preference_order = preference_order or [
             ProviderType.ARXIV,
             ProviderType.SEMANTIC_SCHOLAR,
+            ProviderType.HUGGINGFACE,
         ]
 
     def get_capability(self, provider: ProviderType, capability: str) -> Any:
@@ -170,7 +212,17 @@ class ProviderSelector:
                     min_citations=effective_min_citations,
                 )
 
-        # Priority 3: ArXiv-specific terms
+        # Priority 3: HuggingFace-specific terms (AI/ML trending)
+        if self._has_huggingface_terms(query_lower):
+            if ProviderType.HUGGINGFACE in available_providers:
+                logger.debug(
+                    "provider_huggingface_terms_selection",
+                    provider=ProviderType.HUGGINGFACE,
+                    query=topic.query[:50],
+                )
+                return ProviderType.HUGGINGFACE
+
+        # Priority 4: ArXiv-specific terms
         if self._has_arxiv_terms(query_lower):
             if ProviderType.ARXIV in available_providers:
                 logger.debug(
@@ -180,7 +232,7 @@ class ProviderSelector:
                 )
                 return ProviderType.ARXIV
 
-        # Priority 4: Cross-disciplinary terms suggest Semantic Scholar
+        # Priority 5: Cross-disciplinary terms suggest Semantic Scholar
         if self._has_cross_disciplinary_terms(query_lower):
             if ProviderType.SEMANTIC_SCHOLAR in available_providers:
                 logger.debug(
@@ -235,6 +287,10 @@ class ProviderSelector:
         """Check if query contains cross-disciplinary terms."""
         return any(term in query_lower for term in CROSS_DISCIPLINARY_TERMS)
 
+    def _has_huggingface_terms(self, query_lower: str) -> bool:
+        """Check if query contains HuggingFace/AI-ML trending terms."""
+        return any(term in query_lower for term in HUGGINGFACE_TERMS)
+
     def _get_selection_reason(
         self,
         topic: ResearchTopic,
@@ -253,6 +309,10 @@ class ProviderSelector:
                     f"Citation filter (min={topic.min_citations}) "
                     "requires Semantic Scholar"
                 )
+
+        if self._has_huggingface_terms(query_lower):
+            if selected == ProviderType.HUGGINGFACE:
+                return "Query matches AI/ML trending topics (HuggingFace)"
 
         if self._has_arxiv_terms(query_lower):
             if selected == ProviderType.ARXIV:

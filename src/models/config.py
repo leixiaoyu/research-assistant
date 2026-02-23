@@ -63,6 +63,7 @@ Timeframe = Union[TimeframeRecent, TimeframeSinceYear, TimeframeDateRange]
 class ProviderType(str, Enum):
     ARXIV = "arxiv"
     SEMANTIC_SCHOLAR = "semantic_scholar"
+    HUGGINGFACE = "huggingface"
 
 
 class PDFStrategy(str, Enum):
@@ -248,7 +249,11 @@ class ProviderSelectionConfig(BaseModel):
         description="Query all providers for comparison",
     )
     preference_order: List[ProviderType] = Field(
-        default_factory=lambda: [ProviderType.ARXIV, ProviderType.SEMANTIC_SCHOLAR],
+        default_factory=lambda: [
+            ProviderType.ARXIV,
+            ProviderType.SEMANTIC_SCHOLAR,
+            ProviderType.HUGGINGFACE,
+        ],
         description="Provider preference order for auto-selection",
     )
     fallback_timeout_seconds: float = Field(
@@ -266,8 +271,17 @@ class GlobalSettings(BaseModel):
     enable_duplicate_detection: bool = Field(
         True, description="Enable topic deduplication"
     )
+    # Discovery sources configuration
+    sources: List[ProviderType] = Field(
+        default_factory=lambda: [ProviderType.ARXIV],
+        description="List of paper sources (arxiv, semantic_scholar, huggingface)",
+    )
     semantic_scholar_api_key: Optional[str] = Field(
         None, min_length=10, description="Semantic Scholar API key (optional)"
+    )
+    huggingface_api_key: Optional[str] = Field(
+        None,
+        description="HuggingFace API key (optional, not required for Daily Papers)",
     )
     # Phase 2: PDF and LLM settings (optional for backward compatibility)
     pdf_settings: Optional[PDFSettings] = Field(

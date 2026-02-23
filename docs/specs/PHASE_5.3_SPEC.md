@@ -112,6 +112,14 @@ The `synthesize` command SHALL be extracted to a dedicated module.
 - Manual synthesis triggering
 - Synthesis result display
 
+#### REQ-5.3.6: Validate Command Module
+The `validate` command SHALL be extracted to a dedicated module.
+
+**Responsibilities:**
+- Configuration file validation
+- Schema validation reporting
+- Validation error display
+
 ### 3.2 Shared Utilities
 
 #### REQ-5.3.6: CLI Utilities Module
@@ -141,6 +149,7 @@ The `_process_topics` function SHALL be removed.
 src/cli/
 ├── __init__.py           # Main app, combines command groups
 ├── run.py                # run command
+├── validate.py           # validate command (config validation)
 ├── catalog.py            # catalog commands (show, stats)
 ├── schedule.py           # schedule commands
 ├── health.py             # health command
@@ -393,4 +402,5 @@ def display_error(message: str) -> None:
 | cli/schedule.py | N/A | <100 lines |
 | cli/health.py | N/A | <80 lines |
 | cli/synthesize.py | N/A | <80 lines |
+| cli/validate.py | N/A | <60 lines |
 | cli/utils.py | N/A | <100 lines |

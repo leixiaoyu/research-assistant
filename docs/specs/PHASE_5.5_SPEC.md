@@ -286,6 +286,19 @@ __all__ = [
 - [ ] Models handling secrets (LLMConfig) properly exclude from serialization.
 - [ ] No credential exposure in model repr/str.
 - [ ] All field exclusions preserved.
+- [ ] Verify LLMConfig.api_key has `exclude=True` in Pydantic Field after migration.
+
+**Verification Test:**
+```python
+def test_llm_config_api_key_excluded():
+    """Verify API key is excluded from serialization."""
+    config = LLMConfig(api_key="secret-key", provider="anthropic", model="claude-3")
+    serialized = config.model_dump()
+    assert "api_key" not in serialized or serialized["api_key"] is None
+
+    json_str = config.model_dump_json()
+    assert "secret-key" not in json_str
+```
 
 ---
 
@@ -350,7 +363,22 @@ __all__ = [
 - Coverage MUST remain ≥99%.
 - Model validation behavior unchanged.
 
-### 7.3 Static Analysis
+### 7.3 Deprecation Warning Handling
+Configure pytest to filter deprecation warnings during transition:
+
+```python
+# pytest.ini or pyproject.toml
+[tool.pytest.ini_options]
+filterwarnings = [
+    # Suppress our own deprecation warnings during test runs
+    "ignore:Importing from src.models.paper is deprecated:DeprecationWarning",
+    "ignore:Importing from src.models.config is deprecated:DeprecationWarning",
+]
+```
+
+**Note:** Remove these filters after Phase 6 when deprecated paths are removed.
+
+### 7.4 Static Analysis
 - No circular imports detected.
 - Mypy passes with no new errors.
 - All type hints preserved.
@@ -361,10 +389,52 @@ __all__ = [
 
 | Risk | Impact | Probability | Mitigation |
 |------|--------|-------------|------------|
-| Circular import issues | High | Medium | Careful dependency ordering |
+| Circular import issues | High | Medium | Dependency graph + CI check (see below) |
 | Breaking existing imports | High | Low | Legacy compatibility files |
 | Type checking failures | Medium | Low | Preserve all type hints |
 | Missing model exports | Medium | Low | Comprehensive export lists |
+
+### 8.1 Circular Import Prevention Strategy
+
+**Allowed Import Directions (Dependency Graph):**
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    src/models/                          │
+│  ┌──────────┐                                           │
+│  │  infra/  │ ──────────────────────────────────────┐   │
+│  └──────────┘                                       │   │
+│       ↑                                             │   │
+│  ┌──────────┐      ┌──────────────┐                 │   │
+│  │processing│ ───→ │    core/     │ ←───────────────┤   │
+│  └──────────┘      └──────────────┘                 │   │
+│       ↑                   ↑                         │   │
+│  ┌──────────┐             │                         │   │
+│  │ config/  │ ────────────┘                         │   │
+│  └──────────┘                                       │   │
+└─────────────────────────────────────────────────────────┘
+
+ALLOWED: config → core, processing → core, infra → (none)
+FORBIDDEN: core → config, core → processing, processing → config
+```
+
+**CI Check for Circular Imports:**
+```yaml
+# Add to .github/workflows/ci.yml
+- name: Check Circular Imports
+  run: |
+    pip install pycycle
+    pycycle --here src/models/ --verbose
+```
+
+**TYPE_CHECKING Pattern for Type Hints:**
+```python
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # These imports only happen during type checking, not at runtime
+    from src.models.processing.extraction import ExtractionTarget
+```
 
 ---
 

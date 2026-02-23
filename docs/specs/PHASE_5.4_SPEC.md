@@ -146,6 +146,34 @@ All retry logic SHALL use the existing `RetryHandler` from `src/utils/retry.py`.
 - PDFService: Replace custom decorator with RetryHandler
 - DiscoveryService: Replace manual loop with RetryHandler
 
+**Current Retry Parameters (to preserve behavioral equivalence):**
+
+| Service | Max Retries | Base Delay | Max Delay | Jitter |
+|---------|-------------|------------|-----------|--------|
+| PDFService.download_pdf | 3 | 1.0s | 30s | ±0.5s |
+| DiscoveryService._search | 3 | 2.0s | 60s | ±1.0s |
+
+**RetryHandler Configuration:**
+```python
+# PDFService configuration
+pdf_retry = RetryHandler(
+    max_retries=3,
+    base_delay=1.0,
+    max_delay=30.0,
+    jitter=0.5,
+    retryable_exceptions=(RequestException, TimeoutError),
+)
+
+# DiscoveryService configuration
+discovery_retry = RetryHandler(
+    max_retries=3,
+    base_delay=2.0,
+    max_delay=60.0,
+    jitter=1.0,
+    retryable_exceptions=(APIError, RateLimitError),
+)
+```
+
 ### 3.4 Package Structure
 
 #### REQ-5.4.6: Utility Organization
@@ -200,10 +228,29 @@ DEFAULT_PRICING: Dict[str, ModelPricing] = {
 class CostCalculator:
     """Centralized LLM cost calculation."""
 
-    def __init__(self, custom_pricing: Optional[Dict[str, ModelPricing]] = None):
+    # Default fallback pricing for unknown models (conservative estimate)
+    DEFAULT_FALLBACK = ModelPricing(input_cost=5.00, output_cost=15.00)
+
+    def __init__(
+        self,
+        custom_pricing: Optional[Dict[str, ModelPricing]] = None,
+        strict_mode: bool = False,
+        fallback_pricing: Optional[ModelPricing] = None,
+    ):
+        """Initialize CostCalculator.
+
+        Args:
+            custom_pricing: Override or add model pricing.
+            strict_mode: If True, raise ValueError for unknown models.
+                         If False (default), use fallback pricing and log warning.
+            fallback_pricing: Custom fallback for unknown models.
+        """
         self._pricing = {**DEFAULT_PRICING}
         if custom_pricing:
             self._pricing.update(custom_pricing)
+        self._strict_mode = strict_mode
+        self._fallback = fallback_pricing or self.DEFAULT_FALLBACK
+        self._logger = structlog.get_logger()
 
     def calculate(
         self,
@@ -222,11 +269,21 @@ class CostCalculator:
             Cost in USD
 
         Raises:
-            ValueError: If model pricing not found
+            ValueError: If model pricing not found AND strict_mode=True
         """
         pricing = self._pricing.get(model)
+
         if not pricing:
-            raise ValueError(f"Unknown model: {model}")
+            if self._strict_mode:
+                raise ValueError(f"Unknown model: {model}")
+            # Non-strict: log warning and use fallback
+            self._logger.warning(
+                "unknown_model_using_fallback",
+                model=model,
+                fallback_input=self._fallback.input_cost,
+                fallback_output=self._fallback.output_cost,
+            )
+            pricing = self._fallback
 
         input_cost = input_tokens * pricing.input_cost / 1_000_000
         output_cost = output_tokens * pricing.output_cost / 1_000_000
@@ -252,8 +309,22 @@ import yaml
 class MarkdownBuilder:
     """Fluent builder for consistent markdown generation."""
 
-    def __init__(self):
+    def __init__(self, escape_content: bool = False):
+        """Initialize MarkdownBuilder.
+
+        Args:
+            escape_content: If True, escape markdown special characters in
+                           user-provided content (titles, text). Default False
+                           for backward compatibility.
+        """
         self._parts: List[str] = []
+        self._escape = escape_content
+
+    def _maybe_escape(self, text: str) -> str:
+        """Escape text if escape_content is enabled."""
+        if self._escape:
+            return escape_markdown(text)
+        return text
 
     def frontmatter(self, metadata: Dict[str, Any]) -> "MarkdownBuilder":
         """Add YAML frontmatter."""

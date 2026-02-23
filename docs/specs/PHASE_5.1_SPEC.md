@@ -152,8 +152,15 @@ src/services/llm/
 ├── cost_tracker.py       # CostTracker class
 ├── prompt_builder.py     # PromptBuilder class
 ├── response_parser.py    # ResponseParser class
-└── health.py             # ProviderHealth dataclass (moved)
+├── health.py             # ProviderHealth dataclass (moved)
+└── exceptions.py         # LLMProviderError hierarchy
 ```
+
+**Health Module Integration:**
+The `health.py` module contains `ProviderHealth` dataclass which integrates with circuit breakers:
+- `LLMProvider.get_health()` returns `ProviderHealth` status
+- Circuit breaker state is reflected in health (CLOSED=healthy, OPEN=unhealthy)
+- Health aggregation combines all provider health for `LLMService.get_provider_health()`
 
 ---
 
@@ -191,7 +198,15 @@ class LLMProvider(ABC):
         prompt: str,
         max_tokens: int = 4096,
     ) -> LLMResponse:
-        """Execute extraction and return standardized response."""
+        """Execute extraction and return standardized response.
+
+        Raises:
+            LLMProviderError: Base class for all provider errors
+            RateLimitError: When rate limit is exceeded
+            AuthenticationError: When API key is invalid
+            ContentFilterError: When content is blocked by safety filters
+            ProviderUnavailableError: When provider is temporarily down
+        """
         pass
 
     @abstractmethod
@@ -202,6 +217,30 @@ class LLMProvider(ABC):
     ) -> float:
         """Calculate cost in USD for token usage."""
         pass
+
+
+# Provider Exception Hierarchy
+class LLMProviderError(Exception):
+    """Base exception for all LLM provider errors."""
+    pass
+
+class RateLimitError(LLMProviderError):
+    """Raised when provider rate limit is exceeded."""
+    def __init__(self, retry_after: Optional[float] = None):
+        self.retry_after = retry_after
+        super().__init__(f"Rate limit exceeded. Retry after: {retry_after}s")
+
+class AuthenticationError(LLMProviderError):
+    """Raised when API authentication fails."""
+    pass
+
+class ContentFilterError(LLMProviderError):
+    """Raised when content is blocked by safety filters."""
+    pass
+
+class ProviderUnavailableError(LLMProviderError):
+    """Raised when provider is temporarily unavailable."""
+    pass
 ```
 
 ### 4.2 Cost Tracker Design
@@ -402,11 +441,43 @@ class LLMService:
 - `test_response_parser_valid_json`: Parse well-formed responses.
 - `test_response_parser_invalid_json`: Handle malformed responses gracefully.
 
-### 7.2 Regression Tests
+### 7.2 Behavioral Equivalence Tests
+Verify refactored code produces identical results:
+
+```python
+def test_cost_calculation_equivalence():
+    """Verify CostCalculator produces identical results to original."""
+    import random
+    calculator = CostCalculator()
+
+    # Test with 1000 random token counts
+    for _ in range(1000):
+        input_tokens = random.randint(1, 100000)
+        output_tokens = random.randint(1, 50000)
+
+        new_cost = calculator.calculate("claude-3-5-sonnet", input_tokens, output_tokens)
+        original_cost = _original_calculate_cost_anthropic(input_tokens, output_tokens)
+
+        # Assert results match to 10 decimal places
+        assert abs(new_cost - original_cost) < 1e-10
+
+def test_prompt_builder_output_identical():
+    """Verify PromptBuilder produces byte-identical prompts."""
+    builder = PromptBuilder()
+    paper = create_test_paper()
+    targets = create_test_targets()
+
+    new_prompt = builder.build(paper, "markdown content", targets)
+    original_prompt = _original_build_prompt(paper, "markdown content", targets)
+
+    assert new_prompt == original_prompt
+```
+
+### 7.3 Regression Tests
 - All 1,468 existing tests MUST pass unchanged.
 - Coverage MUST remain ≥99%.
 
-### 7.3 Integration Tests
+### 7.4 Integration Tests
 - `test_llm_service_backward_compat`: Verify existing callers work.
 - `test_provider_fallback_still_works`: Verify fallback logic preserved.
 - `test_circuit_breaker_still_works`: Verify circuit breaker preserved.

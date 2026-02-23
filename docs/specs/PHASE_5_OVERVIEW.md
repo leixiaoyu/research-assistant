@@ -22,12 +22,12 @@ Phase 5 is a **code health initiative** focused on refactoring the codebase to i
 
 | Phase | Focus | Priority | Effort | Risk |
 |-------|-------|----------|--------|------|
-| 5.1 | LLMService Decomposition | HIGH | 3-4 days | Low |
-| 5.2 | ResearchPipeline Refactoring | HIGH | 3-4 days | Medium |
-| 5.3 | CLI Command Splitting | MEDIUM | 2 days | Low |
-| 5.4 | Utility Pattern Extraction | MEDIUM | 2 days | Low |
-| 5.5 | Model Consolidation | LOW | 3-4 days | Medium |
-| 5.6 | Service Layer Improvements | LOW | 3-4 days | Medium |
+| 5.1 | LLMService Decomposition | HIGH | 3-4 days + 0.5 day integration | Low |
+| 5.2 | ResearchPipeline Refactoring | HIGH | 3-4 days + 0.5 day integration | Medium |
+| 5.3 | CLI Command Splitting | MEDIUM | 2 days + 0.5 day integration | Low |
+| 5.4 | Utility Pattern Extraction | MEDIUM | 2 days + 0.5 day integration | Low |
+| 5.5 | Model Consolidation | LOW | 3-4 days + 0.5 day integration | Medium |
+| 5.6 | Service Layer Improvements | LOW | 3-4 days + 0.5 day integration | Medium |
 
 ---
 
@@ -70,6 +70,39 @@ Week 5: Phase 5.6 (Services) - Optional
 ```
 
 Phases 5.5 and 5.6 are optional and can be deferred based on team capacity.
+
+**Note:** Each phase includes 0.5 day of integration testing. Total estimate: 5-7 weeks including buffer.
+
+---
+
+## Deprecation Policy
+
+### Timeline
+All deprecated APIs follow this schedule:
+
+| Phase | Action | Timeline |
+|-------|--------|----------|
+| Introduction | Add deprecation warnings | During Phase 5.x implementation |
+| Warning Period | Warnings emitted on legacy imports | 3 months minimum |
+| Removal | Remove deprecated paths | Phase 6 or +3 months after Phase 5 complete |
+
+### Notification Process
+1. **Changelog Entry:** Document deprecated APIs in CHANGELOG.md
+2. **Warning Messages:** Clear messages with migration path
+3. **Documentation:** Update all docs to show new import patterns
+4. **CI Notification:** Deprecation warnings logged in CI output
+
+### Example Deprecation Warning
+```python
+import warnings
+warnings.warn(
+    "Importing from src.models.paper is deprecated. "
+    "Use 'from src.models import PaperMetadata' instead. "
+    "This import path will be removed in Phase 6.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+```
 
 ---
 

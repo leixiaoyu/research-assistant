@@ -166,6 +166,51 @@ def create_extraction_service(config: ExtractionConfig) -> ExtractionService:
     return ExtractionService(config, pdf_service, llm_service)
 ```
 
+#### REQ-5.6.5: Test Mocking Pattern
+A clear mocking pattern SHALL be documented for testing with DI.
+
+**Recommended Test Pattern:**
+```python
+# tests/unit/services/test_extraction_service.py
+import pytest
+from unittest.mock import Mock, AsyncMock
+
+@pytest.fixture
+def mock_pdf_service():
+    """Create mock PDFService for testing."""
+    mock = Mock(spec=PDFService)
+    mock.download_and_convert = AsyncMock(return_value="# Markdown content")
+    return mock
+
+@pytest.fixture
+def mock_llm_service():
+    """Create mock LLMService for testing."""
+    mock = Mock(spec=LLMService)
+    mock.extract = AsyncMock(return_value=create_test_extraction())
+    return mock
+
+@pytest.fixture
+def extraction_service(mock_pdf_service, mock_llm_service):
+    """Create ExtractionService with mocked dependencies."""
+    return ExtractionService(
+        config=create_test_config(),
+        pdf_service=mock_pdf_service,
+        llm_service=mock_llm_service,
+    )
+
+async def test_extraction_service_processes_paper(extraction_service, mock_llm_service):
+    """Test paper processing with mocked dependencies."""
+    result = await extraction_service.process_paper(test_paper)
+    mock_llm_service.extract.assert_called_once()
+    assert result.success is True
+```
+
+**Benefits of this pattern:**
+- No real API calls during unit tests
+- Fast test execution
+- Deterministic results
+- Easy to test error conditions
+
 ### 3.3 RegistryService Decomposition
 
 #### REQ-5.6.5: Registry Core
@@ -419,6 +464,21 @@ class PaperRegistry:
         """Normalize title for comparison."""
         return title.lower().strip()
 
+    # Public methods for RegistryService to use (avoid exposing private state)
+    def load_entries(self, entries: Dict[str, RegistryEntry]) -> None:
+        """Load entries from persistence layer."""
+        for entry in entries.values():
+            self._entries[entry.paper_id] = entry
+            self._update_indexes(entry)
+
+    def get_all_entries(self) -> Dict[str, RegistryEntry]:
+        """Get all entries for persistence."""
+        return dict(self._entries)  # Return copy to prevent external mutation
+
+    def count(self) -> int:
+        """Get number of registered papers."""
+        return len(self._entries)
+
 
 # src/services/registry/persistence.py
 """Registry persistence layer."""
@@ -487,19 +547,19 @@ class RegistryService(AsyncService):
     async def initialize(self) -> None:
         """Load registry state from disk."""
         entries = self._persistence.load()
-        for entry in entries.values():
-            self._registry._entries[entry.paper_id] = entry
-            self._registry._update_indexes(entry)
+        # Use public method instead of accessing private attributes
+        self._registry.load_entries(entries)
 
     async def shutdown(self) -> None:
         """Save registry state to disk."""
-        self._persistence.save(self._registry._entries)
+        # Use public method instead of accessing private attributes
+        self._persistence.save(self._registry.get_all_entries())
 
     async def health_check(self) -> ServiceHealth:
         return ServiceHealth(
             name=self.name,
             healthy=True,
-            details=f"{len(self._registry._entries)} papers registered",
+            details=f"{self._registry.count()} papers registered",
         )
 
     # Delegate to components

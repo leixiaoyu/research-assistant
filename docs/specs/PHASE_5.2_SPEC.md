@@ -215,13 +215,26 @@ class PipelineContext:
     # Services (lazy-initialized)
     _services: Dict[str, Any] = field(default_factory=dict)
 
-    # Accumulated state
+    # Accumulated state (Note: Use explicit methods for state transitions)
     discovered_papers: Dict[str, List[PaperMetadata]] = field(default_factory=dict)
     extraction_results: Dict[str, List[ExtractedPaper]] = field(default_factory=dict)
     synthesis_results: Dict[str, ProcessingResult] = field(default_factory=dict)
 
     # Error tracking
     errors: List[Dict[str, str]] = field(default_factory=list)
+
+    # State modification methods (thread-safe for future concurrent phases)
+    def add_discovered_papers(self, topic: str, papers: List[PaperMetadata]) -> None:
+        """Add discovered papers for a topic (explicit state transition)."""
+        self.discovered_papers[topic] = papers
+
+    def add_extraction_result(self, topic: str, results: List[ExtractedPaper]) -> None:
+        """Add extraction results for a topic (explicit state transition)."""
+        self.extraction_results[topic] = results
+
+    def add_error(self, phase: str, error: str) -> None:
+        """Record an error (thread-safe append)."""
+        self.errors.append({"phase": phase, "error": error})
 
     def get_service(self, name: str) -> Any:
         """Get service by name, initializing if needed."""
@@ -355,6 +368,14 @@ class ResearchPipeline:
 2. Verify scheduler integration works.
 3. Add deprecation warnings if needed.
 
+### Task 7: Update ConcurrentPipeline Integration (0.5 day)
+**Files:** src/orchestration/concurrent_pipeline.py
+
+1. Update ConcurrentPipeline to use new phase classes.
+2. Ensure worker pools integrate with phase execution.
+3. Verify concurrent processing behavior unchanged.
+4. Add integration tests for concurrent + phase class interaction.
+
 ---
 
 ## 7. Verification Criteria
@@ -389,7 +410,41 @@ class ResearchPipeline:
 
 ---
 
-## 9. File Size Targets
+## 9. Rollback Plan
+
+If critical issues are discovered post-merge:
+
+1. **Immediate Rollback:** Revert the PR entirely (single commit revert).
+2. **Original Preserved:** `research_pipeline.py` is preserved in git history.
+3. **No Data Migration:** Purely code structure change, no data format changes.
+4. **State Validation:** Run state validation tests to verify pipeline output integrity.
+
+### State Validation Strategy
+
+Before merge, create snapshot tests that capture:
+- Pipeline output structure for a reference run
+- Synthesis file contents (hash comparison)
+- Registry state after processing
+
+```python
+def test_pipeline_output_equivalence():
+    """Verify refactored pipeline produces identical output."""
+    # Run with original implementation
+    original_result = run_original_pipeline(test_config)
+    original_hash = hash_output_files(original_result.output_files)
+
+    # Run with refactored implementation
+    refactored_result = run_refactored_pipeline(test_config)
+    refactored_hash = hash_output_files(refactored_result.output_files)
+
+    # Verify byte-for-byte equivalence
+    assert original_hash == refactored_hash
+    assert original_result.papers_processed == refactored_result.papers_processed
+```
+
+---
+
+## 10. File Size Targets
 
 | File | Current | Target |
 |------|---------|--------|

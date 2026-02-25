@@ -1,9 +1,9 @@
 # ARISP Phased Delivery Plan
 **Automated Research Ingestion & Synthesis Pipeline**
 
-**Version:** 1.6
-**Date:** 2026-02-09
-**Status:** Phase 3.3 Complete, Phase 3.5 Planning
+**Version:** 1.7
+**Date:** 2026-02-24
+**Status:** Phase 5.1 Complete, Phase 5.2 Planning
 
 ---
 
@@ -14,14 +14,14 @@ This document outlines a phased delivery plan to build the Automated Research In
 ### Timeline Overview
 ```
 ┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
-│ Phase 1  │Phase 1.5 │ Phase 2  │Phase 2.5 │ Phase 3  │Phase 3.1 │Phase 3.3 │Phase 3.5 │ Phase 4  │
-│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│(1 week)  │ (1 week) │
+│ Phase 1  │Phase 1.5 │ Phase 2  │Phase 2.5 │ Phase 3  │Phase 3.1 │Phase 3.3 │Phase 5.1 │Phase 5.2 │
+│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│(Planning)│
 │          │          │          │          │          │          │          │          │          │
-│Foundation│ Stabilize│Extraction│Reliability│Intelligence│Concurrent│Resilience│Identity  │Harden   │
+│Foundation│ Stabilize│Extraction│Reliability│Intelligence│Concurrent│Resilience│LLM       │Discovery │
 └──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
-    MVP       Unblock     Full     Production  Optimize   Async      LLM        Global     Ops Ready
-  Working     Phase 2    Features   Hardened   Grade      Workers    Fallback   Registry   Deployment
-  End-to-End  ArXiv      + LLM    PDF Extract Performance Orchestration          & Synthesis
+    MVP       Unblock     Full     Production  Optimize   Async      LLM        Decompose  Multi-
+  Working     Phase 2    Features   Hardened   Grade      Workers    Fallback   Service    Provider
+  End-to-End  ArXiv      + LLM    PDF Extract Performance Orchestration          Modular    Discovery
 ```
 
 ### Investment & Returns
@@ -57,6 +57,49 @@ This document outlines a phased delivery plan to build the Automated Research In
 - 100% extraction success rate during transient API failures
 - Automatic switch to fallback provider when quota is exhausted
 - Zero pipeline crashes due to LLM provider outages
+
+---
+
+### Phase 5.1: LLMService Decomposition
+**Status:** ✅ **COMPLETED** (Feb 24, 2026)
+**Duration:** 3-4 days
+**Dependencies:** Phase 3.3 Complete
+**Goal:** Decompose monolithic LLMService into modular, maintainable package
+
+#### Problem Addressed
+The original `LLMService` (838 lines, 26 functions) violated the Single Responsibility Principle by handling 10 distinct responsibilities: provider abstraction, client initialization, retry logic, circuit breaker integration, fallback orchestration, cost tracking, prompt building, response parsing, health monitoring, and metrics export.
+
+#### Key Deliverables
+✅ Abstract `LLMProvider` interface with standardized response format
+✅ `AnthropicProvider` for Claude models (<150 lines)
+✅ `GoogleProvider` for Gemini models (<150 lines)
+✅ `CostTracker` for budget enforcement and usage tracking
+✅ `PromptBuilder` for structured extraction prompts
+✅ `ResponseParser` for JSON response handling
+✅ Backward-compatible imports (`from src.services.llm_service import LLMService`)
+✅ 100% test coverage for all new modules
+
+#### Package Structure
+```
+src/services/llm/
+├── __init__.py           # Re-export LLMService for backward compat
+├── service.py            # Main LLMService orchestrator (<200 lines)
+├── providers/
+│   ├── __init__.py
+│   ├── base.py           # Abstract LLMProvider
+│   ├── anthropic.py      # AnthropicProvider
+│   └── google.py         # GoogleProvider
+├── cost_tracker.py       # CostTracker class
+├── prompt_builder.py     # PromptBuilder class
+├── response_parser.py    # ResponseParser class
+└── health.py             # ProviderHealth dataclass
+```
+
+#### Success Metrics
+- 838-line monolith → 6-7 focused modules, each <150 lines
+- All 442+ existing tests pass unchanged
+- Coverage maintained at ≥99%
+- Zero breaking changes to existing callers
 
 ---
 

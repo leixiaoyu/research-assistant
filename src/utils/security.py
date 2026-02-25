@@ -88,7 +88,7 @@ class PathSanitizer:
                 is_allowed = True
                 break
 
-        if not is_allowed:  # pragma: no cover
+        if not is_allowed:
             raise SecurityError(f"Base directory not in allowed list: {base_dir}")
 
         # Remove dangerous characters (null byte)
@@ -100,7 +100,7 @@ class PathSanitizer:
         # Ensure it's within base directory
         try:
             requested.relative_to(base_dir)
-        except ValueError:  # pragma: no cover
+        except ValueError:
             logger.warning(
                 "path_traversal_blocked",
                 base_dir=str(base_dir),
@@ -109,17 +109,9 @@ class PathSanitizer:
             )
             raise SecurityError(f"Path traversal attempt detected: {user_input}")
 
-        # Check if symlink points outside base (symlink attack)
-        # NOTE: This check is currently unreachable because line 54 calls .resolve()
-        # which already follows symlinks. Kept for defensive programming.
-        if requested.is_symlink():  # pragma: no cover
-            real_path = requested.resolve()  # pragma: no cover
-            try:  # pragma: no cover
-                real_path.relative_to(base_dir)
-            except ValueError:  # pragma: no cover
-                raise SecurityError(
-                    f"Symlink points outside base directory: {requested}"
-                )
+        # NOTE: Symlink attacks are already prevented by .resolve() above,
+        # which follows symlinks before we check relative_to(). Any symlink
+        # pointing outside base_dir would fail the relative_to() check above.
 
         # Optionally check existence
         if must_exist and not requested.exists():
@@ -165,7 +157,7 @@ class InputValidation:
         allowed_chars = re.compile(r'^[a-zA-Z0-9\s\-_+.,"():]+$')
         if not allowed_chars.match(v):
             # Log the character that failed
-            for char in v:  # pragma: no cover
+            for char in v:
                 if not re.match(r'[a-zA-Z0-9\s\-_+.,"():]', char):
                     logger.warning("invalid_char_detected", char=char, query=v)
 

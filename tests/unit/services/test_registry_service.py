@@ -772,3 +772,74 @@ class TestRegistryServiceFileLocking:
         # Should not raise, just log warning
         service._release_lock()
         assert service._lock_fd is None
+
+    def test_lock_failure_after_open_cleans_up_fd(self, temp_registry_path, mocker):
+        """Test that lock failure after os.open cleans up the file descriptor."""
+        import os
+
+        service = RegistryService(registry_path=temp_registry_path)
+
+        # Track if os.close was called
+        close_calls = []
+        original_close = os.close
+
+        def track_close(fd):
+            close_calls.append(fd)
+            return original_close(fd)
+
+        # Mock fcntl.flock to raise AFTER os.open succeeds
+        mocker.patch("fcntl.flock", side_effect=OSError("Lock failed"))
+        mocker.patch("os.close", side_effect=track_close)
+
+        result = service._acquire_lock()
+
+        # Lock should fail
+        assert result is False
+        # File descriptor should have been cleaned up
+        assert service._lock_fd is None
+        # os.close should have been called to clean up
+        assert len(close_calls) == 1
+
+
+class TestProviderIdLookup:
+    """Tests for provider ID lookup in find_existing."""
+
+    def test_find_existing_with_arxiv_prefixed_paper_id(self, temp_registry_path):
+        """Test find_existing when paper_id already has arxiv: prefix.
+
+        This tests the code path at line 309 where paper.paper_id.startswith("arxiv:")
+        is True, so we append the paper_id directly without adding a prefix.
+        """
+        from src.models.paper import Author
+
+        service = RegistryService(registry_path=temp_registry_path)
+
+        # First, register a paper with standard ArXiv ID (without prefix)
+        paper_original = PaperMetadata(
+            paper_id="2301.00001",  # Standard ArXiv format
+            title="Test Paper",
+            abstract="Abstract",
+            authors=[Author(name="Test Author")],
+            url="https://arxiv.org/abs/2301.00001",
+        )
+        service.register_paper(
+            paper_original, topic_slug="test-topic", extraction_targets=[]
+        )
+        service.save()
+
+        # Now create a lookup paper with arxiv: prefix
+        paper_lookup = PaperMetadata(
+            paper_id="arxiv:2301.00001",  # With arxiv: prefix
+            title="Test Paper",
+            abstract="Abstract",
+            authors=[Author(name="Test Author")],
+            url="https://arxiv.org/abs/2301.00001",
+        )
+
+        # The resolve_identity should handle the arxiv: prefix correctly
+        # Line 309: provider_keys.append(paper.paper_id) when startswith("arxiv:")
+        result = service.resolve_identity(paper_lookup)
+
+        # Should find the paper using the provider ID lookup
+        assert result is not None
+        assert result.entry is not None

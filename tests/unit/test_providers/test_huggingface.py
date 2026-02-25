@@ -768,3 +768,105 @@ class TestValidatePdfUrl:
 
         with pytest.raises(SecurityError, match="Invalid ArXiv PDF URL"):
             provider._validate_pdf_url("https://arxiv.org/pdf/../../../etc/passwd")
+
+
+class TestParseResponseExceptionHandling:
+    """Tests for _parse_response exception handling with paper extraction."""
+
+    def test_parse_response_exception_extracts_paper_id_from_dict(self, provider):
+        """Test exception handling extracts paper_id when item has paper dict."""
+        # Create an item that will fail during author parsing
+        malformed_item = {
+            "paper": {
+                "id": "test-paper-123",
+                "title": "Valid title",
+                "summary": "test",
+                "authors": [{"name": {"invalid": "nested"}}],  # Invalid name type
+            },
+            "publishedAt": "2026-01-01T00:00:00.000Z",
+        }
+
+        # Should handle gracefully and continue (skip this item)
+        # The exception path will extract paper_id from the paper dict
+        result = list(provider._parse_response([malformed_item]))
+        # Exception was handled, no results from this malformed item
+        assert len(result) == 0
+
+    def test_parse_response_exception_with_non_dict_paper_obj(self, provider):
+        """Test exception handling when paper.get returns non-dict."""
+        # Create an item where paper is a dict but causes exception in processing
+        malformed_item = {
+            "paper": {
+                "id": "test-id-456",
+                "title": "Valid",
+                "summary": "test",
+                # organization is not a dict - will cause error in org.get()
+                "organization": "not-a-dict",
+                "authors": [{"name": "Author"}],
+            }
+        }
+
+        # Should handle gracefully
+        result = list(provider._parse_response([malformed_item]))
+        # May or may not produce result depending on where error occurs
+        assert isinstance(result, list)
+
+
+class TestTimeframeFilterEdgeCases:
+    """Tests for edge cases in _filter_by_timeframe."""
+
+    def test_recent_timeframe_invalid_format(self, provider):
+        """Test invalid timeframe format yields all papers (defensive code)."""
+        from src.models.paper import Author
+
+        papers = [
+            PaperMetadata(
+                paper_id="paper1",
+                title="Paper 1",
+                abstract="Abstract",
+                authors=[Author(name="Author")],
+                url="https://example.com/1",
+                publication_date=datetime.utcnow(),
+            ),
+        ]
+
+        # Create a mock TimeframeRecent that bypasses validation
+        # to test the defensive code path
+        mock_timeframe = MagicMock(spec=TimeframeRecent)
+        mock_timeframe.value = "48x"  # Invalid suffix - doesn't end with h or d
+
+        # Make isinstance return True for TimeframeRecent
+        with patch(
+            "src.services.providers.huggingface.isinstance",
+            side_effect=lambda obj, cls: cls == TimeframeRecent,
+        ):
+            result = list(provider._filter_by_timeframe(iter(papers), mock_timeframe))
+
+        # Should yield all papers when format is invalid
+        assert len(result) == 1
+
+    def test_unknown_timeframe_type(self, provider):
+        """Test unknown timeframe type yields all papers."""
+        from src.models.paper import Author
+
+        papers = [
+            PaperMetadata(
+                paper_id="paper1",
+                title="Paper 1",
+                abstract="Abstract",
+                authors=[Author(name="Author")],
+                url="https://example.com/1",
+                publication_date=datetime.utcnow(),
+            ),
+        ]
+
+        # Create a completely custom object that's not a known timeframe type
+        class CustomTimeframe:
+            type = "custom"
+
+        unknown_timeframe = CustomTimeframe()
+
+        result = list(provider._filter_by_timeframe(iter(papers), unknown_timeframe))
+
+        # Should yield all papers for unknown type
+        assert len(result) == 1

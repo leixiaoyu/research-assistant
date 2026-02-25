@@ -241,8 +241,15 @@ class TestFallbackBehavior:
                 new_callable=AsyncMock,
             ) as mock_arxiv:
                 mock_arxiv.side_effect = Exception("ArXiv Error")
-                result = await ds.search(topic)
-                assert result == []
+
+                hf_path = "src.services.providers.huggingface"
+                with patch(
+                    f"{hf_path}.HuggingFaceProvider.search",
+                    new_callable=AsyncMock,
+                ) as mock_hf:
+                    mock_hf.side_effect = Exception("HF Error")
+                    result = await ds.search(topic)
+                    assert result == []
 
 
 class TestBenchmarkMode:
@@ -281,10 +288,26 @@ class TestBenchmarkMode:
                 )
                 mock_ss.return_value = [paper2]
 
-                result = await ds.search(topic)
-                assert len(result) == 2
-                mock_arxiv.assert_called_once()
-                mock_ss.assert_called_once()
+                hf_path = "src.services.providers.huggingface"
+                with patch(
+                    f"{hf_path}.HuggingFaceProvider.search",
+                    new_callable=AsyncMock,
+                ) as mock_hf:
+                    paper3 = PaperMetadata(
+                        paper_id="test789",
+                        title="Paper 3",
+                        abstract="Abstract 3",
+                        authors=[Author(name="Author Three")],
+                        url="https://example.com/paper3",
+                        doi="10.1234/test3",
+                    )
+                    mock_hf.return_value = [paper3]
+
+                    result = await ds.search(topic)
+                    assert len(result) == 3
+                    mock_arxiv.assert_called_once()
+                    mock_ss.assert_called_once()
+                    mock_hf.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_benchmark_mode_deduplicates(self, mock_paper):
@@ -311,8 +334,16 @@ class TestBenchmarkMode:
             ) as mock_ss:
                 mock_ss.return_value = [mock_paper]
 
-                result = await ds.search(topic)
-                assert len(result) == 1
+                hf_path = "src.services.providers.huggingface"
+                with patch(
+                    f"{hf_path}.HuggingFaceProvider.search",
+                    new_callable=AsyncMock,
+                ) as mock_hf:
+                    # Return the same paper to test deduplication
+                    mock_hf.return_value = [mock_paper]
+
+                    result = await ds.search(topic)
+                    assert len(result) == 1
 
     @pytest.mark.asyncio
     async def test_benchmark_topic_flag(self, mock_paper):
@@ -368,8 +399,15 @@ class TestBenchmarkMode:
             ) as mock_ss:
                 mock_ss.side_effect = Exception("SS Error")
 
-                result = await ds.search(topic)
-                assert len(result) == 1
+                hf_path = "src.services.providers.huggingface"
+                with patch(
+                    f"{hf_path}.HuggingFaceProvider.search",
+                    new_callable=AsyncMock,
+                ) as mock_hf:
+                    mock_hf.return_value = []
+
+                    result = await ds.search(topic)
+                    assert len(result) == 1
 
 
 class TestSearchWithMetrics:
@@ -507,10 +545,19 @@ class TestCompareProviders:
             ) as mock_ss:
                 mock_ss.return_value = [mock_paper]
 
-                comparison = await ds.compare_providers(topic)
+                hf_path = "src.services.providers.huggingface"
+                with patch(
+                    f"{hf_path}.HuggingFaceProvider.search",
+                    new_callable=AsyncMock,
+                ) as mock_hf:
+                    # HuggingFace returns empty, only ArXiv and SS have overlap
+                    mock_hf.return_value = []
 
-                assert comparison.overlap_count == 1
-                assert comparison.total_unique_papers == 1
+                    comparison = await ds.compare_providers(topic)
+
+                    # ArXiv and SS both return same paper = 1 overlap
+                    assert comparison.overlap_count == 1
+                    assert comparison.total_unique_papers == 1
 
     @pytest.mark.asyncio
     async def test_compare_providers_with_failure(self, mock_paper):
@@ -631,8 +678,15 @@ class TestAdditionalCoverage:
             ) as mock_ss:
                 mock_ss.return_value = []
 
-                result = await ds.search(topic)
-                assert len(result) == 1
+                hf_path = "src.services.providers.huggingface"
+                with patch(
+                    f"{hf_path}.HuggingFaceProvider.search",
+                    new_callable=AsyncMock,
+                ) as mock_hf:
+                    mock_hf.return_value = []
+
+                    result = await ds.search(topic)
+                    assert len(result) == 1
 
     @pytest.mark.asyncio
     async def test_search_with_metrics_auto_select(self):

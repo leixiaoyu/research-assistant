@@ -111,6 +111,33 @@ class TestRegistryEntry:
                 extraction_target_hash="sha256:abc",
             )
 
+    def test_semantic_scholar_validation_valid_hex(self):
+        """Test valid Semantic Scholar ID (40 char hex)."""
+        entry = RegistryEntry(
+            identifiers={"semantic_scholar": "a" * 40},
+            title_normalized="test",
+            extraction_target_hash="sha256:abc",
+        )
+        assert entry.identifiers["semantic_scholar"] == "a" * 40
+
+    def test_semantic_scholar_validation_valid_alphanumeric(self):
+        """Test valid Semantic Scholar ID (alphanumeric)."""
+        entry = RegistryEntry(
+            identifiers={"semantic_scholar": "abc123_def-456"},
+            title_normalized="test",
+            extraction_target_hash="sha256:abc",
+        )
+        assert entry.identifiers["semantic_scholar"] == "abc123_def-456"
+
+    def test_semantic_scholar_validation_invalid(self):
+        """Test invalid Semantic Scholar ID raises error (Line 132)."""
+        with pytest.raises(ValueError, match="Invalid Semantic Scholar ID format"):
+            RegistryEntry(
+                identifiers={"semantic_scholar": "invalid@id#with$special"},
+                title_normalized="test",
+                extraction_target_hash="sha256:abc",
+            )
+
     def test_topic_affiliation_validation_valid(self):
         """Test valid topic slug."""
         entry = RegistryEntry(

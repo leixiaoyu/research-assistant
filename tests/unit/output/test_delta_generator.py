@@ -396,6 +396,18 @@ class TestGenerate:
 
         assert path is None
 
+    def test_returns_none_on_invalid_date_format(self, generator, mocker):
+        """Test None returned when date validation fails (Lines 281-285)."""
+        # Mock _validate_date_format to return False
+        mocker.patch.object(generator, "_validate_date_format", return_value=False)
+
+        path = generator.generate(
+            results=[],
+            topic_slug="test-topic",
+        )
+
+        assert path is None
+
 
 class TestGetDeltaHistory:
     """Tests for getting delta history."""

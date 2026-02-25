@@ -78,7 +78,7 @@ class GoogleProvider(LLMProvider):
             from google import genai
 
             self._client = genai.Client(api_key=api_key)
-        except ImportError:
+        except ImportError:  # pragma: no cover - requires package uninstalled
             raise LLMProviderError(
                 "google-genai package not installed. Run: pip install google-genai",
                 provider="google",

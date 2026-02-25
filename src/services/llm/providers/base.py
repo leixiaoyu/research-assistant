@@ -121,13 +121,13 @@ class LLMProvider(ABC):
     @abstractmethod
     def name(self) -> str:
         """Provider name (e.g., 'anthropic', 'google')."""
-        pass
+        pass  # pragma: no cover - abstract method, always overridden
 
     @property
     @abstractmethod
     def model(self) -> str:
         """Current model identifier."""
-        pass
+        pass  # pragma: no cover - abstract method, always overridden
 
     @abstractmethod
     async def generate(
@@ -153,7 +153,7 @@ class LLMProvider(ABC):
             ContentFilterError: When content is blocked by safety filters
             ProviderUnavailableError: When provider is temporarily down
         """
-        pass
+        pass  # pragma: no cover - abstract method, always overridden
 
     @abstractmethod
     def calculate_cost(
@@ -170,7 +170,7 @@ class LLMProvider(ABC):
         Returns:
             Cost in USD (float)
         """
-        pass
+        pass  # pragma: no cover - abstract method, always overridden
 
     def get_health(self) -> ProviderHealth:
         """Get current provider health status.

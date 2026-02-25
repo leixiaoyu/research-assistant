@@ -78,7 +78,7 @@ class AnthropicProvider(LLMProvider):
             from anthropic import AsyncAnthropic
 
             self._client = AsyncAnthropic(api_key=api_key)
-        except ImportError:
+        except ImportError:  # pragma: no cover - requires package uninstalled
             raise LLMProviderError(
                 "anthropic package not installed. Run: pip install anthropic",
                 provider="anthropic",

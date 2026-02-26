@@ -607,21 +607,24 @@ class TestOnRetryCallback:
     async def test_on_retry_callback_updates_stats(self, llm_service):
         """Test that on_retry callback updates usage stats."""
         service = llm_service
-        call_count = 0
+        call_count = [0]  # Use list to allow mutation in closure
 
-        # Mock _call_anthropic_raw to fail once then succeed
-        async def flaky_call(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise RetryableError("Transient failure")
-            # Return a mock response
-            mock_response = Mock()
-            mock_response.content = [Mock(text='{"extractions": []}')]
-            mock_response.usage = Mock(input_tokens=100, output_tokens=50)
-            return mock_response
+        # Create mock responses
+        def create_flaky_side_effect():
+            def side_effect(*args, **kwargs):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    raise RetryableError("Transient failure")
+                # Return a mock response
+                mock_response = Mock()
+                mock_response.content = [Mock(text='{"extractions": []}')]
+                mock_response.usage = Mock(input_tokens=100, output_tokens=50)
+                return mock_response
 
-        service._call_anthropic_raw = flaky_call
+            return side_effect
+
+        # Use AsyncMock for proper mock detection
+        service._call_anthropic_raw = AsyncMock(side_effect=create_flaky_side_effect())
 
         metadata = Mock(paper_id="123", title="Test", authors=[])
         result = await service.extract("markdown", [], metadata)

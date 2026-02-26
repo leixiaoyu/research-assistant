@@ -41,6 +41,26 @@ class TestPipelineResult:
         assert "output_files" in d
         assert "errors" in d
 
+    def test_to_dict_with_cross_synthesis_report(self):
+        """Should include cross_synthesis info when report is present (Line 75)."""
+        result = PipelineResult()
+        result.topics_processed = 3
+        result.papers_discovered = 15
+
+        # Create mock cross-synthesis report
+        mock_report = Mock()
+        mock_report.questions_answered = 5
+        mock_report.total_cost_usd = 0.25
+        mock_report.total_tokens_used = 5000
+        result.cross_synthesis_report = mock_report
+
+        d = result.to_dict()
+
+        assert "cross_synthesis" in d
+        assert d["cross_synthesis"]["questions_answered"] == 5
+        assert d["cross_synthesis"]["synthesis_cost_usd"] == 0.25
+        assert d["cross_synthesis"]["synthesis_tokens"] == 5000
+
 
 class TestResearchPipeline:
     """Tests for ResearchPipeline class."""
@@ -908,3 +928,222 @@ class TestResearchPipelinePhase38:
 
         # Should have topic_slug parameter
         assert "topic_slug" in params
+
+
+class TestRunCrossSynthesis:
+    """Tests for _run_cross_synthesis method coverage."""
+
+    @pytest.mark.asyncio
+    async def test_run_cross_synthesis_services_not_initialized(self):
+        """Should skip when services not initialized (Lines 685-689)."""
+        pipeline = ResearchPipeline()
+        pipeline._cross_synthesis_service = None
+        pipeline._cross_synthesis_generator = None
+
+        # Should return None without raising
+        result = await pipeline._run_cross_synthesis()
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_run_cross_synthesis_no_enabled_questions(self):
+        """Should skip when no enabled questions (Lines 694-695)."""
+        pipeline = ResearchPipeline()
+
+        # Mock services but return empty questions
+        mock_service = Mock()
+        mock_service.get_enabled_questions.return_value = []
+        pipeline._cross_synthesis_service = mock_service
+        pipeline._cross_synthesis_generator = Mock()
+
+        result = await pipeline._run_cross_synthesis()
+
+        assert result is None
+        mock_service.get_enabled_questions.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_run_cross_synthesis_write_fails(self):
+        """Should handle write failure gracefully (Line 721)."""
+        pipeline = ResearchPipeline()
+
+        # Mock service with questions - use Mock for sync methods
+        mock_question = Mock()
+        mock_service = Mock()
+        mock_service.get_enabled_questions.return_value = [mock_question]
+
+        # Mock report with results
+        mock_report = Mock()
+        mock_report.results = [Mock()]
+        mock_report.questions_answered = 1
+        mock_report.total_cost_usd = 0.1
+        # synthesize_all is async, so use AsyncMock for it specifically
+        mock_service.synthesize_all = AsyncMock(return_value=mock_report)
+
+        pipeline._cross_synthesis_service = mock_service
+
+        # Mock generator that returns None (write failure)
+        mock_generator = Mock()
+        mock_generator.write.return_value = None
+        pipeline._cross_synthesis_generator = mock_generator
+
+        result = await pipeline._run_cross_synthesis()
+
+        # Should still return report despite write failure
+        assert result is mock_report
+        mock_generator.write.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_run_cross_synthesis_exception_handling(self):
+        """Should handle exceptions gracefully (Lines 725-731)."""
+        pipeline = ResearchPipeline()
+
+        # Mock service that raises exception
+        mock_question = Mock()
+        mock_service = Mock()
+        mock_service.get_enabled_questions.return_value = [mock_question]
+        mock_service.synthesize_all = AsyncMock(
+            side_effect=Exception("Synthesis failed")
+        )
+
+        pipeline._cross_synthesis_service = mock_service
+        pipeline._cross_synthesis_generator = Mock()
+
+        # Should return None and not raise
+        result = await pipeline._run_cross_synthesis()
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_run_cross_synthesis_success(self):
+        """Should successfully run cross-synthesis."""
+        pipeline = ResearchPipeline()
+
+        # Mock service with questions - use Mock for sync methods
+        mock_question = Mock()
+        mock_service = Mock()
+        mock_service.get_enabled_questions.return_value = [mock_question]
+
+        # Mock report with results
+        mock_report = Mock()
+        mock_report.results = [Mock()]
+        mock_report.questions_answered = 2
+        mock_report.total_cost_usd = 0.15
+        mock_service.synthesize_all = AsyncMock(return_value=mock_report)
+
+        pipeline._cross_synthesis_service = mock_service
+
+        # Mock successful write
+        mock_generator = Mock()
+        mock_generator.write.return_value = Path("/output/cross_synthesis.md")
+        pipeline._cross_synthesis_generator = mock_generator
+
+        result = await pipeline._run_cross_synthesis()
+
+        assert result is mock_report
+
+
+class TestGetProcessingResultsWithExtractionService:
+    """Tests for _get_processing_results with extraction service (Line 762)."""
+
+    def test_returns_topic_results_from_extraction_service(self):
+        """Should return topic_results when extraction service has them (Line 762)."""
+        pipeline = ResearchPipeline()
+
+        # Create mock processing results
+        from src.models.synthesis import ProcessingResult, ProcessingStatus
+
+        mock_result = ProcessingResult(
+            paper_id="paper123",
+            title="Test Paper",
+            status=ProcessingStatus.NEW,
+            topic_slug="test-topic",
+        )
+
+        # Mock extraction service with results for topic
+        mock_extraction_service = Mock()
+        mock_extraction_service.get_processing_results.return_value = [mock_result]
+        pipeline._extraction_service = mock_extraction_service
+
+        # Call with matching topic_slug
+        results = pipeline._get_processing_results(
+            papers=[],
+            topic_slug="test-topic",
+            extracted_papers=None,
+        )
+
+        # Should return the results from extraction service
+        assert len(results) == 1
+        assert results[0].paper_id == "paper123"
+        assert results[0].topic_slug == "test-topic"
+
+    def test_filters_results_by_topic_slug(self):
+        """Should only return results matching the topic_slug."""
+        pipeline = ResearchPipeline()
+
+        from src.models.synthesis import ProcessingResult, ProcessingStatus
+
+        result1 = ProcessingResult(
+            paper_id="paper1",
+            title="Paper 1",
+            status=ProcessingStatus.NEW,
+            topic_slug="topic-a",
+        )
+        result2 = ProcessingResult(
+            paper_id="paper2",
+            title="Paper 2",
+            status=ProcessingStatus.NEW,
+            topic_slug="topic-b",
+        )
+
+        mock_extraction_service = Mock()
+        mock_extraction_service.get_processing_results.return_value = [result1, result2]
+        pipeline._extraction_service = mock_extraction_service
+
+        # Request only topic-a results
+        results = pipeline._get_processing_results(
+            papers=[],
+            topic_slug="topic-a",
+            extracted_papers=None,
+        )
+
+        assert len(results) == 1
+        assert results[0].paper_id == "paper1"
+
+    def test_falls_back_when_no_matching_topic_results(self):
+        """Should fall back to extracted_papers when no matching topic results."""
+        pipeline = ResearchPipeline()
+
+        # Mock extraction service with results for different topic
+        from src.models.synthesis import ProcessingResult, ProcessingStatus
+
+        result = ProcessingResult(
+            paper_id="paper1",
+            title="Paper 1",
+            status=ProcessingStatus.NEW,
+            topic_slug="other-topic",
+        )
+
+        mock_extraction_service = Mock()
+        mock_extraction_service.get_processing_results.return_value = [result]
+        pipeline._extraction_service = mock_extraction_service
+
+        # Create mock extracted papers for fallback
+        mock_metadata = Mock()
+        mock_metadata.paper_id = "fallback-paper"
+        mock_metadata.title = "Fallback Paper"
+
+        mock_extracted_paper = Mock()
+        mock_extracted_paper.metadata = mock_metadata
+        mock_extracted_paper.extraction = None
+        mock_extracted_paper.pdf_available = False
+
+        # Request for non-matching topic
+        results = pipeline._get_processing_results(
+            papers=[],
+            topic_slug="my-topic",
+            extracted_papers=[mock_extracted_paper],
+        )
+
+        # Should fall back to extracted_papers
+        assert len(results) == 1
+        assert results[0].paper_id == "fallback-paper"

@@ -8,6 +8,8 @@ All exceptions inherit from PipelineError to allow catching all pipeline-related
 errors in a single except block when needed.
 """
 
+from typing import Dict, Optional
+
 
 class PipelineError(Exception):
     """Base exception for all pipeline errors
@@ -148,7 +150,7 @@ class RateLimitError(RetryableError):
     - Rate limit headers indicate throttling
     """
 
-    def __init__(self, message: str, retry_after: float | None = None) -> None:
+    def __init__(self, message: str, retry_after: Optional[float] = None) -> None:
         super().__init__(message)
         self.retry_after = retry_after
 
@@ -185,7 +187,7 @@ class AllProvidersFailedError(LLMAPIError):
     """
 
     def __init__(
-        self, message: str, provider_errors: dict[str, str] | None = None
+        self, message: str, provider_errors: Optional[Dict[str, str]] = None
     ) -> None:
         if provider_errors:
             error_details = ", ".join(f"{p}: {e}" for p, e in provider_errors.items())

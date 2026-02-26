@@ -12,7 +12,7 @@ Tests:
 
 import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock, patch
 import tempfile
 import yaml
 
@@ -1099,6 +1099,46 @@ class TestEntryConversion:
 class TestPaperSelectionEdgeCases:
     """Tests for paper selection edge cases."""
 
+    def test_select_papers_invalid_quality_score_type(self, mock_registry_service):
+        """Test paper selection with non-numeric quality_score (Line 221)."""
+        # Create entries with invalid quality_score type
+        entries = {}
+        entry = RegistryEntry(
+            identifiers={"doi": "10.1234/test"},
+            title_normalized="test paper with invalid score",
+            extraction_target_hash="sha256:test",
+            topic_affiliations=["topic-a"],
+            metadata_snapshot={
+                "title": "Test Paper",
+                "quality_score": "not a number",  # Invalid type - should default to 0.0
+            },
+        )
+        entries[entry.paper_id] = entry
+
+        state = MagicMock()
+        state.entries = entries
+        mock_registry_service.load.return_value = state
+
+        config = SynthesisConfig()
+        service = CrossTopicSynthesisService(
+            registry_service=mock_registry_service,
+            config=config,
+        )
+
+        question = SynthesisQuestion(
+            id="q1",
+            name="Q1",
+            prompt="Test {paper_summaries}",
+            min_quality_score=0.0,  # Low threshold to include paper with default 0.0
+            max_papers=10,
+        )
+
+        papers = service.select_papers(question)
+
+        # Should include paper with quality_score defaulted to 0.0
+        assert len(papers) == 1
+        assert papers[0].quality_score == 0.0
+
     def test_select_papers_no_matching_filters(self, mock_registry_service):
         """Test paper selection when no papers match filters."""
         config = SynthesisConfig()
@@ -1345,3 +1385,56 @@ class TestCostLimitPaths:
         assert len(report.results) == 2
         assert "Synthesis failed" in report.results[0].synthesis_text
         assert "Success" in report.results[1].synthesis_text
+
+    @pytest.mark.asyncio
+    async def test_synthesize_all_catches_outer_exception(self, mock_registry_service):
+        """Test synthesize_all catches exception at outer try (Lines 675-676)."""
+        config = SynthesisConfig(
+            questions=[
+                SynthesisQuestion(
+                    id="q1",
+                    name="Q1",
+                    prompt="Test prompt {paper_summaries}",
+                    priority=1,
+                ),
+                SynthesisQuestion(
+                    id="q2",
+                    name="Q2",
+                    prompt="Test prompt two {paper_summaries}",
+                    priority=2,
+                ),
+            ],
+        )
+
+        service = CrossTopicSynthesisService(
+            registry_service=mock_registry_service,
+            config=config,
+        )
+
+        # Patch synthesize_question to raise an exception directly
+        # This triggers the outer except block at lines 675-676
+        call_count = 0
+
+        async def mock_synthesize_question(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("Outer exception test")
+            # Second call succeeds
+            from src.models.cross_synthesis import SynthesisResult
+
+            return SynthesisResult(
+                question_id="q2",
+                question_name="Q2",
+                synthesis_text="Success",
+                papers_used=[],
+                tokens_used=0,
+                cost_usd=0.0,
+            )
+
+        with patch.object(service, "synthesize_question", mock_synthesize_question):
+            report = await service.synthesize_all()
+
+        # Should continue after first exception and process second question
+        assert len(report.results) == 1
+        assert report.results[0].question_id == "q2"

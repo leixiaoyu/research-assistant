@@ -1,9 +1,9 @@
 # ARISP Phased Delivery Plan
 **Automated Research Ingestion & Synthesis Pipeline**
 
-**Version:** 1.6
-**Date:** 2026-02-09
-**Status:** Phase 3.3 Complete, Phase 3.5 Planning
+**Version:** 1.7
+**Date:** 2026-02-24
+**Status:** Phase 5.1 Complete, Phase 5.2 Planning
 
 ---
 
@@ -14,14 +14,19 @@ This document outlines a phased delivery plan to build the Automated Research In
 ### Timeline Overview
 ```
 ┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
-│ Phase 1  │Phase 1.5 │ Phase 2  │Phase 2.5 │ Phase 3  │Phase 3.1 │Phase 3.3 │Phase 3.5 │ Phase 4  │
-│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│(1 week)  │ (1 week) │
+│ Phase 1  │Phase 1.5 │ Phase 2  │Phase 2.5 │ Phase 3  │Phase 3.1 │Phase 3.3 │Phase 3.4 │Phase 3.5 │
+│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│
 │          │          │          │          │          │          │          │          │          │
-│Foundation│ Stabilize│Extraction│Reliability│Intelligence│Concurrent│Resilience│Identity  │Harden   │
+│Foundation│ Stabilize│Extraction│Reliability│Intelligence│Concurrent│Resilience│HuggingFace│Registry │
 └──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
-    MVP       Unblock     Full     Production  Optimize   Async      LLM        Global     Ops Ready
-  Working     Phase 2    Features   Hardened   Grade      Workers    Fallback   Registry   Deployment
-  End-to-End  ArXiv      + LLM    PDF Extract Performance Orchestration          & Synthesis
+
+┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
+│Phase 3.6 │Phase 3.7 │Phase 5.1 │Phase 5.2 │Phase 5.3 │Phase 5.4 │Phase 5.5 │
+│✅Complete│✅Complete│✅Complete│(Planning)│(Future)  │(Future)  │(Future)  │
+│          │          │          │          │          │          │          │
+│ Delta    │Cross-    │   LLM    │Research  │   CLI    │ Utility  │ Model    │
+│ Briefs   │Synthesis │ Decompose│ Pipeline │ Commands │ Patterns │Consolid. │
+└──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
 ```
 
 ### Investment & Returns
@@ -60,58 +65,123 @@ This document outlines a phased delivery plan to build the Automated Research In
 
 ---
 
-### Phase 3.5: Global Paper Identity & Incremental Backfilling
-**Duration:** 1 week
-**Status:** 📋 **PLANNING**
-**Dependencies:** Phase 3.2 (Multi-provider) & Phase 3.3 (Resilience)
-**Goal:** Shift from topic-local to system-global paper management.
-
-#### Problem Statement
-Redundant processing of the same paper across multiple topics and inability to "backfill" missing data when research requirements evolve.
+### Phase 3.4: Multi-Provider Discovery (HuggingFace)
+**Status:** ✅ **COMPLETED** (Feb 2026)
+**Duration:** 3-4 days
+**Dependencies:** Phase 3.3 Complete
+**Goal:** Expand paper discovery beyond Semantic Scholar
 
 #### Key Deliverables
-- `RegistryService` for global paper tracking
-- Multi-key identity resolution (DOI, Provider ID, Fuzzy Title)
-- Incremental backfilling logic for extraction requirement drift
-- Zero-cost cross-topic mapping
+✅ `HuggingFaceProvider` for HuggingFace Daily Papers API
+✅ Provider abstraction via `BaseProvider` interface
+✅ Multi-provider orchestration in DiscoveryService
+✅ Benchmark mode for cross-provider comparison
+✅ Quality filtering and paper deduplication
+✅ 100% test coverage
 
-#### Security Requirements (MANDATORY) 🔒
-- [ ] SR-3.5.1: Registry file permissions restricted (0600)
-- [ ] SR-3.5.2: Atomic state operations (.tmp -> rename)
-- [ ] SR-3.5.3: DOI and ID format validation
-- [ ] SR-3.5.4: SHA-256 for extraction target hashing
-
-#### Verification Requirements (MANDATORY) ✅
-- [ ] Unit test coverage >= 99% for registry and identity components
-- [ ] Integration tests for cross-topic deduplication
-- [ ] Integration tests for backfill trigger and execution
-- [ ] Verification of state consistency during concurrent runs
+#### Success Metrics
+- Additional paper source integrated
+- Cross-provider deduplication working
+- Provider-agnostic paper processing
 
 ---
 
-### Phase 3.6: Cumulative Knowledge Synthesis
+### Phase 3.5: Global Paper Identity & Registry
+**Status:** ✅ **COMPLETED** (Feb 2026)
 **Duration:** 1 week
-**Status:** 📋 **PLANNING**
-**Dependencies:** Phase 3.5 Complete
-**Goal:** Transform fragmented run logs into a cohesive, cumulative Knowledge Base.
+**Dependencies:** Phase 3.4 Complete
+**Goal:** System-global paper management with identity resolution
 
 #### Key Deliverables
-- `SynthesisEngine` for cumulative master document generation
-- Dual-stream output: `runs/Delta.md` and `Knowledge_Base.md`
-- Anchor-based persistence for manual user notes
-- Folder structure evolution for organized workspace
+✅ `RegistryService` for global paper tracking
+✅ Multi-key identity resolution (DOI, ArXiv ID, Semantic Scholar ID)
+✅ `RegistryEntry` model with validated identifiers
+✅ Atomic state operations with file locking
+✅ SHA-256 extraction target hashing
+✅ 100% test coverage
 
-#### Security Requirements (MANDATORY) 🔒
-- [ ] SR-3.6.1: Path sanitization for folder and slug generation
-- [ ] SR-3.6.2: Anchor tag regex validation to prevent script injection
-- [ ] SR-3.6.3: Atomic backup before KB re-synthesis
-- [ ] SR-3.6.4: Content integrity validation for registry data
+#### Security Requirements (COMPLETED) 🔒
+✅ SR-3.5.1: Registry file permissions restricted (0600)
+✅ SR-3.5.2: Atomic state operations (.tmp -> rename)
+✅ SR-3.5.3: DOI and ID format validation
+✅ SR-3.5.4: SHA-256 for extraction target hashing
 
-#### Verification Requirements (MANDATORY) ✅
-- [ ] Unit tests for synthesis logic and note preservation
-- [ ] Integration tests for dual-stream generation
-- [ ] Verification of quality-ranked sorting in Knowledge Base
-- [ ] 100% test coverage for synthesis components
+---
+
+### Phase 3.6: Delta Briefs & Incremental Output
+**Status:** ✅ **COMPLETED** (Feb 2026)
+**Duration:** 1 week
+**Dependencies:** Phase 3.5 Complete
+**Goal:** Generate incremental delta briefs for each run
+
+#### Key Deliverables
+✅ `DeltaGenerator` for delta brief creation
+✅ `ProcessingResult` model with status tracking
+✅ Quality-ranked paper sections
+✅ Dual-stream output: `runs/YYYY-MM-DD_Delta.md`
+✅ Path sanitization for folder and slug generation
+✅ 100% test coverage
+
+---
+
+### Phase 3.7: Cross-Topic Synthesis
+**Status:** ✅ **COMPLETED** (Feb 2026)
+**Duration:** 1 week
+**Dependencies:** Phase 3.6 Complete
+**Goal:** LLM-powered synthesis across multiple research topics
+
+#### Key Deliverables
+✅ `CrossTopicSynthesisService` for multi-topic analysis
+✅ `SynthesisQuestion` configurable question templates
+✅ Quality-weighted paper selection
+✅ Diversity sampling across topics
+✅ Budget management and cost tracking
+✅ Incremental synthesis mode
+✅ `CrossTopicSynthesisGenerator` for output generation
+✅ 100% test coverage
+
+---
+
+### Phase 5.1: LLMService Decomposition
+**Status:** ✅ **COMPLETED** (Feb 24, 2026)
+**Duration:** 3-4 days
+**Dependencies:** Phase 3.7 Complete
+**Goal:** Decompose monolithic LLMService into modular, maintainable package
+
+#### Problem Addressed
+The original `LLMService` (838 lines, 26 functions) violated the Single Responsibility Principle by handling 10 distinct responsibilities: provider abstraction, client initialization, retry logic, circuit breaker integration, fallback orchestration, cost tracking, prompt building, response parsing, health monitoring, and metrics export.
+
+#### Key Deliverables
+✅ Abstract `LLMProvider` interface with standardized response format
+✅ `AnthropicProvider` for Claude models (<150 lines)
+✅ `GoogleProvider` for Gemini models (<150 lines)
+✅ `CostTracker` for budget enforcement and usage tracking
+✅ `PromptBuilder` for structured extraction prompts
+✅ `ResponseParser` for JSON response handling
+✅ Backward-compatible imports (`from src.services.llm_service import LLMService`)
+✅ 100% test coverage for all new modules
+
+#### Package Structure
+```
+src/services/llm/
+├── __init__.py           # Re-export LLMService for backward compat
+├── service.py            # Main LLMService orchestrator (<200 lines)
+├── providers/
+│   ├── __init__.py
+│   ├── base.py           # Abstract LLMProvider
+│   ├── anthropic.py      # AnthropicProvider
+│   └── google.py         # GoogleProvider
+├── cost_tracker.py       # CostTracker class
+├── prompt_builder.py     # PromptBuilder class
+├── response_parser.py    # ResponseParser class
+└── health.py             # ProviderHealth dataclass
+```
+
+#### Success Metrics
+- 838-line monolith → 6-7 focused modules, each <150 lines
+- All 1742 tests pass unchanged
+- Coverage maintained at ≥99.91%
+- Zero breaking changes to existing callers
 
 ---
 
@@ -145,15 +215,17 @@ Redundant processing of the same paper across multiple topics and inability to "
 ### Functional Requirements
 - [x] Process 50 papers in < 30 minutes
 - [x] Resilient LLM extraction with provider failover
-- [ ] Global deduplication across all topics
+- [x] Multi-provider discovery (Semantic Scholar, ArXiv, HuggingFace)
+- [x] Global deduplication across all topics
+- [x] Quality-ranked delta briefs per topic
+- [x] Cross-topic synthesis with configurable questions
 - [ ] Automated backfilling of evolving research goals
-- [ ] Persistent, quality-ranked Knowledge Base per topic
 - [ ] Preservation of user notes across automated updates
 
 ### Non-Functional Requirements
 - [ ] 99.9% pipeline reliability
 - [ ] Mean time to recovery < 10 minutes
-- [ ] Test coverage >= 99% project-wide
+- [x] Test coverage >= 99% project-wide (currently 99.91%)
 - [ ] Zero security vulnerabilities (verified by scan)
 
 [... Remaining sections unchanged ...]

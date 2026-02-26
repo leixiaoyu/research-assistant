@@ -38,6 +38,50 @@ def test_path_sanitizer_base_check(tmp_path):
         sanitizer.safe_path(other_path, "file.txt")
 
 
+def test_path_sanitizer_must_exist(tmp_path):
+    """Test must_exist=True raises FileNotFoundError for missing paths."""
+    sanitizer = PathSanitizer(allowed_bases=[tmp_path])
+
+    # Request a file that doesn't exist with must_exist=True
+    with pytest.raises(FileNotFoundError, match="Path does not exist"):
+        sanitizer.safe_path(tmp_path, "nonexistent.txt", must_exist=True)
+
+
+def test_path_sanitizer_must_exist_with_existing_file(tmp_path):
+    """Test must_exist=True succeeds for existing paths."""
+    sanitizer = PathSanitizer(allowed_bases=[tmp_path])
+
+    # Create a file that exists
+    existing_file = tmp_path / "existing.txt"
+    existing_file.write_text("test content")
+
+    # Should not raise since file exists
+    result = sanitizer.safe_path(tmp_path, "existing.txt", must_exist=True)
+    assert result == existing_file.resolve()
+
+
+def test_path_sanitizer_symlink_resolved(tmp_path):
+    """Test symlinks are properly resolved and validated.
+
+    Symlinks are resolved by .resolve() which follows them, so any symlink
+    pointing outside base_dir will fail the relative_to() check.
+    """
+    sanitizer = PathSanitizer(allowed_bases=[tmp_path])
+
+    # Create a target file and a symlink pointing to it
+    target = tmp_path / "target.txt"
+    target.write_text("target content")
+    symlink = tmp_path / "link.txt"
+
+    # Only create symlink if not exists (avoid test pollution)
+    if not symlink.exists():
+        symlink.symlink_to(target)
+
+    # The symlink points inside base, so it should succeed
+    result = sanitizer.safe_path(tmp_path, "link.txt")
+    assert result == target.resolve()
+
+
 def test_input_validation_query():
     # Valid
     assert InputValidation.validate_query("machine learning") == "machine learning"

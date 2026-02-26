@@ -115,14 +115,15 @@ class TestLLMServiceCoverage:
     async def test_extract_google_path(self, llm_config, cost_limits):
         """Test extract() using Google provider path"""
         llm_config.provider = "google"
-        mock_client = Mock()
         mock_response = Mock()
         mock_response.text = '{"extractions": []}'
         mock_response.usage_metadata = Mock(total_token_count=1000)
-        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
-        with patch("google.genai.Client", return_value=mock_client):
+        with patch("google.genai.Client"):
             with patch("google.genai.types"):
                 service = LLMService(llm_config, cost_limits)
+
+                # Mock _call_google_raw for backward compatibility
+                service._call_google_raw = AsyncMock(return_value=mock_response)
 
                 metadata = Mock(paper_id="123", title="Test", authors=[])
                 result = await service.extract("markdown", [], metadata)
@@ -220,13 +221,15 @@ class TestLLMServiceCoverage:
     async def test_extract_json_parse_error(self, llm_service):
         """Test extract catching JSONParseError (Phase 3.3)"""
         mock_response = Mock()
-        mock_response.usage.input_tokens = 500
-        mock_response.usage.output_tokens = 500
+        mock_response.content = [Mock(text="Not valid JSON")]
+        mock_response.usage = Mock(input_tokens=500, output_tokens=500)
         # Phase 3.3: Mock _call_anthropic_raw instead of _call_anthropic
         llm_service._call_anthropic_raw = AsyncMock(return_value=mock_response)
 
-        # Mock _parse_response to raise JSONParseError
-        llm_service._parse_response = Mock(side_effect=JSONParseError("Parse failed"))
+        # Mock the response parser to raise JSONParseError
+        llm_service._response_parser.parse = Mock(
+            side_effect=JSONParseError("Parse failed")
+        )
 
         metadata = Mock(paper_id="123", title="Test", authors=[])
         with pytest.raises(JSONParseError, match="Parse failed"):

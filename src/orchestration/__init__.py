@@ -1,11 +1,15 @@
 """Orchestration module for research pipeline coordination.
 
 Phase 5.2: Refactored with extracted phase modules.
+
+Import from this package for all orchestration needs:
+    from src.orchestration import ResearchPipeline, PipelineResult
 """
 
 from src.orchestration.concurrent_pipeline import ConcurrentPipeline
 
-# Phase 5.2: New modular components
+# Phase 5.2: New modular components (primary exports)
+from src.orchestration.pipeline import ResearchPipeline
 from src.orchestration.context import PipelineContext
 from src.orchestration.result import PipelineResult
 from src.orchestration.phases import (
@@ -20,19 +24,9 @@ from src.orchestration.phases import (
     CrossSynthesisResult,
 )
 
-# Backward compatibility: Import from both old and new locations
-# The new pipeline.py is the refactored version
-from src.orchestration.pipeline import ResearchPipeline
-
-# Re-export legacy location for backward compatibility
-from src.orchestration.research_pipeline import (
-    ResearchPipeline as LegacyResearchPipeline,
-)
-
 __all__ = [
     # Core pipeline
     "ResearchPipeline",
-    "LegacyResearchPipeline",  # For explicit legacy access
     "ConcurrentPipeline",
     # Phase 5.2: New modular components
     "PipelineContext",

@@ -92,11 +92,17 @@ class TestExtractionPhase:
         phase = ExtractionPhase(mock_context)
         assert phase.is_enabled() is True
 
-    def test_is_enabled_false_when_no_phase2(self, mock_context):
-        """Test is_enabled returns False when phase2 disabled."""
+    def test_is_enabled_true_regardless_of_phase2(self, mock_context):
+        """Test is_enabled always returns True.
+
+        Phase 5.2: is_enabled() always returns True because output generation
+        should happen regardless of Phase 2 enablement. LLM extraction is
+        skipped internally when Phase 2 is disabled.
+        """
         mock_context.enable_phase2 = False
         phase = ExtractionPhase(mock_context)
-        assert phase.is_enabled() is False
+        # Always True - output generation happens regardless of Phase 2
+        assert phase.is_enabled() is True
 
     @pytest.mark.asyncio
     async def test_execute_no_topics(self, mock_context):

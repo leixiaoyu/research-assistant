@@ -66,8 +66,13 @@ class ExtractionPhase(PipelinePhase[ExtractionResult]):
         return "extraction"
 
     def is_enabled(self) -> bool:
-        """Check if extraction phase should run."""
-        return self.context.enable_phase2
+        """Check if extraction phase should run.
+
+        Always returns True because output generation should happen
+        regardless of Phase 2 enablement. LLM extraction is skipped
+        internally when Phase 2 is disabled.
+        """
+        return True
 
     async def execute(self) -> ExtractionResult:
         """Execute extraction for all discovered papers.

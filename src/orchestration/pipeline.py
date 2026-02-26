@@ -310,3 +310,106 @@ class ResearchPipeline:
     def _extraction_service(self) -> Optional[Any]:
         """Backward compatibility: access extraction service from context."""
         return self._context.extraction_service if self._context else None
+
+    @property
+    def _registry_service(self) -> Optional[Any]:
+        """Backward compatibility: access registry service from context."""
+        return self._context.registry_service if self._context else None
+
+    @property
+    def _config_manager(self) -> Optional[Any]:
+        """Backward compatibility: access config manager from context."""
+        return self._context.config_manager if self._context else None
+
+    @property
+    def _catalog_service(self) -> Optional[Any]:
+        """Backward compatibility: access catalog service from context."""
+        return self._context.catalog_service if self._context else None
+
+    @property
+    def _discovery_service(self) -> Optional[Any]:
+        """Backward compatibility: access discovery service from context."""
+        return self._context.discovery_service if self._context else None
+
+    @property
+    def _synthesis_engine(self) -> Optional[Any]:
+        """Backward compatibility: access synthesis engine from context."""
+        return self._context.synthesis_engine if self._context else None
+
+    @property
+    def _delta_generator(self) -> Optional[Any]:
+        """Backward compatibility: access delta generator from context."""
+        return self._context.delta_generator if self._context else None
+
+    @property
+    def _cross_synthesis_service(self) -> Optional[Any]:
+        """Backward compatibility: access cross synthesis service from context."""
+        return self._context.cross_synthesis_service if self._context else None
+
+    @property
+    def _cross_synthesis_generator(self) -> Optional[Any]:
+        """Backward compatibility: access cross synthesis generator from context."""
+        return self._context.cross_synthesis_generator if self._context else None
+
+    @property
+    def _md_generator(self) -> Optional[Any]:
+        """Backward compatibility: access markdown generator from context."""
+        return self._context.md_generator if self._context else None
+
+    def _get_processing_results(
+        self,
+        papers: Any,
+        topic_slug: str,
+        extracted_papers: Optional[Any] = None,
+    ) -> Any:
+        """Backward compatibility: get processing results for synthesis.
+
+        Args:
+            papers: All discovered papers
+            topic_slug: Topic slug
+            extracted_papers: Extracted papers from Phase 2 (if available)
+
+        Returns:
+            List of ProcessingResult for synthesis
+        """
+        from src.models.synthesis import ProcessingResult, ProcessingStatus
+
+        # Phase 2/3: Get processing results from extraction service
+        if self._extraction_service is not None:
+            pipeline_results = self._extraction_service.get_processing_results()
+            topic_results = [r for r in pipeline_results if r.topic_slug == topic_slug]
+            if topic_results:
+                return topic_results
+
+        # Fallback: Create basic results with NEW status
+        results = []
+
+        if extracted_papers:
+            for ep in extracted_papers:
+                quality_score = 0.0
+                if hasattr(ep, "extraction") and ep.extraction:
+                    quality_score = getattr(ep.extraction, "quality_score", 0.0)
+
+                results.append(
+                    ProcessingResult(
+                        paper_id=ep.metadata.paper_id,
+                        title=ep.metadata.title or "Untitled",
+                        status=ProcessingStatus.NEW,
+                        quality_score=quality_score,
+                        pdf_available=getattr(ep, "pdf_available", False),
+                        extraction_success=ep.extraction is not None,
+                        topic_slug=topic_slug,
+                    )
+                )
+        else:
+            for paper in papers:
+                results.append(
+                    ProcessingResult(
+                        paper_id=paper.paper_id,
+                        title=paper.title or "Untitled",
+                        status=ProcessingStatus.NEW,
+                        topic_slug=topic_slug,
+                    )
+                )
+
+        return results

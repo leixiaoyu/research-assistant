@@ -909,72 +909,86 @@ class TestPipelineSynthesis:
 
     @pytest.mark.asyncio
     async def test_run_synthesis_with_no_services(self, mock_config, temp_output_dir):
-        """Test _run_synthesis early return when services not initialized."""
-        pipeline = ResearchPipeline(
+        """Test synthesis phase skipped when services not initialized.
+
+        Phase 5.2: Updated to test via SynthesisPhase directly, as the
+        new architecture uses phase objects instead of internal methods.
+        """
+        from src.orchestration.context import PipelineContext
+        from src.orchestration.phases import SynthesisPhase
+
+        # Create a minimal context without synthesis services
+        context = PipelineContext(
+            config=mock_config,
             config_path=Path("dummy/path.yaml"),
+            config_manager=MagicMock(),
+            discovery_service=MagicMock(),
+            catalog_service=MagicMock(),
+            registry_service=MagicMock(),
             enable_phase2=False,
             enable_synthesis=False,
         )
+        # synthesis_engine and delta_generator are None by default
 
-        # Manually set services to None to test early return
-        pipeline._synthesis_engine = None
-        pipeline._delta_generator = None
+        # Create synthesis phase and run
+        synthesis_phase = SynthesisPhase(context)
+        result = await synthesis_phase.run()
 
-        # Call _run_synthesis directly - should return early
-        await pipeline._run_synthesis()
-
-        # No error should be raised - method returns early
+        # Phase should complete with no topics processed
+        assert result.topics_processed == 0
+        assert result.topics_failed == 0
 
     @pytest.mark.asyncio
     async def test_synthesis_handles_exception(self, mock_config, temp_output_dir):
-        """Test that synthesis handles exceptions gracefully."""
-        pipeline = ResearchPipeline(
+        """Test that synthesis handles exceptions gracefully.
+
+        Phase 5.2: Updated to test via SynthesisPhase directly, as the
+        new architecture uses phase objects instead of internal methods.
+        """
+        from src.orchestration.context import PipelineContext
+        from src.orchestration.phases import SynthesisPhase
+        from src.models.synthesis import ProcessingResult, ProcessingStatus
+
+        output_dir = temp_output_dir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create context with synthesis enabled
+        context = PipelineContext(
+            config=mock_config,
             config_path=Path("dummy/path.yaml"),
+            config_manager=MagicMock(),
+            discovery_service=MagicMock(),
+            catalog_service=MagicMock(),
+            registry_service=MagicMock(),
             enable_phase2=False,
             enable_synthesis=True,
         )
 
-        output_dir = temp_output_dir / "output"
+        # Set up synthesis services with mocked delta_generator that raises
+        context.synthesis_engine = MagicMock()
+        context.delta_generator = MagicMock()
+        context.delta_generator.generate.side_effect = Exception("Synthesis failed")
 
-        with (
-            patch.object(ConfigManager, "__init__", return_value=None),
-            patch.object(ConfigManager, "load_config", return_value=mock_config),
-            patch.object(ConfigManager, "get_output_path", return_value=output_dir),
-            patch(
-                "src.services.discovery_service.DiscoveryService.search",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch("src.services.catalog_service.CatalogService.load"),
-            patch(
-                "src.services.catalog_service.CatalogService.get_or_create_topic"
-            ) as mock_get_topic,
-        ):
-            mock_topic = MagicMock()
-            mock_topic.topic_slug = "test-topic"
-            mock_get_topic.return_value = mock_topic
+        # Add processing results
+        context.add_processing_results(
+            "test-topic",
+            [
+                ProcessingResult(
+                    paper_id="test-001",
+                    title="Test Paper",
+                    status=ProcessingStatus.NEW,
+                    topic_slug="test-topic",
+                )
+            ],
+        )
 
-            # Run to initialize services
-            await pipeline.run()
+        # Create synthesis phase and run
+        synthesis_phase = SynthesisPhase(context)
+        result = await synthesis_phase.run()
 
-        # Now manually add processing results and mock synthesis to fail
-        from src.models.synthesis import ProcessingResult, ProcessingStatus
-
-        pipeline._topic_processing_results["test-topic"] = [
-            ProcessingResult(
-                paper_id="test-001",
-                title="Test Paper",
-                status=ProcessingStatus.NEW,
-                topic_slug="test-topic",
-            )
-        ]
-
-        # Mock delta_generator to raise exception
-        pipeline._delta_generator = MagicMock()
-        pipeline._delta_generator.generate.side_effect = Exception("Synthesis failed")
-
-        # This should not raise - exception is caught and logged
-        await pipeline._run_synthesis()
+        # Phase should complete - exception is caught and logged
+        # but topics_failed should be incremented
+        assert result.topics_failed == 1
 
 
 class TestPipelineResultClass:

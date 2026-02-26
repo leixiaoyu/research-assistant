@@ -278,6 +278,9 @@ class TestLLMServiceExtraction:
 
             # Simulate having already spent the budget
             service._cost_tracker.total_cost_usd = 0.02
+            service.usage_stats.total_cost_usd = (
+                0.02  # Also set usage_stats for backward compat
+            )
 
             with pytest.raises(CostLimitExceeded):
                 await service.extract(

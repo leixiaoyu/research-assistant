@@ -9,7 +9,7 @@ This module defines:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional, Literal
+from typing import Any, Optional, Literal
 from datetime import datetime
 
 
@@ -63,6 +63,7 @@ class ProviderHealth:
     last_success: Optional[datetime] = None
     last_failure: Optional[datetime] = None
     failure_reason: Optional[str] = None
+    circuit_breaker: Optional[Any] = None  # CircuitBreaker instance
 
     def record_success(self) -> None:
         """Record a successful request."""
@@ -88,7 +89,7 @@ class ProviderHealth:
 
     def get_stats(self) -> dict:
         """Get health statistics as dictionary."""
-        return {
+        stats = {
             "provider": self.provider,
             "status": self.status,
             "consecutive_failures": self.consecutive_failures,
@@ -103,6 +104,10 @@ class ProviderHealth:
             ),
             "failure_reason": self.failure_reason,
         }
+        # Include circuit breaker stats if present
+        if self.circuit_breaker is not None:
+            stats["circuit_breaker"] = self.circuit_breaker.get_stats()
+        return stats
 
 
 class LLMProvider(ABC):

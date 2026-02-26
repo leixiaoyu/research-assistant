@@ -1,9 +1,9 @@
 # ARISP Phased Delivery Plan
 **Automated Research Ingestion & Synthesis Pipeline**
 
-**Version:** 1.7
-**Date:** 2026-02-24
-**Status:** Phase 5.1 Complete, Phase 5.2 Planning
+**Version:** 1.8
+**Date:** 2026-02-25
+**Status:** Phase 5.2 Complete, Phase 5.3 Planning
 
 ---
 
@@ -22,7 +22,7 @@ This document outlines a phased delivery plan to build the Automated Research In
 
 ┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
 │Phase 3.6 │Phase 3.7 │Phase 5.1 │Phase 5.2 │Phase 5.3 │Phase 5.4 │Phase 5.5 │
-│✅Complete│✅Complete│✅Complete│(Planning)│(Future)  │(Future)  │(Future)  │
+│✅Complete│✅Complete│✅Complete│✅Complete│(Planning)│(Future)  │(Future)  │
 │          │          │          │          │          │          │          │
 │ Delta    │Cross-    │   LLM    │Research  │   CLI    │ Utility  │ Model    │
 │ Briefs   │Synthesis │ Decompose│ Pipeline │ Commands │ Patterns │Consolid. │
@@ -182,6 +182,49 @@ src/services/llm/
 - All 1742 tests pass unchanged
 - Coverage maintained at ≥99.91%
 - Zero breaking changes to existing callers
+
+---
+
+### Phase 5.2: ResearchPipeline Phase Extraction
+**Status:** ✅ **COMPLETED** (Feb 25, 2026)
+**Duration:** 3-4 days
+**Dependencies:** Phase 5.1 Complete
+**Goal:** Decompose monolithic ResearchPipeline into modular phase-based architecture
+
+#### Problem Addressed
+The original `ResearchPipeline` (824 lines, 14 functions) handled all pipeline phases in a single class: configuration, service initialization, discovery orchestration, extraction, synthesis, and cross-topic synthesis.
+
+#### Key Deliverables
+✅ `PipelineContext` for shared state management across phases
+✅ `PipelineResult` for structured result aggregation
+✅ `DiscoveryPhase` for paper discovery orchestration
+✅ `ExtractionPhase` for PDF/LLM extraction coordination
+✅ `SynthesisPhase` for per-topic synthesis
+✅ `CrossSynthesisPhase` for cross-topic analysis
+✅ Backward-compatible `ResearchPipeline` API preserved
+✅ 100% test coverage for all new modules
+
+#### Package Structure
+```
+src/orchestration/
+├── __init__.py           # Re-export ResearchPipeline for backward compat
+├── pipeline.py           # New modular ResearchPipeline
+├── context.py            # PipelineContext class
+├── result.py             # PipelineResult class
+└── phases/
+    ├── __init__.py
+    ├── base.py           # Abstract PipelinePhase
+    ├── discovery.py      # DiscoveryPhase
+    ├── extraction.py     # ExtractionPhase
+    ├── synthesis.py      # SynthesisPhase
+    └── cross_synthesis.py # CrossSynthesisPhase
+```
+
+#### Success Metrics
+- 824-line orchestrator → 6 focused phase modules
+- All 1848 tests pass
+- Coverage maintained at ≥99.92%
+- Zero breaking changes to CLI and scheduler
 
 ---
 

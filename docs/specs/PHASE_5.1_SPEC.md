@@ -474,7 +474,7 @@ def test_prompt_builder_output_identical():
 ```
 
 ### 7.3 Regression Tests
-- All 1,848 existing tests MUST pass unchanged.
+- All 1,839 existing tests MUST pass unchanged.
 - Coverage MUST remain ≥99%.
 
 ### 7.4 Integration Tests

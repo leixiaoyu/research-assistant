@@ -1337,13 +1337,12 @@ src/services/llm/
 ├── service.py            # Main LLMService orchestrator (872 lines)
 ├── providers/
 │   ├── __init__.py
-│   ├── base.py           # Abstract LLMProvider interface (186 lines)
+│   ├── base.py           # Abstract LLMProvider + ProviderHealth (186 lines)
 │   ├── anthropic.py      # AnthropicProvider for Claude (230 lines)
 │   └── google.py         # GoogleProvider for Gemini (250 lines)
 ├── cost_tracker.py       # CostTracker with budget enforcement (233 lines)
 ├── prompt_builder.py     # PromptBuilder for structured prompts (165 lines)
 ├── response_parser.py    # ResponseParser for JSON extraction (241 lines)
-├── health.py             # ProviderHealth dataclass
 └── exceptions.py         # LLMProviderError hierarchy (133 lines)
 ```
 
@@ -1380,7 +1379,7 @@ class LLMProvider(ABC):
 
 | Before (Monolithic) | After (Modular) |
 |---------------------|-----------------|
-| 838 lines in single file | 7 focused modules with single responsibility |
+| 838 lines in single file | 8 focused modules with single responsibility |
 | Provider logic mixed with orchestration | Separate provider classes (Anthropic, Google) |
 | Cost tracking tightly coupled | Independent CostTracker with budget enforcement |
 | Difficult to add new providers | Abstract LLMProvider interface for extensibility |

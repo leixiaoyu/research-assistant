@@ -62,4 +62,4 @@
 - Concurrent orchestration handles failures gracefully
 - Abstract-only extraction provides excellent results for most use cases
 - Current implementation is production-ready
-- ~1,848 tests passing with 99.92% coverage
+- ~1,840 tests passing with 99.92% coverage

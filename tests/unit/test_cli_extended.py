@@ -31,7 +31,7 @@ def mock_components(mock_pipeline_result):
     # Phase 5.2: Patch at src.orchestration where ResearchPipeline is defined
     # (the import happens inside run() function)
     with (
-        patch("src.cli.ConfigManager") as MockConfig,
+        patch("src.cli.utils.ConfigManager") as MockConfig,
         patch("src.orchestration.ResearchPipeline") as MockPipeline,
     ):
         # Setup Config
@@ -104,4 +104,5 @@ def test_run_unexpected_error(mock_components):
 
     result = runner.invoke(app, ["run"])
     assert result.exit_code == 1
-    assert "Pipeline failed" in result.stdout
+    # Error now displayed by generic handle_errors decorator
+    assert "Error" in result.stdout

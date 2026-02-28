@@ -390,7 +390,7 @@ class ResearchPipeline:
 - `test_phase_error_isolation`: Phase error doesn't crash pipeline.
 
 ### 7.2 Regression Tests
-- All 1,468 existing tests MUST pass.
+- All 1,848 existing tests MUST pass.
 - Coverage MUST remain ≥99%.
 
 ### 7.3 Integration Tests

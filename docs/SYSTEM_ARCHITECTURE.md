@@ -1323,6 +1323,71 @@ class ConcurrentPipeline:
         return result
 ```
 
+### 3.5 LLM Service Layer (Phase 5.1)
+
+**Responsibility**: Modular LLM extraction with provider abstraction, cost tracking, and resilience
+
+**Phase**: 5.1 (LLM Service Decomposition)
+
+**Architecture**: Package-based decomposition with single-responsibility modules
+
+```
+src/services/llm/
+├── __init__.py           # Re-export LLMService for backward compatibility
+├── service.py            # Main LLMService orchestrator (872 lines)
+├── providers/
+│   ├── __init__.py
+│   ├── base.py           # Abstract LLMProvider interface (186 lines)
+│   ├── anthropic.py      # AnthropicProvider for Claude (230 lines)
+│   └── google.py         # GoogleProvider for Gemini (250 lines)
+├── cost_tracker.py       # CostTracker with budget enforcement (233 lines)
+├── prompt_builder.py     # PromptBuilder for structured prompts (165 lines)
+├── response_parser.py    # ResponseParser for JSON extraction (241 lines)
+├── health.py             # ProviderHealth dataclass
+└── exceptions.py         # LLMProviderError hierarchy (133 lines)
+```
+
+#### Component Responsibilities
+
+| Component | Responsibility |
+|-----------|---------------|
+| `LLMService` | Orchestrates extraction with fallback and resilience |
+| `LLMProvider` (abstract) | Defines provider interface: `extract()`, `calculate_cost()`, `get_health()` |
+| `AnthropicProvider` | Claude model integration with rate limiting |
+| `GoogleProvider` | Gemini model integration with safety handling |
+| `CostTracker` | Per-session usage tracking, daily/total limits, budget enforcement |
+| `PromptBuilder` | Constructs structured extraction prompts from targets |
+| `ResponseParser` | Parses and validates JSON responses from LLMs |
+
+#### Provider Abstraction
+
+```python
+class LLMProvider(ABC):
+    """Abstract base class for LLM providers."""
+
+    @abstractmethod
+    async def extract(self, prompt: str, max_tokens: int) -> LLMResponse:
+        """Execute extraction and return standardized response."""
+        pass
+
+    @abstractmethod
+    def calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
+        """Calculate cost in USD for token usage."""
+        pass
+```
+
+#### Key Benefits
+
+| Before (Monolithic) | After (Modular) |
+|---------------------|-----------------|
+| 838 lines in single file | 7 focused modules with single responsibility |
+| Provider logic mixed with orchestration | Separate provider classes (Anthropic, Google) |
+| Cost tracking tightly coupled | Independent CostTracker with budget enforcement |
+| Difficult to add new providers | Abstract LLMProvider interface for extensibility |
+| Testing requires full class mock | Each component testable in isolation |
+
+**Details:** See [PHASE_5.1_SPEC.md](specs/PHASE_5.1_SPEC.md) for implementation details and API specifications.
+
 ### 4. Pipeline Orchestration (Phase 5.2)
 
 **Responsibility**: Coordinate pipeline phases with shared context and modular execution
@@ -2670,7 +2735,7 @@ This table shows how each identified architectural gap is addressed:
 | **10** | Missing Paper Quality Filters | `PaperFilter` model + filter service | Phase 3 | `FilterService` |
 | **11** | No Scheduling System | APScheduler integration | Phase 4 | `scheduler.py` |
 | **12** | Missing CLI Framework | Typer with type safety | Phase 1 | `cli.py` |
-| **13** | No Testing Strategy | Pytest + coverage target 80%+ | All Phases | `tests/` |
+| **13** | No Testing Strategy | Pytest + coverage target 99%+ | All Phases | `tests/` |
 | **14** | Security Considerations | Input validation, path sanitization, rate limiting | Phase 1-4 | Multiple |
 | **15** | No Semantic Search | (Future) Vector embeddings | Post-Phase 4 | N/A |
 | **16** | Missing Metadata Enrichment | (Future) Extended metadata capture | Post-Phase 4 | N/A |

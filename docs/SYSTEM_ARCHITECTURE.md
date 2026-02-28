@@ -1,7 +1,7 @@
 # ARISP System Architecture
-**Version:** 2.1
-**Status:** Phase 3.1 Complete - Concurrent Orchestration with Intelligence Layer
-**Last Updated:** 2026-02-01
+**Version:** 2.2
+**Status:** Phase 5.2 Complete - Modular Orchestration Architecture
+**Last Updated:** 2026-02-27
 
 ---
 
@@ -1322,6 +1322,67 @@ class ConcurrentPipeline:
 
         return result
 ```
+
+### 4. Pipeline Orchestration (Phase 5.2)
+
+**Responsibility**: Coordinate pipeline phases with shared context and modular execution
+
+**Architecture**: Phase-based orchestration pattern with dedicated modules for each stage:
+- `DiscoveryPhase`: Paper discovery and filtering
+- `ExtractionPhase`: PDF download and LLM extraction
+- `SynthesisPhase`: Per-topic knowledge base generation
+- `CrossSynthesisPhase`: Cross-topic analysis and insights
+
+**Key Components:**
+- `PipelineContext`: Shared state, services, and error tracking across phases
+- `PipelineResult`: Aggregated results from all phases
+- Abstract `PipelinePhase` base class for consistent phase interface
+
+**Details:** See [PHASE_5.2_SPEC.md](specs/PHASE_5.2_SPEC.md) for package structure and implementation details.
+
+#### Phase Execution Flow
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    ResearchPipeline                          │
+│                                                              │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │                 PipelineContext                       │  │
+│  │  (shared state, services, config, error tracking)    │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                           │                                  │
+│     ┌─────────────────────┼─────────────────────┐          │
+│     ▼                     ▼                     ▼          │
+│ ┌──────────┐      ┌──────────────┐      ┌───────────────┐ │
+│ │Discovery │  ──▶ │ Extraction   │  ──▶ │  Synthesis    │ │
+│ │  Phase   │      │    Phase     │      │    Phase      │ │
+│ └──────────┘      └──────────────┘      └───────────────┘ │
+│                                                │            │
+│                                                ▼            │
+│                                    ┌───────────────────┐   │
+│                                    │ CrossSynthesis    │   │
+│                                    │     Phase         │   │
+│                                    └───────────────────┘   │
+│                                                │            │
+│                                                ▼            │
+│                                    ┌───────────────────┐   │
+│                                    │  PipelineResult   │   │
+│                                    │  (aggregated)     │   │
+│                                    └───────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### Key Benefits
+
+| Before (Monolithic) | After (Phase-Based) |
+|---------------------|---------------------|
+| 824 lines in one file | Core phases <160 lines each (discovery, synthesis, cross_synthesis) |
+| 14 functions interleaved | Clear phase separation with pipeline.py (415 lines) as coordinator |
+| Difficult to test phases | Each phase testable in isolation |
+| 12+ service dependencies in __init__ | Lazy service initialization via PipelineContext |
+| State scattered across methods | Centralized PipelineContext (147 lines) |
+
+**Note:** `pipeline.py` (415 lines) and `extraction.py` (456 lines) exceed ideal targets and may be further decomposed in future phases.
 
 ---
 

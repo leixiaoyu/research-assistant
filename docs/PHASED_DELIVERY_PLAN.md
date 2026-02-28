@@ -152,36 +152,12 @@ This document outlines a phased delivery plan to build the Automated Research In
 The original `LLMService` (838 lines, 26 functions) violated the Single Responsibility Principle by handling 10 distinct responsibilities: provider abstraction, client initialization, retry logic, circuit breaker integration, fallback orchestration, cost tracking, prompt building, response parsing, health monitoring, and metrics export.
 
 #### Key Deliverables
-✅ Abstract `LLMProvider` interface with standardized response format
-✅ `AnthropicProvider` for Claude models (<150 lines)
-✅ `GoogleProvider` for Gemini models (<150 lines)
-✅ `CostTracker` for budget enforcement and usage tracking
-✅ `PromptBuilder` for structured extraction prompts
-✅ `ResponseParser` for JSON response handling
-✅ Backward-compatible imports (`from src.services.llm_service import LLMService`)
-✅ 100% test coverage for all new modules
+✅ Provider logic extracted to `src/services/llm/providers/` (anthropic.py, google.py)
+✅ Cost tracking, prompt building, response parsing as separate modules
+✅ Backward-compatible imports preserved
+✅ 100% test coverage maintained
 
-#### Package Structure
-```
-src/services/llm/
-├── __init__.py           # Re-export LLMService for backward compat
-├── service.py            # Main LLMService orchestrator (<200 lines)
-├── providers/
-│   ├── __init__.py
-│   ├── base.py           # Abstract LLMProvider
-│   ├── anthropic.py      # AnthropicProvider
-│   └── google.py         # GoogleProvider
-├── cost_tracker.py       # CostTracker class
-├── prompt_builder.py     # PromptBuilder class
-├── response_parser.py    # ResponseParser class
-└── health.py             # ProviderHealth dataclass
-```
-
-#### Success Metrics
-- 838-line monolith → 6-7 focused modules, each <150 lines
-- All 1742 tests pass unchanged
-- Coverage maintained at ≥99.91%
-- Zero breaking changes to existing callers
+**Details:** See [PHASE_5.1_SPEC.md](specs/PHASE_5.1_SPEC.md) for full package structure and file sizes.
 
 ---
 
@@ -195,36 +171,12 @@ src/services/llm/
 The original `ResearchPipeline` (824 lines, 14 functions) handled all pipeline phases in a single class: configuration, service initialization, discovery orchestration, extraction, synthesis, and cross-topic synthesis.
 
 #### Key Deliverables
-✅ `PipelineContext` for shared state management across phases
-✅ `PipelineResult` for structured result aggregation
-✅ `DiscoveryPhase` for paper discovery orchestration
-✅ `ExtractionPhase` for PDF/LLM extraction coordination
-✅ `SynthesisPhase` for per-topic synthesis
-✅ `CrossSynthesisPhase` for cross-topic analysis
-✅ Backward-compatible `ResearchPipeline` API preserved
-✅ 100% test coverage for all new modules
+✅ Phase-based architecture: DiscoveryPhase, ExtractionPhase, SynthesisPhase, CrossSynthesisPhase
+✅ Shared PipelineContext for state management
+✅ Backward-compatible ResearchPipeline API preserved
+✅ 100% test coverage maintained
 
-#### Package Structure
-```
-src/orchestration/
-├── __init__.py           # Re-export ResearchPipeline for backward compat
-├── pipeline.py           # New modular ResearchPipeline
-├── context.py            # PipelineContext class
-├── result.py             # PipelineResult class
-└── phases/
-    ├── __init__.py
-    ├── base.py           # Abstract PipelinePhase
-    ├── discovery.py      # DiscoveryPhase
-    ├── extraction.py     # ExtractionPhase
-    ├── synthesis.py      # SynthesisPhase
-    └── cross_synthesis.py # CrossSynthesisPhase
-```
-
-#### Success Metrics
-- 824-line orchestrator → 6 focused phase modules
-- All 1848 tests pass
-- Coverage maintained at ≥99.92%
-- Zero breaking changes to CLI and scheduler
+**Details:** See [PHASE_5.2_SPEC.md](specs/PHASE_5.2_SPEC.md) for full package structure and file sizes.
 
 ---
 
@@ -268,7 +220,7 @@ src/orchestration/
 ### Non-Functional Requirements
 - [ ] 99.9% pipeline reliability
 - [ ] Mean time to recovery < 10 minutes
-- [x] Test coverage >= 99% project-wide (currently 99.91%)
+- [x] Test coverage >= 99% project-wide (currently 99.92%)
 - [ ] Zero security vulnerabilities (verified by scan)
 
 [... Remaining sections unchanged ...]

@@ -5,7 +5,7 @@ Handles pipeline execution and result display.
 
 import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 
 import typer
 
@@ -21,7 +21,7 @@ from src.cli.utils import (
 from src.models.config import ResearchConfig
 
 if TYPE_CHECKING:
-    from src.orchestration import PipelineResult
+    from src.orchestration import PipelineResult, ResearchPipeline
 
 
 @handle_errors
@@ -78,8 +78,8 @@ def run_command(
     # Display results
     _display_results(result, phase2_enabled)
 
-    # Send notifications (Phase 3.7)
-    asyncio.run(_send_notifications(result, config, phase2_enabled))
+    # Send notifications (Phase 3.7 + 3.8 deduplication)
+    asyncio.run(_send_notifications(result, config, phase2_enabled, pipeline))
 
 
 def _display_dry_run(config: ResearchConfig, phase2_enabled: bool) -> None:
@@ -147,9 +147,12 @@ def _display_results(result: "PipelineResult", phase2_enabled: bool) -> None:
 
 
 async def _send_notifications(
-    result: "PipelineResult", config: ResearchConfig, phase2_enabled: bool
+    result: "PipelineResult",
+    config: ResearchConfig,
+    phase2_enabled: bool,
+    pipeline: Optional["ResearchPipeline"] = None,
 ) -> None:
-    """Send pipeline notifications (Phase 3.7).
+    """Send pipeline notifications (Phase 3.7 + 3.8 deduplication).
 
     Notifications are fail-safe - errors are logged but never raised.
 
@@ -157,6 +160,7 @@ async def _send_notifications(
         result: PipelineResult from pipeline execution.
         config: ResearchConfig with notification settings.
         phase2_enabled: Whether Phase 2 features are enabled.
+        pipeline: ResearchPipeline instance for accessing context (Phase 3.8).
     """
     _ = phase2_enabled  # Reserved for future use
     try:
@@ -176,8 +180,9 @@ async def _send_notifications(
             return
 
         from src.services.notification_service import NotificationService
+        from src.services.notification import NotificationDeduplicator
         from src.services.report_parser import ReportParser
-        from src.models.notification import KeyLearning
+        from src.models.notification import KeyLearning, DeduplicationResult
 
         # Extract key learnings from output files
         learnings: List[KeyLearning] = []
@@ -188,11 +193,36 @@ async def _send_notifications(
                 max_per_topic=notification_settings.slack.max_learnings_per_topic,
             )
 
+        # Phase 3.8: Deduplication-aware notifications
+        dedup_result: Optional[DeduplicationResult] = None
+        if pipeline is not None and hasattr(pipeline, "_context"):
+            context = pipeline._context
+            if context is not None:
+                # Get all discovered papers from context
+                all_papers = []
+                for papers in context.discovered_papers.values():
+                    all_papers.extend(papers)
+
+                # Create deduplicator with registry service
+                registry_service = getattr(context, "registry_service", None)
+                deduplicator = NotificationDeduplicator(registry_service)
+
+                # Categorize papers
+                if all_papers:
+                    dedup_result = deduplicator.categorize_papers(all_papers)
+                    logger.info(
+                        "notification_dedup_completed",
+                        new=dedup_result.new_count,
+                        duplicate=dedup_result.duplicate_count,
+                        total=dedup_result.total_checked,
+                    )
+
         # Create notification service and send
         service = NotificationService(notification_settings)
         summary = service.create_summary_from_result(
             result=result.to_dict(),
             key_learnings=learnings,
+            dedup_result=dedup_result,
         )
 
         notification_result = await service.send_pipeline_summary(summary)

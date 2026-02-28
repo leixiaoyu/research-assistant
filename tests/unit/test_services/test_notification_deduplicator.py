@@ -2,9 +2,13 @@
 
 Tests paper categorization for deduplication-aware notifications:
 - New papers (not in registry)
-- Retry papers (FAILED/SKIPPED status)
-- Duplicate papers (PROCESSED/MAPPED status)
+- Duplicate papers (found in registry)
 - Graceful fallback when registry unavailable
+
+Note:
+    The "retry_papers" category is reserved for future use when RegistryEntry
+    gains a status field to track processing outcomes. Currently, papers are
+    only categorized as "new" or "duplicate" based on registry presence.
 """
 
 import pytest
@@ -13,11 +17,7 @@ from unittest.mock import MagicMock
 from src.services.notification.deduplicator import NotificationDeduplicator
 from src.models.notification import DeduplicationResult
 from src.models.paper import PaperMetadata
-from src.models.registry import (
-    IdentityMatch,
-    RegistryEntry,
-    ProcessingAction,
-)
+from src.models.registry import IdentityMatch, RegistryEntry
 
 
 class TestNotificationDeduplicator:
@@ -90,7 +90,7 @@ class TestNotificationDeduplicator:
 
         assert isinstance(result, DeduplicationResult)
         assert result.new_count == 3
-        assert result.retry_count == 0
+        assert result.retry_count == 0  # Always 0 until status tracking is added
         assert result.duplicate_count == 0
         assert result.total_checked == 3
 
@@ -100,50 +100,20 @@ class TestNotificationDeduplicator:
         mock_registry_service: MagicMock,
         sample_papers: list,
     ) -> None:
-        """Test categorization when all papers are duplicates (PROCESSED status)."""
-        # Mock: all papers found with SKIP action (already processed)
+        """Test categorization when all papers are in registry (duplicates)."""
+        # Mock: all papers found in registry
         mock_entry = MagicMock(spec=RegistryEntry)
         mock_registry_service.resolve_identity.return_value = IdentityMatch(
             matched=True,
             entry=mock_entry,
             match_method="doi",
         )
-        mock_registry_service.determine_action.return_value = (
-            ProcessingAction.SKIP,
-            mock_entry,
-        )
 
         result = deduplicator.categorize_papers(sample_papers)
 
         assert result.new_count == 0
-        assert result.retry_count == 0
+        assert result.retry_count == 0  # Always 0 until status tracking is added
         assert result.duplicate_count == 3
-        assert result.total_checked == 3
-
-    def test_categorize_all_retry(
-        self,
-        deduplicator: NotificationDeduplicator,
-        mock_registry_service: MagicMock,
-        sample_papers: list,
-    ) -> None:
-        """Test categorization when all papers are retry (BACKFILL status)."""
-        # Mock: all papers found with BACKFILL action (extraction targets changed)
-        mock_entry = MagicMock(spec=RegistryEntry)
-        mock_registry_service.resolve_identity.return_value = IdentityMatch(
-            matched=True,
-            entry=mock_entry,
-            match_method="doi",
-        )
-        mock_registry_service.determine_action.return_value = (
-            ProcessingAction.BACKFILL,
-            mock_entry,
-        )
-
-        result = deduplicator.categorize_papers(sample_papers)
-
-        assert result.new_count == 0
-        assert result.retry_count == 3
-        assert result.duplicate_count == 0
         assert result.total_checked == 3
 
     def test_categorize_mixed_papers(
@@ -152,7 +122,7 @@ class TestNotificationDeduplicator:
         mock_registry_service: MagicMock,
         sample_papers: list,
     ) -> None:
-        """Test categorization with mixed paper statuses."""
+        """Test categorization with mixed paper statuses (new and duplicate)."""
         mock_entry = MagicMock(spec=RegistryEntry)
 
         # Setup different responses for each paper
@@ -161,65 +131,43 @@ class TestNotificationDeduplicator:
                 return IdentityMatch(matched=False)  # New
             return IdentityMatch(matched=True, entry=mock_entry, match_method="doi")
 
-        def action_side_effect(paper, topic_slug, extraction_targets):
-            if paper.doi == "10.1234/paper2":
-                return ProcessingAction.BACKFILL, mock_entry  # Retry
-            return ProcessingAction.SKIP, mock_entry  # Duplicate
-
         mock_registry_service.resolve_identity.side_effect = resolve_side_effect
-        mock_registry_service.determine_action.side_effect = action_side_effect
 
         result = deduplicator.categorize_papers(sample_papers)
 
         assert result.new_count == 1  # paper1
-        assert result.retry_count == 1  # paper2
-        assert result.duplicate_count == 1  # paper3
+        assert result.retry_count == 0  # Always 0 until status tracking is added
+        assert result.duplicate_count == 2  # paper2, paper3
         assert result.total_checked == 3
 
-    def test_categorize_map_only_as_duplicate(
+    def test_retry_always_empty_without_status_tracking(
         self,
         deduplicator: NotificationDeduplicator,
         mock_registry_service: MagicMock,
         sample_papers: list,
     ) -> None:
-        """Test MAP_ONLY action is categorized as duplicate."""
+        """Test that retry_papers is always empty (requires future status tracking).
+
+        Note: The retry_papers category requires RegistryEntry to have a status
+        field tracking processing outcomes (PROCESSED, FAILED, SKIPPED). This
+        is planned for a future phase. Until then, all registered papers are
+        categorized as duplicates.
+        """
+        # Even with papers in registry, retry should be empty
         mock_entry = MagicMock(spec=RegistryEntry)
         mock_registry_service.resolve_identity.return_value = IdentityMatch(
             matched=True,
             entry=mock_entry,
             match_method="doi",
         )
-        mock_registry_service.determine_action.return_value = (
-            ProcessingAction.MAP_ONLY,
-            mock_entry,
-        )
 
         result = deduplicator.categorize_papers(sample_papers)
 
-        assert result.new_count == 0
+        # Retry is always empty until status tracking is implemented
+        assert result.retry_count == 0
+        assert len(result.retry_papers) == 0
+        # All registered papers are duplicates
         assert result.duplicate_count == 3
-
-    def test_categorize_full_process_as_new(
-        self,
-        deduplicator: NotificationDeduplicator,
-        mock_registry_service: MagicMock,
-        sample_papers: list,
-    ) -> None:
-        """Test FULL_PROCESS action is categorized as new."""
-        mock_entry = MagicMock(spec=RegistryEntry)
-        mock_registry_service.resolve_identity.return_value = IdentityMatch(
-            matched=True,
-            entry=mock_entry,
-            match_method="doi",
-        )
-        mock_registry_service.determine_action.return_value = (
-            ProcessingAction.FULL_PROCESS,
-            None,
-        )
-
-        result = deduplicator.categorize_papers(sample_papers)
-
-        assert result.new_count == 3
 
     def test_graceful_fallback_no_registry(
         self,
@@ -276,7 +224,7 @@ class TestNotificationDeduplicator:
 
         result = deduplicator.categorize_papers(sample_papers)
 
-        # Should be treated as new
+        # Should be treated as new (fail-safe)
         assert result.new_count == 3
 
     def test_paper_data_preserved_in_result(
@@ -326,28 +274,43 @@ class TestNotificationDeduplicator:
         assert result.new_count == 3
         assert result.total_checked == 3
 
-    def test_unknown_action_treated_as_new(
+    def test_duplicate_paper_data_preserved(
         self,
         deduplicator: NotificationDeduplicator,
         mock_registry_service: MagicMock,
-        sample_papers: list,
     ) -> None:
-        """Test unknown/unexpected action is treated as new (defensive code)."""
+        """Test duplicate paper data is correctly preserved in result."""
+        paper = PaperMetadata(
+            paper_id="dup-paper-id",
+            title="Duplicate Paper",
+            doi="10.1234/dup",
+            abstract="Already processed",
+            url="https://example.com/dup",
+        )
         mock_entry = MagicMock(spec=RegistryEntry)
         mock_registry_service.resolve_identity.return_value = IdentityMatch(
             matched=True,
             entry=mock_entry,
             match_method="doi",
         )
-        # Return a mock action that's not a valid ProcessingAction
-        mock_unknown_action = MagicMock()
-        mock_unknown_action.__eq__ = lambda self, other: False
-        mock_registry_service.determine_action.return_value = (
-            mock_unknown_action,
-            mock_entry,
+
+        result = deduplicator.categorize_papers([paper])
+
+        assert len(result.duplicate_papers) == 1
+        assert result.duplicate_papers[0]["title"] == "Duplicate Paper"
+        assert result.duplicate_papers[0]["doi"] == "10.1234/dup"
+
+    def test_resolve_identity_called_for_each_paper(
+        self,
+        deduplicator: NotificationDeduplicator,
+        mock_registry_service: MagicMock,
+        sample_papers: list,
+    ) -> None:
+        """Test that resolve_identity is called once per paper."""
+        mock_registry_service.resolve_identity.return_value = IdentityMatch(
+            matched=False
         )
 
-        result = deduplicator.categorize_papers(sample_papers)
+        deduplicator.categorize_papers(sample_papers)
 
-        # Unknown action should be treated as new (fail-safe)
-        assert result.new_count == 3
+        assert mock_registry_service.resolve_identity.call_count == 3

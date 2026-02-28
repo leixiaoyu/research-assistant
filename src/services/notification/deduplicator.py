@@ -1,6 +1,6 @@
 """Notification Deduplicator for Phase 3.8.
 
-Categorizes discovered papers into new/retry/duplicate based on registry status
+Categorizes discovered papers into new/duplicate based on registry presence
 to enable deduplication-aware Slack notifications.
 
 Usage:
@@ -10,6 +10,12 @@ Usage:
     registry = RegistryService()
     deduplicator = NotificationDeduplicator(registry)
     result = deduplicator.categorize_papers(papers)
+
+Note:
+    The "retry_papers" category is reserved for future use when RegistryEntry
+    gains a status field to track processing outcomes (PROCESSED, FAILED, SKIPPED).
+    Currently, papers are only categorized as "new" or "duplicate" based on
+    registry presence.
 """
 
 from typing import List, Optional, TYPE_CHECKING
@@ -17,7 +23,6 @@ import structlog
 
 from src.models.notification import DeduplicationResult
 from src.models.paper import PaperMetadata
-from src.models.registry import ProcessingAction
 
 if TYPE_CHECKING:
     from src.services.registry_service import RegistryService
@@ -30,8 +35,13 @@ class NotificationDeduplicator:
 
     Uses the RegistryService to determine paper status and categorize them:
     - new_papers: Papers not found in registry (truly new discoveries)
-    - retry_papers: Papers with FAILED/SKIPPED status (retry candidates)
-    - duplicate_papers: Papers with PROCESSED/MAPPED status (already notified)
+    - duplicate_papers: Papers found in registry (already processed)
+    - retry_papers: Reserved for future use (requires status tracking in registry)
+
+    Note:
+        The retry_papers category requires RegistryEntry to have a status field
+        tracking processing outcomes. This is planned for a future phase.
+        Currently, all papers found in registry are categorized as duplicates.
 
     Attributes:
         registry_service: Registry service for identity resolution.
@@ -125,13 +135,23 @@ class NotificationDeduplicator:
         )
 
     def _categorize_single_paper(self, paper: PaperMetadata) -> str:
-        """Categorize a single paper based on registry status.
+        """Categorize a single paper based on registry presence.
+
+        Categorization logic:
+        - "new": Paper not found in registry (truly new discovery)
+        - "duplicate": Paper found in registry (already processed)
+
+        Note:
+            The "retry" category is reserved for future use when RegistryEntry
+            gains a status field to track processing outcomes. Currently, we
+            cannot distinguish between successfully processed papers and those
+            that failed, so all registered papers are treated as duplicates.
 
         Args:
             paper: Paper to categorize.
 
         Returns:
-            Category string: "new", "retry", or "duplicate".
+            Category string: "new" or "duplicate".
         """
         # Type guard: registry_service must be set when this method is called
         assert self._registry_service is not None
@@ -143,33 +163,13 @@ class NotificationDeduplicator:
         if not match.matched:
             return "new"
 
-        # Found in registry - check the entry status
+        # Found in registry - paper was previously processed
+        # Note: We cannot distinguish success/failure without a status field
+        # in RegistryEntry. All registered papers are treated as duplicates.
         entry = match.entry
         if entry is None:
+            # Edge case: matched but no entry (shouldn't happen, but be safe)
             return "new"
 
-        # Check metadata snapshot for processing status
-        # The registry entry's presence indicates it was processed before
-        # We use determine_action to check the actual status
-        action, _ = self._registry_service.determine_action(
-            paper=paper,
-            topic_slug="__notification_check__",  # Placeholder topic for status check
-            extraction_targets=None,
-        )
-
-        # Categorize based on action
-        if action == ProcessingAction.FULL_PROCESS:
-            # New paper (shouldn't happen if match.matched, but handle gracefully)
-            return "new"
-        elif action == ProcessingAction.BACKFILL:
-            # Extraction targets changed - treat as retry
-            return "retry"
-        elif action == ProcessingAction.SKIP:
-            # Already processed for this topic - duplicate
-            return "duplicate"
-        elif action == ProcessingAction.MAP_ONLY:
-            # Processed but not for this topic - still a duplicate for notification
-            return "duplicate"
-        else:
-            # Unknown action - treat as new (fail-safe)
-            return "new"
+        # Paper exists in registry = duplicate (already seen/processed)
+        return "duplicate"

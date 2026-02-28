@@ -1,5 +1,6 @@
 """Tests for CLI coverage."""
 
+import pytest
 from typer.testing import CliRunner
 from unittest.mock import Mock, patch, AsyncMock
 
@@ -178,7 +179,7 @@ class TestCLICoverage:
         result = runner.invoke(app, ["catalog", "history"])
         # Now uses positional argument, should show missing argument error
         assert result.exit_code == 2
-        assert "Missing argument" in result.stdout
+        assert "Missing argument" in result.output
 
     def test_catalog_history_topic_not_found(self):
         """Test catalog history with unknown topic"""
@@ -851,12 +852,109 @@ class TestScheduleLegacyCommand:
             assert "Scheduler stopped" in result.stdout
 
 
+class TestScheduleValidation:
+    """Tests for schedule command input validation."""
+
+    def test_invalid_hour_too_high(self):
+        """Test that hour > 23 is rejected."""
+        result = runner.invoke(app, ["schedule", "start", "--hour", "24"])
+        assert result.exit_code == 2
+        assert "Hour must be between 0 and 23" in result.output
+
+    def test_invalid_hour_negative(self):
+        """Test that negative hour is rejected."""
+        result = runner.invoke(app, ["schedule", "start", "--hour", "-1"])
+        assert result.exit_code == 2
+        assert "Hour must be between 0 and 23" in result.output
+
+    def test_invalid_minute_too_high(self):
+        """Test that minute > 59 is rejected."""
+        result = runner.invoke(app, ["schedule", "start", "--minute", "60"])
+        assert result.exit_code == 2
+        assert "Minute must be between 0 and 59" in result.output
+
+    def test_invalid_minute_negative(self):
+        """Test that negative minute is rejected."""
+        result = runner.invoke(app, ["schedule", "start", "--minute", "-1"])
+        assert result.exit_code == 2
+        assert "Minute must be between 0 and 59" in result.output
+
+
 class TestScheduleRunSchedulerCoverage:
-    """Tests for _run_scheduler function coverage.
+    """Tests for _run_scheduler function coverage."""
 
-    Note: The _run_scheduler async function is tested indirectly via
-    TestSchedulerExceptionHandling tests. Direct testing of the async
-    function body is complex due to asyncio.gather usage.
-    """
+    @pytest.mark.asyncio
+    async def test_run_scheduler_full_flow(self):
+        """Test _run_scheduler with all jobs enabled."""
+        from src.cli.schedule import _run_scheduler
+        from pathlib import Path
 
-    pass  # Covered via schedule start command tests
+        with (
+            patch("src.scheduling.ResearchScheduler") as mock_scheduler_cls,
+            patch("src.scheduling.DailyResearchJob") as mock_daily_job,
+            patch("src.scheduling.CacheCleanupJob") as mock_cleanup_job,
+            patch("src.scheduling.CostReportJob") as mock_cost_job,
+            patch("src.health.server.run_health_server_async") as mock_health,
+        ):
+            # Setup mocks
+            mock_scheduler = mock_scheduler_cls.return_value
+            mock_scheduler.get_jobs.return_value = [
+                {"id": "daily_research", "next_run_time": "06:00"},
+                {"id": "cache_cleanup", "next_run_time": "10:00"},
+                {"id": "cost_report", "next_run_time": "23:00"},
+            ]
+            mock_scheduler.start = AsyncMock()
+            mock_health.return_value = AsyncMock()()
+
+            # Run the scheduler (will complete immediately due to mocking)
+            await _run_scheduler(
+                config_path=Path("config/research_config.yaml"),
+                hour=6,
+                minute=0,
+                health_port=8000,
+                enable_cleanup=True,
+                enable_cost_report=True,
+            )
+
+            # Verify jobs were created
+            mock_daily_job.assert_called_once()
+            mock_cleanup_job.assert_called_once()
+            mock_cost_job.assert_called_once()
+            assert mock_scheduler.add_job.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_run_scheduler_minimal_jobs(self):
+        """Test _run_scheduler with cleanup and cost report disabled."""
+        from src.cli.schedule import _run_scheduler
+        from pathlib import Path
+
+        with (
+            patch("src.scheduling.ResearchScheduler") as mock_scheduler_cls,
+            patch("src.scheduling.DailyResearchJob") as mock_daily_job,
+            patch("src.scheduling.CacheCleanupJob") as mock_cleanup_job,
+            patch("src.scheduling.CostReportJob") as mock_cost_job,
+            patch("src.health.server.run_health_server_async") as mock_health,
+        ):
+            # Setup mocks
+            mock_scheduler = mock_scheduler_cls.return_value
+            mock_scheduler.get_jobs.return_value = [
+                {"id": "daily_research", "next_run_time": "08:30"},
+            ]
+            mock_scheduler.start = AsyncMock()
+            mock_health.return_value = AsyncMock()()
+
+            # Run the scheduler with optional jobs disabled
+            await _run_scheduler(
+                config_path=Path("config/research_config.yaml"),
+                hour=8,
+                minute=30,
+                health_port=9000,
+                enable_cleanup=False,
+                enable_cost_report=False,
+            )
+
+            # Verify only daily job was created
+            mock_daily_job.assert_called_once()
+            mock_cleanup_job.assert_not_called()
+            mock_cost_job.assert_not_called()
+            assert mock_scheduler.add_job.call_count == 1

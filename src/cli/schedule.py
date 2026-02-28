@@ -6,12 +6,24 @@ Provides commands for starting and managing the research scheduler.
 import asyncio
 from pathlib import Path
 
-import structlog
 import typer
 
-from src.cli.utils import handle_errors, display_warning, display_success
+from src.cli.utils import handle_errors, display_warning, display_success, logger
 
-logger = structlog.get_logger()
+
+def _validate_hour(value: int) -> int:
+    """Validate hour is in range 0-23."""
+    if not 0 <= value <= 23:
+        raise typer.BadParameter("Hour must be between 0 and 23")
+    return value
+
+
+def _validate_minute(value: int) -> int:
+    """Validate minute is in range 0-59."""
+    if not 0 <= value <= 59:
+        raise typer.BadParameter("Minute must be between 0 and 59")
+    return value
+
 
 # Create schedule sub-app
 schedule_app = typer.Typer(help="Manage research scheduler")
@@ -26,9 +38,19 @@ def schedule_start(
         help="Path to research config YAML",
     ),
     hour: int = typer.Option(
-        6, "--hour", "-H", help="Hour to run daily research (0-23)"
+        6,
+        "--hour",
+        "-H",
+        help="Hour to run daily research (0-23)",
+        callback=_validate_hour,
     ),
-    minute: int = typer.Option(0, "--minute", "-M", help="Minute to run (0-59)"),
+    minute: int = typer.Option(
+        0,
+        "--minute",
+        "-M",
+        help="Minute to run (0-59)",
+        callback=_validate_minute,
+    ),
     health_port: int = typer.Option(
         8000, "--health-port", "-p", help="Port for health server"
     ),

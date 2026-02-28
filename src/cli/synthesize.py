@@ -8,7 +8,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import structlog
 import typer
 
 from src.cli.utils import (
@@ -17,8 +16,6 @@ from src.cli.utils import (
     display_warning,
     display_error,
 )
-
-logger = structlog.get_logger()
 
 
 @handle_errors

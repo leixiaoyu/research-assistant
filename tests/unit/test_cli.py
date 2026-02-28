@@ -98,7 +98,7 @@ def test_catalog_history_missing_topic_arg():
     result = runner.invoke(app, ["catalog", "history"])
     # Should show usage error for missing argument
     assert result.exit_code == 2
-    assert "Missing argument" in result.stdout
+    assert "Missing argument" in result.output
 
 
 def test_catalog_history_topic_not_found(mock_catalog_config_manager):

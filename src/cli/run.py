@@ -5,7 +5,7 @@ Handles pipeline execution and result display.
 
 import asyncio
 from pathlib import Path
-from typing import List
+from typing import TYPE_CHECKING, List
 
 import typer
 
@@ -19,6 +19,9 @@ from src.cli.utils import (
     logger,
 )
 from src.models.config import ResearchConfig
+
+if TYPE_CHECKING:
+    from src.orchestration import PipelineResult
 
 
 @handle_errors
@@ -114,7 +117,7 @@ def _display_dry_run(config: ResearchConfig, phase2_enabled: bool) -> None:
         display_warning("\nPhase 2 Features: Disabled (Phase 1 discovery only)")
 
 
-def _display_results(result, phase2_enabled: bool) -> None:
+def _display_results(result: "PipelineResult", phase2_enabled: bool) -> None:
     """Display pipeline execution results.
 
     Args:
@@ -144,7 +147,7 @@ def _display_results(result, phase2_enabled: bool) -> None:
 
 
 async def _send_notifications(
-    result, config: ResearchConfig, phase2_enabled: bool
+    result: "PipelineResult", config: ResearchConfig, phase2_enabled: bool
 ) -> None:
     """Send pipeline notifications (Phase 3.7).
 
@@ -155,6 +158,7 @@ async def _send_notifications(
         config: ResearchConfig with notification settings.
         phase2_enabled: Whether Phase 2 features are enabled.
     """
+    _ = phase2_enabled  # Reserved for future use
     try:
         # Check if notification settings exist
         if not hasattr(config.settings, "notification_settings"):

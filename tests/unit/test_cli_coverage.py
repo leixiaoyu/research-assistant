@@ -1,5 +1,6 @@
 """Tests for CLI coverage."""
 
+import pytest
 from typer.testing import CliRunner
 from unittest.mock import Mock, patch, AsyncMock
 
@@ -13,7 +14,7 @@ runner = CliRunner()
 class TestCLICoverage:
     def test_run_config_error(self):
         """Test config loading error"""
-        with patch("src.cli.ConfigManager") as mock_cm:
+        with patch("src.cli.utils.ConfigManager") as mock_cm:
             mock_cm.return_value.load_config.side_effect = ConfigValidationError(
                 "Invalid config"
             )
@@ -24,7 +25,7 @@ class TestCLICoverage:
 
     def test_run_dry_run_phase2(self):
         """Test dry run with Phase 2 enabled"""
-        with patch("src.cli.ConfigManager") as mock_cm:
+        with patch("src.cli.utils.ConfigManager") as mock_cm:
             mock_config = Mock()
             # Phase 2 settings present
             mock_config.settings.pdf_settings.keep_pdfs = True
@@ -57,7 +58,7 @@ class TestCLICoverage:
 
     def test_run_full_phase2(self):
         """Test full Phase 2 run with mocks via ResearchPipeline"""
-        with patch("src.cli.ConfigManager") as mock_cm:
+        with patch("src.cli.utils.ConfigManager") as mock_cm:
             mock_config = Mock()
             # Phase 2 settings present
             mock_config.settings.pdf_settings.keep_pdfs = True
@@ -108,14 +109,14 @@ class TestCLICoverage:
 
     def test_run_exception(self):
         """Test general exception in run"""
-        with patch("src.cli.ConfigManager", side_effect=Exception("Unexpected")):
+        with patch("src.cli.utils.ConfigManager", side_effect=Exception("Unexpected")):
             result = runner.invoke(app, ["run"])
             assert result.exit_code == 1
-            assert "Pipeline failed" in result.stdout
+            assert "Error" in result.stdout
 
     def test_process_topics_no_papers(self):
         """Test processing with no papers found - via ResearchPipeline"""
-        with patch("src.cli.ConfigManager") as mock_cm:
+        with patch("src.cli.utils.ConfigManager") as mock_cm:
             mock_config = Mock()
             mock_config.settings.pdf_settings = None
             mock_config.settings.llm_settings = None
@@ -144,7 +145,7 @@ class TestCLICoverage:
 
     def test_run_with_errors(self):
         """Test run that has errors reported"""
-        with patch("src.cli.ConfigManager") as mock_cm:
+        with patch("src.cli.utils.ConfigManager") as mock_cm:
             mock_config = Mock()
             mock_config.settings.pdf_settings = None
             mock_config.settings.llm_settings = None
@@ -174,18 +175,19 @@ class TestCLICoverage:
                 assert "Errors" in result.stdout
 
     def test_catalog_history_no_topic(self):
-        """Test catalog history without topic"""
-        # Patch ConfigManager to avoid validation error
-        with patch("src.cli.ConfigManager"):
-            result = runner.invoke(app, ["catalog", "history"])
-            assert "Please provide --topic" in result.stdout
+        """Test catalog history without topic (missing argument)"""
+        result = runner.invoke(app, ["catalog", "history"])
+        # Now uses positional argument, should show missing argument error
+        assert result.exit_code == 2
+        assert "Missing argument" in result.output
 
     def test_catalog_history_topic_not_found(self):
         """Test catalog history with unknown topic"""
         # Patch ConfigManager to return empty catalog
-        with patch("src.cli.ConfigManager") as mock_cm:
+        with patch("src.cli.catalog.ConfigManager") as mock_cm:
             mock_cm.return_value.load_catalog.return_value.topics = {}
-            result = runner.invoke(app, ["catalog", "history", "--topic", "unknown"])
+            # Use positional argument (new API)
+            result = runner.invoke(app, ["catalog", "history", "unknown"])
             assert "Topic 'unknown' not found" in result.stdout
 
 
@@ -194,8 +196,9 @@ class TestSchedulerExceptionHandling:
 
     def test_scheduler_keyboard_interrupt(self):
         """Test scheduler graceful shutdown on KeyboardInterrupt."""
-        with patch("src.cli.asyncio.run", side_effect=KeyboardInterrupt()):
-            result = runner.invoke(app, ["schedule"])
+        with patch("src.cli.schedule.asyncio.run", side_effect=KeyboardInterrupt()):
+            # Use "schedule start" (new sub-app command)
+            result = runner.invoke(app, ["schedule", "start"])
             # KeyboardInterrupt causes graceful exit
             assert result.exit_code == 0
             assert "Scheduler stopped" in result.stdout
@@ -203,9 +206,11 @@ class TestSchedulerExceptionHandling:
     def test_scheduler_general_exception(self):
         """Test scheduler error handling on general exception."""
         with patch(
-            "src.cli.asyncio.run", side_effect=RuntimeError("Connection failed")
+            "src.cli.schedule.asyncio.run",
+            side_effect=RuntimeError("Connection failed"),
         ):
-            result = runner.invoke(app, ["schedule"])
+            # Use "schedule start" (new sub-app command)
+            result = runner.invoke(app, ["schedule", "start"])
             assert result.exit_code == 1
 
 
@@ -448,7 +453,8 @@ class TestSynthesizeCommand:
                 result = runner.invoke(app, ["synthesize"])
 
                 assert result.exit_code == 1
-                assert "Synthesis failed" in result.stdout
+                # Error now displayed by generic handle_errors decorator
+                assert "Error" in result.stdout
 
 
 class TestDryRunPhase1:
@@ -456,7 +462,7 @@ class TestDryRunPhase1:
 
     def test_dry_run_phase1_only(self):
         """Test dry run with Phase 2 features disabled."""
-        with patch("src.cli.ConfigManager") as mock_cm:
+        with patch("src.cli.utils.ConfigManager") as mock_cm:
             mock_config = Mock()
             # Phase 2 NOT configured - None values
             mock_config.settings.pdf_settings = None
@@ -480,7 +486,7 @@ class TestNoSynthesisFlag:
 
     def test_run_with_no_synthesis_flag(self):
         """Test run with --no-synthesis flag shows disabled message."""
-        with patch("src.cli.ConfigManager") as mock_cm:
+        with patch("src.cli.utils.ConfigManager") as mock_cm:
             mock_config = Mock()
             mock_config.settings.pdf_settings = Mock(keep_pdfs=True)
             mock_config.settings.llm_settings = Mock(provider="gemini")
@@ -520,7 +526,8 @@ class TestValidateCommand:
 
     def test_validate_success(self):
         """Test validate command with valid config."""
-        with patch("src.cli.ConfigManager") as mock_cm:
+        # Patch where ConfigManager is used (validate.py imports directly)
+        with patch("src.cli.validate.ConfigManager") as mock_cm:
             mock_cm.return_value.load_config.return_value = Mock()
 
             result = runner.invoke(app, ["validate", "config/test.yaml"])
@@ -529,7 +536,7 @@ class TestValidateCommand:
 
     def test_validate_failure(self):
         """Test validate command with invalid config."""
-        with patch("src.cli.ConfigManager") as mock_cm:
+        with patch("src.cli.validate.ConfigManager") as mock_cm:
             mock_cm.return_value.load_config.side_effect = ConfigValidationError(
                 "Invalid YAML"
             )
@@ -544,7 +551,8 @@ class TestCatalogShow:
 
     def test_catalog_show_with_topics(self):
         """Test catalog show displays all topics."""
-        with patch("src.cli.ConfigManager") as mock_cm:
+        # Patch where ConfigManager is used (catalog.py imports directly)
+        with patch("src.cli.catalog.ConfigManager") as mock_cm:
             mock_topic = Mock()
             mock_topic.query = "test query"
             mock_topic.runs = [Mock(), Mock()]
@@ -564,7 +572,8 @@ class TestCatalogHistoryWithTopic:
 
     def test_catalog_history_valid_topic(self):
         """Test catalog history with existing topic."""
-        with patch("src.cli.ConfigManager") as mock_cm:
+        # Patch where ConfigManager is used (catalog.py imports directly)
+        with patch("src.cli.catalog.ConfigManager") as mock_cm:
             mock_run = Mock()
             mock_run.date = "2025-01-01"
             mock_run.papers_found = 10
@@ -578,7 +587,8 @@ class TestCatalogHistoryWithTopic:
             mock_catalog.topics = {"test-topic": mock_topic}
             mock_cm.return_value.load_catalog.return_value = mock_catalog
 
-            result = runner.invoke(app, ["catalog", "history", "--topic", "test-topic"])
+            # Use positional argument (new API)
+            result = runner.invoke(app, ["catalog", "history", "test-topic"])
             assert "History for test query" in result.stdout
             assert "Found 10 papers" in result.stdout
 
@@ -617,7 +627,7 @@ class TestSendNotifications:
     @pytest.mark.asyncio
     async def test_notification_settings_not_configured(self):
         """Test notification skipped when settings attribute missing."""
-        from src.cli import _send_notifications
+        from src.cli.run import _send_notifications
 
         # Mock result
         mock_result = Mock()
@@ -634,7 +644,7 @@ class TestSendNotifications:
     @pytest.mark.asyncio
     async def test_notification_settings_none(self):
         """Test notification skipped when settings is None."""
-        from src.cli import _send_notifications
+        from src.cli.run import _send_notifications
 
         mock_result = Mock()
         mock_result.output_files = []
@@ -648,7 +658,7 @@ class TestSendNotifications:
     @pytest.mark.asyncio
     async def test_slack_notifications_disabled(self):
         """Test notification skipped when Slack is disabled."""
-        from src.cli import _send_notifications
+        from src.cli.run import _send_notifications
 
         mock_result = Mock()
         mock_result.output_files = []
@@ -662,7 +672,7 @@ class TestSendNotifications:
     @pytest.mark.asyncio
     async def test_notification_success(self):
         """Test successful notification sends and logs success."""
-        from src.cli import _send_notifications
+        from src.cli.run import _send_notifications
         from src.models.notification import NotificationResult
 
         mock_result = Mock()
@@ -692,7 +702,7 @@ class TestSendNotifications:
     @pytest.mark.asyncio
     async def test_notification_failure(self):
         """Test failed notification logs warning."""
-        from src.cli import _send_notifications
+        from src.cli.run import _send_notifications
         from src.models.notification import NotificationResult
 
         mock_result = Mock()
@@ -717,7 +727,7 @@ class TestSendNotifications:
     @pytest.mark.asyncio
     async def test_notification_exception(self):
         """Test exception during notification is caught and logged."""
-        from src.cli import _send_notifications
+        from src.cli.run import _send_notifications
 
         mock_result = Mock()
         mock_result.output_files = []
@@ -739,7 +749,7 @@ class TestSendNotifications:
     @pytest.mark.asyncio
     async def test_notification_with_key_learnings(self):
         """Test notification extracts key learnings when enabled."""
-        from src.cli import _send_notifications
+        from src.cli.run import _send_notifications
         from src.models.notification import NotificationResult
 
         mock_result = Mock()
@@ -762,3 +772,189 @@ class TestSendNotifications:
                 await _send_notifications(mock_result, mock_config, True)
 
                 mock_parser.return_value.extract_key_learnings.assert_called_once()
+
+
+class TestHealthCommand:
+    """Tests for health command coverage."""
+
+    def test_health_command(self):
+        """Test health command starts server."""
+        # Patch at the source where the import happens
+        with patch("src.health.server.run_health_server") as mock_server:
+            result = runner.invoke(app, ["health"])
+            assert result.exit_code == 0
+            mock_server.assert_called_once_with(host="localhost", port=8000)
+
+    def test_health_command_custom_host_port(self):
+        """Test health command with custom host and port."""
+        with patch("src.health.server.run_health_server") as mock_server:
+            result = runner.invoke(
+                app, ["health", "--host", "0.0.0.0", "--port", "9000"]
+            )
+            assert result.exit_code == 0
+            mock_server.assert_called_once_with(host="0.0.0.0", port=9000)
+
+
+class TestCatalogLegacyCommand:
+    """Tests for legacy catalog command coverage."""
+
+    def test_catalog_legacy_show(self):
+        """Test legacy catalog show action."""
+        with patch("src.cli.catalog.ConfigManager") as mock_cm:
+            mock_catalog = Mock()
+            mock_catalog.topics = {"test-topic": Mock(query="Test", runs=[])}
+            mock_cm.return_value.load_catalog.return_value = mock_catalog
+
+            result = runner.invoke(app, ["catalog-legacy", "show"])
+            assert result.exit_code == 0
+            assert "1 topics" in result.stdout
+
+    def test_catalog_legacy_history_no_topic(self):
+        """Test legacy catalog history without topic option."""
+        with patch("src.cli.catalog.ConfigManager") as mock_cm:
+            mock_cm.return_value.load_catalog.return_value = Mock(topics={})
+            result = runner.invoke(app, ["catalog-legacy", "history"])
+            assert "Please provide --topic" in result.stdout
+
+    def test_catalog_legacy_history_topic_not_found(self):
+        """Test legacy catalog history with unknown topic."""
+        with patch("src.cli.catalog.ConfigManager") as mock_cm:
+            mock_cm.return_value.load_catalog.return_value = Mock(topics={})
+            result = runner.invoke(
+                app, ["catalog-legacy", "history", "--topic", "unknown"]
+            )
+            assert "Topic 'unknown' not found" in result.stdout
+
+    def test_catalog_legacy_history_success(self):
+        """Test legacy catalog history with valid topic."""
+        with patch("src.cli.catalog.ConfigManager") as mock_cm:
+            mock_run = Mock(date="2025-01-01", papers_found=10, output_file="test.md")
+            mock_topic = Mock(query="Test Query", runs=[mock_run])
+            mock_catalog = Mock(topics={"test-topic": mock_topic})
+            mock_cm.return_value.load_catalog.return_value = mock_catalog
+
+            result = runner.invoke(
+                app, ["catalog-legacy", "history", "--topic", "test-topic"]
+            )
+            assert "History for Test Query" in result.stdout
+            assert "Found 10 papers" in result.stdout
+
+
+class TestScheduleLegacyCommand:
+    """Tests for legacy schedule command coverage."""
+
+    def test_schedule_legacy_invokes_start(self):
+        """Test legacy schedule command invokes schedule_start."""
+        with patch("src.cli.schedule.asyncio.run", side_effect=KeyboardInterrupt()):
+            result = runner.invoke(app, ["schedule-legacy"])
+            # KeyboardInterrupt causes graceful exit
+            assert result.exit_code == 0
+            assert "Scheduler stopped" in result.stdout
+
+
+class TestScheduleValidation:
+    """Tests for schedule command input validation."""
+
+    def test_invalid_hour_too_high(self):
+        """Test that hour > 23 is rejected."""
+        result = runner.invoke(app, ["schedule", "start", "--hour", "24"])
+        assert result.exit_code == 2
+        assert "Hour must be between 0 and 23" in result.output
+
+    def test_invalid_hour_negative(self):
+        """Test that negative hour is rejected."""
+        result = runner.invoke(app, ["schedule", "start", "--hour", "-1"])
+        assert result.exit_code == 2
+        assert "Hour must be between 0 and 23" in result.output
+
+    def test_invalid_minute_too_high(self):
+        """Test that minute > 59 is rejected."""
+        result = runner.invoke(app, ["schedule", "start", "--minute", "60"])
+        assert result.exit_code == 2
+        assert "Minute must be between 0 and 59" in result.output
+
+    def test_invalid_minute_negative(self):
+        """Test that negative minute is rejected."""
+        result = runner.invoke(app, ["schedule", "start", "--minute", "-1"])
+        assert result.exit_code == 2
+        assert "Minute must be between 0 and 59" in result.output
+
+
+class TestScheduleRunSchedulerCoverage:
+    """Tests for _run_scheduler function coverage."""
+
+    @pytest.mark.asyncio
+    async def test_run_scheduler_full_flow(self):
+        """Test _run_scheduler with all jobs enabled."""
+        from src.cli.schedule import _run_scheduler
+        from pathlib import Path
+
+        with (
+            patch("src.scheduling.ResearchScheduler") as mock_scheduler_cls,
+            patch("src.scheduling.DailyResearchJob") as mock_daily_job,
+            patch("src.scheduling.CacheCleanupJob") as mock_cleanup_job,
+            patch("src.scheduling.CostReportJob") as mock_cost_job,
+            patch("src.health.server.run_health_server_async") as mock_health,
+        ):
+            # Setup mocks
+            mock_scheduler = mock_scheduler_cls.return_value
+            mock_scheduler.get_jobs.return_value = [
+                {"id": "daily_research", "next_run_time": "06:00"},
+                {"id": "cache_cleanup", "next_run_time": "10:00"},
+                {"id": "cost_report", "next_run_time": "23:00"},
+            ]
+            mock_scheduler.start = AsyncMock()
+            mock_health.return_value = AsyncMock()()
+
+            # Run the scheduler (will complete immediately due to mocking)
+            await _run_scheduler(
+                config_path=Path("config/research_config.yaml"),
+                hour=6,
+                minute=0,
+                health_port=8000,
+                enable_cleanup=True,
+                enable_cost_report=True,
+            )
+
+            # Verify jobs were created
+            mock_daily_job.assert_called_once()
+            mock_cleanup_job.assert_called_once()
+            mock_cost_job.assert_called_once()
+            assert mock_scheduler.add_job.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_run_scheduler_minimal_jobs(self):
+        """Test _run_scheduler with cleanup and cost report disabled."""
+        from src.cli.schedule import _run_scheduler
+        from pathlib import Path
+
+        with (
+            patch("src.scheduling.ResearchScheduler") as mock_scheduler_cls,
+            patch("src.scheduling.DailyResearchJob") as mock_daily_job,
+            patch("src.scheduling.CacheCleanupJob") as mock_cleanup_job,
+            patch("src.scheduling.CostReportJob") as mock_cost_job,
+            patch("src.health.server.run_health_server_async") as mock_health,
+        ):
+            # Setup mocks
+            mock_scheduler = mock_scheduler_cls.return_value
+            mock_scheduler.get_jobs.return_value = [
+                {"id": "daily_research", "next_run_time": "08:30"},
+            ]
+            mock_scheduler.start = AsyncMock()
+            mock_health.return_value = AsyncMock()()
+
+            # Run the scheduler with optional jobs disabled
+            await _run_scheduler(
+                config_path=Path("config/research_config.yaml"),
+                hour=8,
+                minute=30,
+                health_port=9000,
+                enable_cleanup=False,
+                enable_cost_report=False,
+            )
+
+            # Verify only daily job was created
+            mock_daily_job.assert_called_once()
+            mock_cleanup_job.assert_not_called()
+            mock_cost_job.assert_not_called()
+            assert mock_scheduler.add_job.call_count == 1

@@ -159,7 +159,7 @@ class DailyResearchJob(BaseJob):
         Returns:
             Dictionary with run results including output files
         """
-        from src.orchestration.research_pipeline import ResearchPipeline
+        from src.orchestration import ResearchPipeline
         from src.services.config_manager import ConfigManager
 
         logger.info(

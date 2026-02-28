@@ -5,7 +5,7 @@ from typer.testing import CliRunner
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from src.cli import app
-from src.orchestration.research_pipeline import PipelineResult
+from src.orchestration import PipelineResult
 
 runner = CliRunner()
 
@@ -28,9 +28,11 @@ def mock_pipeline_result():
 @pytest.fixture
 def mock_components(mock_pipeline_result):
     """Mock ConfigManager and ResearchPipeline for CLI tests."""
+    # Phase 5.2: Patch at src.orchestration where ResearchPipeline is defined
+    # (the import happens inside run() function)
     with (
         patch("src.cli.ConfigManager") as MockConfig,
-        patch("src.orchestration.research_pipeline.ResearchPipeline") as MockPipeline,
+        patch("src.orchestration.ResearchPipeline") as MockPipeline,
     ):
         # Setup Config
         config_instance = MockConfig.return_value

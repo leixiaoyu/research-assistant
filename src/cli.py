@@ -86,7 +86,7 @@ def run(
 
         # 2. Execute pipeline using shared ResearchPipeline
         # This ensures feature parity with scheduled DailyResearchJob
-        from src.orchestration.research_pipeline import ResearchPipeline
+        from src.orchestration import ResearchPipeline
 
         typer.secho("Starting research pipeline...", fg=typer.colors.CYAN)
         if phase2_enabled:

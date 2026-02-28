@@ -113,7 +113,7 @@ class TestDailyResearchJob:
     @pytest.mark.asyncio
     async def test_run_with_mock_services(self):
         """Should run research pipeline with mocked services via ResearchPipeline."""
-        from src.orchestration.research_pipeline import PipelineResult
+        from src.orchestration import PipelineResult
         from src.models.notification import NotificationSettings
 
         job = DailyResearchJob()
@@ -123,13 +123,13 @@ class TestDailyResearchJob:
         mock_config.settings.notification_settings = NotificationSettings()
 
         # Mock ResearchPipeline and ConfigManager
+        # Phase 5.2: Patch at src.orchestration where ResearchPipeline is defined
+        # (the import happens inside run() method)
         with (
             patch(
                 "src.services.config_manager.ConfigManager"
             ) as mock_config_manager_class,
-            patch(
-                "src.orchestration.research_pipeline.ResearchPipeline"
-            ) as mock_pipeline_class,
+            patch("src.orchestration.ResearchPipeline") as mock_pipeline_class,
         ):
             mock_config_manager = MagicMock()
             mock_config_manager.load_config.return_value = mock_config
@@ -161,7 +161,7 @@ class TestDailyResearchJobErrors:
     @pytest.mark.asyncio
     async def test_run_handles_topic_search_error(self):
         """Should handle errors when topic search fails via ResearchPipeline."""
-        from src.orchestration.research_pipeline import PipelineResult
+        from src.orchestration import PipelineResult
         from src.models.notification import NotificationSettings
 
         job = DailyResearchJob()
@@ -171,13 +171,12 @@ class TestDailyResearchJobErrors:
         mock_config.settings.notification_settings = NotificationSettings()
 
         # Mock ResearchPipeline and ConfigManager to return error result
+        # Phase 5.2: Patch at src.orchestration where ResearchPipeline is defined
         with (
             patch(
                 "src.services.config_manager.ConfigManager"
             ) as mock_config_manager_class,
-            patch(
-                "src.orchestration.research_pipeline.ResearchPipeline"
-            ) as mock_pipeline_class,
+            patch("src.orchestration.ResearchPipeline") as mock_pipeline_class,
         ):
             mock_config_manager = MagicMock()
             mock_config_manager.load_config.return_value = mock_config
@@ -205,7 +204,7 @@ class TestDailyResearchJobNotifications:
     @pytest.mark.asyncio
     async def test_run_sends_notifications_when_enabled(self):
         """Should send notifications when Slack is enabled."""
-        from src.orchestration.research_pipeline import PipelineResult
+        from src.orchestration import PipelineResult
         from src.models.notification import NotificationSettings, SlackConfig
 
         job = DailyResearchJob()
@@ -219,13 +218,12 @@ class TestDailyResearchJobNotifications:
             )
         )
 
+        # Phase 5.2: Patch at src.orchestration where ResearchPipeline is defined
         with (
             patch(
                 "src.services.config_manager.ConfigManager"
             ) as mock_config_manager_class,
-            patch(
-                "src.orchestration.research_pipeline.ResearchPipeline"
-            ) as mock_pipeline_class,
+            patch("src.orchestration.ResearchPipeline") as mock_pipeline_class,
             patch(
                 "src.services.notification_service.NotificationService"
             ) as mock_notification_class,
@@ -266,7 +264,7 @@ class TestDailyResearchJobNotifications:
     @pytest.mark.asyncio
     async def test_run_logs_notification_failure(self):
         """Should log warning when notification fails."""
-        from src.orchestration.research_pipeline import PipelineResult
+        from src.orchestration import PipelineResult
         from src.models.notification import NotificationSettings, SlackConfig
 
         job = DailyResearchJob()
@@ -279,13 +277,12 @@ class TestDailyResearchJobNotifications:
             )
         )
 
+        # Phase 5.2: Patch at src.orchestration where ResearchPipeline is defined
         with (
             patch(
                 "src.services.config_manager.ConfigManager"
             ) as mock_config_manager_class,
-            patch(
-                "src.orchestration.research_pipeline.ResearchPipeline"
-            ) as mock_pipeline_class,
+            patch("src.orchestration.ResearchPipeline") as mock_pipeline_class,
             patch(
                 "src.services.notification_service.NotificationService"
             ) as mock_notification_class,
@@ -325,7 +322,7 @@ class TestDailyResearchJobNotifications:
     @pytest.mark.asyncio
     async def test_run_handles_notification_exception(self):
         """Should handle exceptions in notification sending gracefully."""
-        from src.orchestration.research_pipeline import PipelineResult
+        from src.orchestration import PipelineResult
         from src.models.notification import NotificationSettings, SlackConfig
 
         job = DailyResearchJob()
@@ -338,13 +335,12 @@ class TestDailyResearchJobNotifications:
             )
         )
 
+        # Phase 5.2: Patch at src.orchestration where ResearchPipeline is defined
         with (
             patch(
                 "src.services.config_manager.ConfigManager"
             ) as mock_config_manager_class,
-            patch(
-                "src.orchestration.research_pipeline.ResearchPipeline"
-            ) as mock_pipeline_class,
+            patch("src.orchestration.ResearchPipeline") as mock_pipeline_class,
             patch(
                 "src.services.notification_service.NotificationService"
             ) as mock_notification_class,

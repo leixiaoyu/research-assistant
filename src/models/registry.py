@@ -120,8 +120,10 @@ class RegistryEntry(BaseModel):
 
             # Validate ArXiv ID format
             elif key == "arxiv":
-                # ArXiv: YYMM.NNNNN or category/YYMMNNN
-                if not re.match(r"^(\d{4}\.\d{4,5}|[a-z-]+/\d{7})$", value):
+                # ArXiv: YYMM.NNNNN[vN] or category/YYMMNNN[vN] (with optional version)
+                if not re.match(
+                    r"^(\d{4}\.\d{4,5}(v\d+)?|[a-z-]+/\d{7}(v\d+)?)$", value
+                ):
                     raise ValueError(f"Invalid ArXiv ID format: {value}")
 
             # Validate Semantic Scholar ID (alphanumeric, 40 chars hex)

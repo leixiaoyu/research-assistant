@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch, AsyncMock
 
 from src.cli import app
 from src.services.config_manager import ConfigValidationError
-from src.orchestration.research_pipeline import PipelineResult
+from src.orchestration import PipelineResult
 
 runner = CliRunner()
 
@@ -151,13 +151,13 @@ class TestCLICoverage:
             mock_config.settings.llm_settings = None
             mock_config.settings.cost_limits = None
             mock_config.settings.semantic_scholar_api_key = None
+            mock_config.settings.provider_selection = None
             mock_config.research_topics = [Mock(query="topic1")]
 
             mock_cm.return_value.load_config.return_value = mock_config
 
-            with patch(
-                "src.orchestration.research_pipeline.ResearchPipeline"
-            ) as mock_pipeline_class:
+            # Patch at the package level where CLI imports from
+            with patch("src.orchestration.ResearchPipeline") as mock_pipeline_class:
                 mock_result = PipelineResult()
                 mock_result.topics_processed = 0
                 mock_result.topics_failed = 1

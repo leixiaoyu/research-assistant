@@ -25,9 +25,11 @@ This specification proposes comprehensive enhancements to the paper discovery pi
 Implement a **4-stage intelligent discovery pipeline**:
 
 1. **Query Decomposition** - LLM-generated sub-queries
-2. **Multi-Source Retrieval** - ArXiv + Semantic Scholar + OpenAlex
-3. **Quality Filtering** - Citation, venue, metadata signals
+2. **Multi-Source Retrieval** - Comprehensive (ArXiv, Semantic Scholar, OpenAlex) + Trending (HuggingFace)
+3. **Quality Filtering** - Citation, venue, metadata, and engagement signals
 4. **LLM Relevance Re-Ranking** - Semantic relevance scoring
+
+**Key Design Principle:** Build on existing infrastructure. The HuggingFace provider (`src/services/providers/huggingface.py`) already exists and must be integrated as a "Trending" source to capture community-curated, high-engagement papers.
 
 **Expected Improvement:** +50-70% relevant paper yield based on literature benchmarks.
 
@@ -54,10 +56,11 @@ Implement a **4-stage intelligent discovery pipeline**:
 
 - **G1:** Improve paper-query relevance by implementing LLM-based relevance scoring
 - **G2:** Increase paper coverage by adding OpenAlex as a secondary source
-- **G3:** Improve paper quality by implementing multi-signal quality filtering
+- **G3:** Improve paper quality by implementing multi-signal quality filtering (including engagement metrics)
 - **G4:** Improve query coverage by implementing LLM-based query decomposition
 - **G5:** Maintain backward compatibility with existing configuration format
 - **G6:** Ensure only academic papers are retrieved (no blogs, news, preprints optionally)
+- **G7:** Integrate existing HuggingFace provider as "Trending" source to capture community-curated research
 
 ### Non-Goals
 
@@ -93,17 +96,28 @@ Implement a **4-stage intelligent discovery pipeline**:
 │          │                                                               │
 │          ▼                                                               │
 │  ┌────────────────────────────────────────────────────────┐             │
-│  │              MultiSourceRetriever                       │             │
-│  │  ┌─────────┐  ┌─────────────────┐  ┌─────────────┐     │  Stage 2    │
-│  │  │ ArXiv   │  │SemanticScholar  │  │  OpenAlex   │     │             │
-│  │  │Provider │  │   Provider      │  │  Provider   │     │             │
-│  │  └────┬────┘  └───────┬─────────┘  └──────┬──────┘     │             │
-│  │       │               │                   │             │             │
-│  │       └───────────────┼───────────────────┘             │             │
-│  │                       ▼                                 │             │
-│  │              ┌────────────────┐                         │             │
-│  │              │  Deduplicator  │                         │             │
-│  │              └────────────────┘                         │             │
+│  │              MultiSourceRetriever                       │  Stage 2    │
+│  │                                                         │             │
+│  │  ┌─────────────────────────────────────────────────┐   │             │
+│  │  │ COMPREHENSIVE PROVIDERS (decomposed queries)    │   │             │
+│  │  │  ┌─────────┐  ┌────────────┐  ┌───────────┐    │   │             │
+│  │  │  │ ArXiv   │  │ Semantic   │  │ OpenAlex  │    │   │             │
+│  │  │  │Provider │  │ Scholar    │  │ Provider  │    │   │             │
+│  │  │  └────┬────┘  └─────┬──────┘  └─────┬─────┘    │   │             │
+│  │  └───────┼─────────────┼───────────────┼──────────┘   │             │
+│  │          └─────────────┼───────────────┘               │             │
+│  │                        │                               │             │
+│  │  ┌─────────────────────┼───────────────────────────┐   │             │
+│  │  │ TRENDING PROVIDERS  │ (original query)          │   │             │
+│  │  │  ┌─────────────┐    │                           │   │             │
+│  │  │  │ HuggingFace │    │  (existing provider)      │   │             │
+│  │  │  │  Provider   │────┼───────────────────────────│   │             │
+│  │  │  └─────────────┘    │                           │   │             │
+│  │  └─────────────────────┼───────────────────────────┘   │             │
+│  │                        ▼                               │             │
+│  │              ┌────────────────┐                        │             │
+│  │              │  Deduplicator  │                        │             │
+│  │              └────────────────┘                        │             │
 │  └───────────────────────┬────────────────────────────────┘             │
 │                          ▼                                               │
 │  ┌────────────────────────────────────────────────────────┐             │
@@ -206,7 +220,64 @@ Output:
 
 ---
 
-### 3.2 OpenAlexProvider
+### 3.2 Provider Categorization
+
+**Purpose:** Define query routing strategy based on provider capabilities.
+
+Providers are categorized into two types based on their retrieval characteristics:
+
+| Category | Providers | Query Strategy | Rationale |
+|----------|-----------|----------------|-----------|
+| **Comprehensive** | ArXiv, Semantic Scholar, OpenAlex | Decomposed sub-queries (3-5 queries) | Search-based APIs benefit from focused, precise queries |
+| **Trending** | HuggingFace | Original query only | Curated/sampling feeds require semantic filtering locally, not keyword search |
+
+**Implementation:**
+
+```python
+class ProviderCategory(str, Enum):
+    COMPREHENSIVE = "comprehensive"  # Search-based, use decomposed queries
+    TRENDING = "trending"            # Sampling-based, use original query
+
+PROVIDER_CATEGORIES = {
+    ProviderType.ARXIV: ProviderCategory.COMPREHENSIVE,
+    ProviderType.SEMANTIC_SCHOLAR: ProviderCategory.COMPREHENSIVE,
+    ProviderType.OPENALEX: ProviderCategory.COMPREHENSIVE,
+    ProviderType.HUGGINGFACE: ProviderCategory.TRENDING,
+}
+```
+
+**Query Routing Logic in EnhancedDiscoveryService:**
+
+```python
+async def _retrieve_from_all_sources(
+    self,
+    decomposed_queries: List[DecomposedQuery],
+    topic: ResearchTopic
+) -> List[PaperMetadata]:
+    """Route queries to providers based on their category."""
+    all_papers = []
+
+    for provider in self.providers:
+        category = PROVIDER_CATEGORIES.get(provider.type)
+
+        if category == ProviderCategory.COMPREHENSIVE:
+            # Send all decomposed sub-queries
+            for query in decomposed_queries:
+                papers = await provider.search(query.query, topic.timeframe)
+                all_papers.extend(papers)
+        else:
+            # TRENDING: Send original query only, apply local semantic filter
+            papers = await provider.search(topic.query, topic.timeframe)
+            # Filter by semantic similarity to original query
+            filtered = self._semantic_filter(papers, topic.query)
+            all_papers.extend(filtered)
+
+    return all_papers
+```
+
+---
+
+### 3.3 OpenAlexProvider
 
 **Purpose:** Retrieve papers from OpenAlex API with comprehensive filtering.
 
@@ -300,11 +371,14 @@ class OpenAlexProvider(DiscoveryProvider):
 
 | Signal | Source | Weight | Description |
 |--------|--------|--------|-------------|
-| `citation_score` | All APIs | 0.30 | Log-normalized citation count |
-| `venue_score` | CORE/SJR | 0.25 | Venue quality tier (A*, A, B, C) |
+| `citation_score` | All APIs | 0.25 | Log-normalized citation count |
+| `venue_score` | CORE/SJR | 0.20 | Venue quality tier (A*, A, B, C) |
 | `recency_score` | Publication date | 0.20 | Decay over 5 years |
-| `completeness_score` | Metadata | 0.15 | Has abstract, PDF, references |
+| `engagement_score` | HuggingFace | 0.15 | Upvotes/community engagement (prevents penalizing trending papers with 0 citations) |
+| `completeness_score` | Metadata | 0.10 | Has abstract, PDF, references |
 | `author_score` | Author h-index | 0.10 | Max author h-index |
+
+**Note on Engagement Signals:** Papers from HuggingFace Daily Papers often have high community engagement (upvotes) but zero citations due to their recency. The `engagement_score` ensures these trending, high-impact papers are not unfairly penalized by citation-only metrics.
 
 **Interface:**
 
@@ -476,6 +550,9 @@ class EnhancedDiscoveryService:
         queries = await self.query_decomposer.decompose(topic.query)
 
         # Stage 2: Multi-Source Retrieval
+        # NOTE: Provider-aware query routing:
+        # - COMPREHENSIVE providers (ArXiv, SS, OpenAlex): receive decomposed sub-queries
+        # - TRENDING providers (HuggingFace): receive original query only
         raw_papers = await self._retrieve_from_all_sources(queries, topic)
 
         # Stage 3: Quality Filtering
@@ -523,10 +600,11 @@ class DecomposedQuery(BaseModel):
 
 class QualityWeights(BaseModel):
     """Weights for quality signal combination."""
-    citation: float = Field(0.30, ge=0.0, le=1.0)
-    venue: float = Field(0.25, ge=0.0, le=1.0)
+    citation: float = Field(0.25, ge=0.0, le=1.0)
+    venue: float = Field(0.20, ge=0.0, le=1.0)
     recency: float = Field(0.20, ge=0.0, le=1.0)
-    completeness: float = Field(0.15, ge=0.0, le=1.0)
+    engagement: float = Field(0.15, ge=0.0, le=1.0)  # Upvotes from HuggingFace
+    completeness: float = Field(0.10, ge=0.0, le=1.0)
     author: float = Field(0.10, ge=0.0, le=1.0)
 
 class ScoredPaper(BaseModel):
@@ -582,10 +660,10 @@ class EnhancedDiscoveryConfig(BaseModel):
         description="Maximum sub-queries to generate"
     )
 
-    # Multi-source retrieval
+    # Multi-source retrieval (Comprehensive + Trending)
     providers: List[ProviderType] = Field(
-        [ProviderType.ARXIV, ProviderType.SEMANTIC_SCHOLAR, ProviderType.OPENALEX],
-        description="Providers to query"
+        [ProviderType.ARXIV, ProviderType.SEMANTIC_SCHOLAR, ProviderType.OPENALEX, ProviderType.HUGGINGFACE],
+        description="Providers to query (includes existing HuggingFace as Trending source)"
     )
     papers_per_provider: int = Field(
         100,
@@ -809,6 +887,8 @@ def _reconstruct_abstract(self, inverted_index: dict) -> str:
 | Pipeline latency | Time from query to ranked results | <30s |
 | LLM cost per topic | $ spent on decomposition + ranking | <$0.50 |
 | Provider diversity | % papers from non-primary source | >20% |
+| **Trending Paper Recall** | % of high-upvote HF papers (≥50 upvotes) in final top-K | >60% |
+| **Community Signal Accuracy** | Correlation between engagement_score and user relevance rating | >0.5 |
 
 ### Monitoring
 
@@ -859,11 +939,12 @@ settings:
     enable_query_decomposition: true
     max_subqueries: 5
 
-    # Multi-source retrieval
+    # Multi-source retrieval (Comprehensive + Trending)
     providers:
-      - arxiv
-      - semantic_scholar
-      - openalex
+      - arxiv           # Comprehensive
+      - semantic_scholar # Comprehensive
+      - openalex        # Comprehensive
+      - huggingface     # Trending (existing provider)
     papers_per_provider: 100
 
     # Quality filtering
@@ -873,10 +954,11 @@ settings:
     require_pdf: false
     exclude_preprints: false
     quality_weights:
-      citation: 0.30
-      venue: 0.25
+      citation: 0.25
+      venue: 0.20
       recency: 0.20
-      completeness: 0.15
+      engagement: 0.15  # Upvotes from HuggingFace (prevents penalizing trending papers)
+      completeness: 0.10
       author: 0.10
 
     # Relevance ranking
@@ -905,5 +987,12 @@ settings:
 
 ---
 
-*Document Version: 1.0*
-*Last Updated: 2026-02-28*
+*Document Version: 1.1*
+*Last Updated: 2026-03-01*
+
+### Revision History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | 2026-02-28 | Initial specification |
+| 1.1 | 2026-03-01 | Integrated HuggingFace as "Trending" provider; added engagement signals; defined Comprehensive vs Sampling query routing; added Trending Paper Recall metric |

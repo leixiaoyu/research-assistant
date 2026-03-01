@@ -97,6 +97,14 @@ settings:
     enable_backpressure: true
     backpressure_threshold: 0.8
 
+  # Provider Selection (Phase 3.2 Multi-Provider)
+  # Enables querying multiple academic sources per topic
+  provider_selection:
+    benchmark_mode: true  # Query ALL providers for each topic (ArXiv + Semantic Scholar + HuggingFace)
+    auto_select: false    # Disable auto-selection when benchmark_mode is true
+    fallback_enabled: true
+    fallback_timeout_seconds: 30
+
   # Cache Settings (Phase 3)
   cache:
     enabled: true

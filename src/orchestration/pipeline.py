@@ -170,7 +170,8 @@ class ResearchPipeline:
 
         # Core services
         discovery_service = DiscoveryService(
-            api_key=config.settings.semantic_scholar_api_key or ""
+            api_key=config.settings.semantic_scholar_api_key or "",
+            config=config.settings.provider_selection,
         )
 
         catalog_service = CatalogService(config_manager)

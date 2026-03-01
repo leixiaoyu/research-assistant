@@ -1,9 +1,32 @@
 # Phase 6: Discovery Enhancement Specification
 
-**Status:** PROPOSED
+**Status:** IN PROGRESS (Core Components Complete)
 **Author:** Claude Code
 **Date:** 2026-02-28
 **PR:** TBD
+**Last Updated:** 2026-03-01
+
+---
+
+## Implementation Status
+
+| Phase | Component | Status | Coverage |
+|-------|-----------|--------|----------|
+| 6.1 | Data Models (`src/models/discovery.py`) | ✅ Complete | 100% |
+| 6.1 | Config Extensions (`EnhancedDiscoveryConfig`) | ✅ Complete | 100% |
+| 6.1 | OpenAlex Provider (`src/services/providers/openalex.py`) | ✅ Complete | 100% |
+| 6.2 | Query Decomposer (`src/services/query_decomposer.py`) | ✅ Complete | 100% |
+| 6.3 | Quality Filter (`src/services/quality_filter_service.py`) | ✅ Complete | 100% |
+| 6.4 | Relevance Ranker (`src/services/relevance_ranker.py`) | ✅ Complete | 100% |
+| 6.5 | Enhanced Discovery Service (`src/services/enhanced_discovery_service.py`) | ✅ Complete | 100% |
+| 6.5 | Integration with `DiscoveryService` | ❌ Not Started | - |
+| 6.5 | CLI Commands | ❌ Not Started | - |
+| 6.6 | Integration Tests | ❌ Not Started | - |
+| 6.6 | Validation & Optimization | ❌ Not Started | - |
+
+**Tests:** 162 unit tests passing with 100% coverage on all Phase 6 modules.
+
+**Note:** Core components are fully implemented and tested. Integration layer (wiring into main pipeline, CLI access) is pending in a future PR.
 
 ---
 
@@ -987,7 +1010,7 @@ settings:
 
 ---
 
-*Document Version: 1.1*
+*Document Version: 1.2*
 *Last Updated: 2026-03-01*
 
 ### Revision History
@@ -996,3 +1019,4 @@ settings:
 |---------|------|---------|
 | 1.0 | 2026-02-28 | Initial specification |
 | 1.1 | 2026-03-01 | Integrated HuggingFace as "Trending" provider; added engagement signals; defined Comprehensive vs Sampling query routing; added Trending Paper Recall metric |
+| 1.2 | 2026-03-01 | Updated status to IN PROGRESS; added Implementation Status table showing core components complete with 100% test coverage; integration layer pending |

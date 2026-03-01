@@ -1,9 +1,9 @@
 # ARISP Phased Delivery Plan
 **Automated Research Ingestion & Synthesis Pipeline**
 
-**Version:** 1.8
-**Date:** 2026-02-25
-**Status:** Phase 5.2 Complete, Phase 5.3 Planning
+**Version:** 1.9
+**Date:** 2026-03-01
+**Status:** Phase 6 Core Components Complete, Integration Pending
 
 ---
 
@@ -20,13 +20,13 @@ This document outlines a phased delivery plan to build the Automated Research In
 │Foundation│ Stabilize│Extraction│Reliability│Intelligence│Concurrent│Resilience│HuggingFace│Registry │
 └──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
 
-┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
-│Phase 3.6 │Phase 3.7 │Phase 5.1 │Phase 5.2 │Phase 5.3 │Phase 5.4 │Phase 5.5 │
-│✅Complete│✅Complete│✅Complete│✅Complete│(Planning)│(Future)  │(Future)  │
-│          │          │          │          │          │          │          │
-│ Delta    │Cross-    │   LLM    │Research  │   CLI    │ Utility  │ Model    │
-│ Briefs   │Synthesis │ Decompose│ Pipeline │ Commands │ Patterns │Consolid. │
-└──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
+┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
+│Phase 3.6 │Phase 3.7 │Phase 5.1 │Phase 5.2 │Phase 5.3 │Phase 5.4 │Phase 5.5 │ Phase 6  │
+│✅Complete│✅Complete│✅Complete│✅Complete│(Planning)│(Future)  │(Future)  │🔄 Core   │
+│          │          │          │          │          │          │          │ Complete │
+│ Delta    │Cross-    │   LLM    │Research  │   CLI    │ Utility  │ Model    │ Enhanced │
+│ Briefs   │Synthesis │ Decompose│ Pipeline │ Commands │ Patterns │Consolid. │ Discovery│
+└──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
 ```
 
 ### Investment & Returns
@@ -177,6 +177,42 @@ The original `ResearchPipeline` (824 lines, 14 functions) handled all pipeline p
 ✅ 100% test coverage maintained
 
 **Details:** See [PHASE_5.2_SPEC.md](specs/PHASE_5.2_SPEC.md) for full package structure and file sizes.
+
+---
+
+### Phase 6: Enhanced Discovery Pipeline
+**Status:** 🔄 **IN PROGRESS** (Core Components Complete - Mar 1, 2026)
+**Duration:** 2-3 weeks (estimated)
+**Dependencies:** Phase 3.4 (HuggingFace Provider), Phase 5.1 (LLMService)
+**Goal:** Improve paper relevance through 4-stage intelligent discovery pipeline
+
+#### Problem Addressed
+Despite retrieving 90+ papers, the synthesis phase covered 0 topics due to poor paper-query relevance matching. Single-query retrieval misses semantically related papers, and API default ordering includes irrelevant results.
+
+#### Key Deliverables (Core Components - Complete)
+✅ Data models: `QueryFocus`, `DecomposedQuery`, `QualityWeights`, `ScoredPaper`, `DiscoveryMetrics`, `DiscoveryResult`
+✅ `EnhancedDiscoveryConfig` model for pipeline configuration
+✅ `OpenAlexProvider` for 260M+ scholarly works access
+✅ `QueryDecomposer` for LLM-based query expansion (3-5 sub-queries)
+✅ `QualityFilterService` with 6-signal scoring (citation, venue, recency, engagement, completeness, author)
+✅ `RelevanceRanker` for LLM-based semantic relevance scoring
+✅ `EnhancedDiscoveryService` orchestrating 4-stage pipeline
+✅ 162 unit tests with 100% coverage on all Phase 6 modules
+
+#### Key Deliverables (Integration - Pending)
+❌ Integration with main `DiscoveryService`
+❌ CLI commands for enhanced discovery mode
+❌ Feature flag for gradual rollout
+❌ Integration and end-to-end tests
+❌ Performance benchmarking and cost analysis
+
+#### 4-Stage Pipeline Architecture
+1. **Query Decomposition** - LLM generates focused sub-queries
+2. **Multi-Source Retrieval** - ArXiv, Semantic Scholar, OpenAlex (comprehensive) + HuggingFace (trending)
+3. **Quality Filtering** - Multi-signal scoring with configurable weights
+4. **Relevance Ranking** - LLM-based semantic relevance scoring
+
+**Details:** See [PHASE_6_DISCOVERY_ENHANCEMENT_SPEC.md](specs/PHASE_6_DISCOVERY_ENHANCEMENT_SPEC.md) for full specification.
 
 ---
 

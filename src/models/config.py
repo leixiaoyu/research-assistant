@@ -64,6 +64,7 @@ class ProviderType(str, Enum):
     ARXIV = "arxiv"
     SEMANTIC_SCHOLAR = "semantic_scholar"
     HUGGINGFACE = "huggingface"
+    OPENALEX = "openalex"  # Phase 6: OpenAlex provider
 
 
 class PDFStrategy(str, Enum):
@@ -307,6 +308,78 @@ class GlobalSettings(BaseModel):
     notification_settings: NotificationSettings = Field(
         default_factory=lambda: NotificationSettings(),
         description="Notification settings (Phase 3.7)",
+    )
+    # Phase 6: Enhanced discovery settings
+    enhanced_discovery: Optional["EnhancedDiscoveryConfig"] = Field(
+        default=None,
+        description="Enhanced discovery pipeline settings (Phase 6)",
+    )
+
+
+class EnhancedDiscoveryConfig(BaseModel):
+    """Configuration for enhanced discovery pipeline (Phase 6).
+
+    Controls the 4-stage intelligent discovery:
+    1. Query decomposition
+    2. Multi-source retrieval
+    3. Quality filtering
+    4. Relevance ranking
+
+    Attributes:
+        enable_query_decomposition: Enable LLM-based query decomposition
+        max_subqueries: Maximum sub-queries to generate
+        providers: List of providers to query
+        papers_per_provider: Max papers per provider per query
+        min_citations: Minimum citation threshold
+        min_quality_score: Minimum quality score (0.0-1.0)
+        require_abstract: Require paper abstract
+        require_pdf: Require PDF availability
+        exclude_preprints: Exclude preprint papers
+        enable_relevance_ranking: Enable LLM-based relevance ranking
+        min_relevance_score: Minimum relevance score (0.0-1.0)
+        relevance_batch_size: Batch size for relevance scoring
+    """
+
+    # Query decomposition
+    enable_query_decomposition: bool = Field(
+        True, description="Enable LLM-based query decomposition"
+    )
+    max_subqueries: int = Field(
+        5, ge=1, le=10, description="Maximum sub-queries to generate"
+    )
+
+    # Multi-source retrieval (Comprehensive + Trending)
+    providers: List[ProviderType] = Field(
+        default_factory=lambda: [
+            ProviderType.ARXIV,
+            ProviderType.SEMANTIC_SCHOLAR,
+            ProviderType.OPENALEX,
+            ProviderType.HUGGINGFACE,
+        ],
+        description="Providers to query (includes HuggingFace as Trending source)",
+    )
+    papers_per_provider: int = Field(
+        100, ge=10, le=500, description="Max papers per provider per query"
+    )
+
+    # Quality filtering
+    min_citations: int = Field(0, ge=0, description="Minimum citation threshold")
+    min_quality_score: float = Field(
+        0.3, ge=0.0, le=1.0, description="Minimum quality score"
+    )
+    require_abstract: bool = Field(True, description="Require paper abstract")
+    require_pdf: bool = Field(False, description="Require PDF availability")
+    exclude_preprints: bool = Field(False, description="Exclude preprint papers")
+
+    # Relevance ranking
+    enable_relevance_ranking: bool = Field(
+        True, description="Enable LLM-based relevance ranking"
+    )
+    min_relevance_score: float = Field(
+        0.5, ge=0.0, le=1.0, description="Minimum relevance score"
+    )
+    relevance_batch_size: int = Field(
+        10, ge=1, le=50, description="Batch size for relevance scoring"
     )
 
 

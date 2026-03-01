@@ -18,6 +18,7 @@ from src.models.notification import (
     SlackConfig,
     PipelineSummary,
     KeyLearning,
+    DeduplicationResult,
 )
 
 
@@ -558,3 +559,297 @@ class TestCreateSummaryFromResult:
 
         assert summary.date is not None
         assert "UTC" in summary.date
+
+    def test_with_dedup_result(self) -> None:
+        """Test conversion with deduplication result."""
+        result = {"topics_processed": 1, "papers_discovered": 10}
+        dedup = DeduplicationResult(
+            new_papers=[
+                {"title": "New Paper 1"},
+                {"title": "New Paper 2"},
+            ],
+            retry_papers=[
+                {"title": "Retry Paper 1"},
+            ],
+            duplicate_papers=[
+                {"title": "Dup 1"},
+                {"title": "Dup 2"},
+                {"title": "Dup 3"},
+            ],
+        )
+
+        summary = NotificationService.create_summary_from_result(
+            result, dedup_result=dedup
+        )
+
+        assert summary.new_papers_count == 2
+        assert summary.retry_papers_count == 1
+        assert summary.duplicate_papers_count == 3
+        assert summary.total_papers_checked == 6
+        assert len(summary.new_paper_titles) == 2
+        assert "New Paper 1" in summary.new_paper_titles
+
+    def test_without_dedup_result(self) -> None:
+        """Test conversion without deduplication result uses defaults."""
+        result = {"topics_processed": 1}
+
+        summary = NotificationService.create_summary_from_result(result)
+
+        assert summary.new_papers_count == 0
+        assert summary.retry_papers_count == 0
+        assert summary.duplicate_papers_count == 0
+        assert summary.total_papers_checked == 0
+        assert summary.new_paper_titles == []
+
+
+class TestSlackMessageBuilderDedup:
+    """Tests for SlackMessageBuilder deduplication sections (Phase 3.8)."""
+
+    @pytest.fixture
+    def builder(self) -> SlackMessageBuilder:
+        """Create a message builder with default settings."""
+        settings = NotificationSettings()
+        return SlackMessageBuilder(settings)
+
+    @pytest.fixture
+    def dedup_summary(self) -> PipelineSummary:
+        """Create a summary with deduplication data."""
+        return PipelineSummary(
+            date="2025-01-23 09:00 UTC",
+            topics_processed=2,
+            topics_failed=0,
+            papers_discovered=15,
+            papers_processed=12,
+            new_papers_count=5,
+            retry_papers_count=2,
+            duplicate_papers_count=8,
+            total_papers_checked=15,
+            new_paper_titles=[
+                "New Paper 1",
+                "New Paper 2",
+                "New Paper 3",
+            ],
+        )
+
+    def test_build_stats_section_with_dedup(
+        self, builder: SlackMessageBuilder, dedup_summary: PipelineSummary
+    ) -> None:
+        """Test statistics section includes deduplication info."""
+        stats = builder._build_stats_section(dedup_summary)
+
+        text = stats["text"]["text"]
+        assert "*Dedup:*" in text
+        assert "5 new" in text
+        assert "2 retry" in text
+        assert "8 duplicate" in text
+        assert "of 15 checked" in text
+
+    def test_build_stats_section_without_dedup(
+        self, builder: SlackMessageBuilder
+    ) -> None:
+        """Test statistics section without deduplication data."""
+        summary = PipelineSummary(
+            date="2025-01-23",
+            topics_processed=1,
+            papers_discovered=10,
+        )
+
+        stats = builder._build_stats_section(summary)
+
+        text = stats["text"]["text"]
+        assert "*Dedup:*" not in text
+
+    def test_build_stats_section_respects_show_duplicates_config(self) -> None:
+        """Test show_duplicates_count config is respected."""
+        settings = NotificationSettings(slack=SlackConfig(show_duplicates_count=False))
+        builder = SlackMessageBuilder(settings)
+
+        summary = PipelineSummary(
+            date="2025-01-23",
+            new_papers_count=5,
+            retry_papers_count=2,
+            duplicate_papers_count=8,
+            total_papers_checked=15,
+        )
+
+        stats = builder._build_stats_section(summary)
+        text = stats["text"]["text"]
+
+        assert "5 new" in text
+        assert "2 retry" in text
+        assert "8 duplicate" not in text  # Should be hidden
+
+    def test_build_stats_section_respects_show_retry_config(self) -> None:
+        """Test show_retry_papers config is respected."""
+        settings = NotificationSettings(slack=SlackConfig(show_retry_papers=False))
+        builder = SlackMessageBuilder(settings)
+
+        summary = PipelineSummary(
+            date="2025-01-23",
+            new_papers_count=5,
+            retry_papers_count=2,
+            duplicate_papers_count=8,
+            total_papers_checked=15,
+        )
+
+        stats = builder._build_stats_section(summary)
+        text = stats["text"]["text"]
+
+        assert "5 new" in text
+        assert "retry" not in text  # Should be hidden
+
+    def test_build_stats_section_respects_include_total_config(self) -> None:
+        """Test include_total_checked config is respected."""
+        settings = NotificationSettings(slack=SlackConfig(include_total_checked=False))
+        builder = SlackMessageBuilder(settings)
+
+        summary = PipelineSummary(
+            date="2025-01-23",
+            new_papers_count=5,
+            duplicate_papers_count=8,
+            total_papers_checked=15,
+        )
+
+        stats = builder._build_stats_section(summary)
+        text = stats["text"]["text"]
+
+        assert "of 15 checked" not in text
+
+    def test_build_new_papers_section(
+        self, builder: SlackMessageBuilder, dedup_summary: PipelineSummary
+    ) -> None:
+        """Test new papers section is built correctly."""
+        blocks = builder._build_new_papers_section(dedup_summary)
+
+        assert len(blocks) == 2  # Header + list
+
+        # Check header
+        header_text = blocks[0]["text"]["text"]
+        assert ":sparkles:" in header_text
+        assert "New Papers" in header_text
+        assert "(5)" in header_text
+
+        # Check list
+        list_text = blocks[1]["text"]["text"]
+        assert "New Paper 1" in list_text
+        assert "New Paper 2" in list_text
+        assert "New Paper 3" in list_text
+
+    def test_build_new_papers_section_empty(self, builder: SlackMessageBuilder) -> None:
+        """Test new papers section is empty when no new papers."""
+        summary = PipelineSummary(
+            date="2025-01-23",
+            new_papers_count=0,
+            new_paper_titles=[],
+        )
+
+        blocks = builder._build_new_papers_section(summary)
+
+        assert blocks == []
+
+    def test_build_new_papers_section_respects_max_limit(self) -> None:
+        """Test max_new_papers_listed config is respected."""
+        settings = NotificationSettings(slack=SlackConfig(max_new_papers_listed=2))
+        builder = SlackMessageBuilder(settings)
+
+        summary = PipelineSummary(
+            date="2025-01-23",
+            new_papers_count=5,
+            new_paper_titles=[
+                "Paper 1",
+                "Paper 2",
+                "Paper 3",
+                "Paper 4",
+                "Paper 5",
+            ],
+        )
+
+        blocks = builder._build_new_papers_section(summary)
+
+        # Check only 2 papers are shown
+        list_text = blocks[1]["text"]["text"]
+        assert "Paper 1" in list_text
+        assert "Paper 2" in list_text
+        assert "Paper 3" not in list_text
+        assert "3 more new papers" in list_text
+
+    def test_build_retry_papers_section(
+        self, builder: SlackMessageBuilder, dedup_summary: PipelineSummary
+    ) -> None:
+        """Test retry papers section is built correctly."""
+        block = builder._build_retry_papers_section(dedup_summary)
+
+        text = block["text"]["text"]
+        assert ":arrows_counterclockwise:" in text
+        assert "Retry Papers" in text
+        assert "2 papers" in text
+
+    def test_build_pipeline_summary_with_dedup(
+        self, builder: SlackMessageBuilder, dedup_summary: PipelineSummary
+    ) -> None:
+        """Test full pipeline summary includes dedup sections."""
+        payload = builder.build_pipeline_summary(dedup_summary)
+
+        blocks = payload["blocks"]
+
+        # Check for new papers section
+        new_papers_found = False
+        for block in blocks:
+            if block.get("type") == "section":
+                text = block.get("text", {}).get("text", "")
+                if ":sparkles:" in text and "New Papers" in text:
+                    new_papers_found = True
+                    break
+
+        assert new_papers_found, "New papers section not found"
+
+    def test_build_pipeline_summary_includes_retry_section(self) -> None:
+        """Test pipeline summary includes retry section when enabled."""
+        settings = NotificationSettings(slack=SlackConfig(show_retry_papers=True))
+        builder = SlackMessageBuilder(settings)
+
+        summary = PipelineSummary(
+            date="2025-01-23",
+            topics_processed=1,
+            new_papers_count=2,
+            retry_papers_count=3,
+            total_papers_checked=10,
+            new_paper_titles=["Paper 1"],
+        )
+
+        payload = builder.build_pipeline_summary(summary)
+        blocks = payload["blocks"]
+
+        # Check for retry section
+        retry_found = False
+        for block in blocks:
+            if block.get("type") == "section":
+                text = block.get("text", {}).get("text", "")
+                if ":arrows_counterclockwise:" in text:
+                    retry_found = True
+                    break
+
+        assert retry_found, "Retry papers section not found"
+
+    def test_build_pipeline_summary_hides_retry_when_disabled(self) -> None:
+        """Test retry section is hidden when show_retry_papers is False."""
+        settings = NotificationSettings(slack=SlackConfig(show_retry_papers=False))
+        builder = SlackMessageBuilder(settings)
+
+        summary = PipelineSummary(
+            date="2025-01-23",
+            topics_processed=1,
+            new_papers_count=2,
+            retry_papers_count=3,
+            total_papers_checked=10,
+            new_paper_titles=["Paper 1"],
+        )
+
+        payload = builder.build_pipeline_summary(summary)
+        blocks = payload["blocks"]
+
+        # Check retry section is NOT present
+        for block in blocks:
+            if block.get("type") == "section":
+                text = block.get("text", {}).get("text", "")
+                assert ":arrows_counterclockwise:" not in text

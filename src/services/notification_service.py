@@ -23,6 +23,7 @@ from src.models.notification import (
     NotificationResult,
     PipelineSummary,
     KeyLearning,
+    DeduplicationResult,
 )
 
 logger = structlog.get_logger()
@@ -70,6 +71,15 @@ class SlackMessageBuilder:
         # Cost summary (if enabled)
         if self.config.slack.include_cost_summary and summary.total_cost_usd > 0:
             blocks.append(self._build_cost_section(summary))
+
+        # New papers section (if there are new papers)
+        if summary.new_papers_count > 0 and summary.new_paper_titles:
+            blocks.append({"type": "divider"})
+            blocks.extend(self._build_new_papers_section(summary))
+
+        # Retry papers section (if enabled and there are retry papers)
+        if self.config.slack.show_retry_papers and summary.retry_papers_count > 0:
+            blocks.append(self._build_retry_papers_section(summary))
 
         # Key learnings (if enabled and available)
         if self.config.slack.include_key_learnings and summary.key_learnings:
@@ -135,6 +145,30 @@ class SlackMessageBuilder:
             f"*Extractions:* {summary.papers_with_extraction} with LLM extraction"
         )
 
+        # Add deduplication stats if available
+        if summary.total_papers_checked > 0:
+            dedup_parts = []
+
+            # Always show new papers count
+            dedup_parts.append(f"{summary.new_papers_count} new")
+
+            # Show retry count if enabled and > 0
+            if self.config.slack.show_retry_papers and summary.retry_papers_count > 0:
+                dedup_parts.append(f"{summary.retry_papers_count} retry")
+
+            # Show duplicate count if enabled
+            if self.config.slack.show_duplicates_count:
+                dedup_parts.append(f"{summary.duplicate_papers_count} duplicate")
+
+            dedup_text = ", ".join(dedup_parts)
+
+            # Add total checked if enabled
+            if self.config.slack.include_total_checked:
+                total = summary.total_papers_checked
+                stats_text += f"\n*Dedup:* {dedup_text} (of {total} checked)"
+            else:
+                stats_text += f"\n*Dedup:* {dedup_text}"
+
         return {
             "type": "section",
             "text": {
@@ -155,6 +189,81 @@ class SlackMessageBuilder:
             "text": {
                 "type": "mrkdwn",
                 "text": cost_text,
+            },
+        }
+
+    def _build_new_papers_section(
+        self, summary: PipelineSummary
+    ) -> List[Dict[str, Any]]:
+        """Build new papers section listing paper titles.
+
+        Args:
+            summary: Pipeline summary with new paper titles.
+
+        Returns:
+            List of Slack blocks for the new papers section.
+        """
+        blocks: List[Dict[str, Any]] = []
+
+        if not summary.new_paper_titles:
+            return blocks
+
+        # Section header
+        header_text = f":sparkles: *New Papers* ({summary.new_papers_count})"
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": header_text,
+                },
+            }
+        )
+
+        # List paper titles (respect max limit from config)
+        max_titles = self.config.slack.max_new_papers_listed
+        titles_to_show = summary.new_paper_titles[:max_titles]
+
+        papers_text = ""
+        for i, title in enumerate(titles_to_show, 1):
+            papers_text += f"{i}. _{title}_\n"
+
+        # Show remaining count if truncated
+        remaining = summary.new_papers_count - len(titles_to_show)
+        if remaining > 0:
+            papers_text += f"_...and {remaining} more new papers_"
+
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": papers_text.strip(),
+                },
+            }
+        )
+
+        return blocks
+
+    def _build_retry_papers_section(self, summary: PipelineSummary) -> Dict[str, Any]:
+        """Build retry papers section.
+
+        Args:
+            summary: Pipeline summary with retry count.
+
+        Returns:
+            Slack block for the retry papers section.
+        """
+        retry_text = (
+            f":arrows_counterclockwise: *Retry Papers:* "
+            f"{summary.retry_papers_count} papers being retried from previous failures"
+        )
+
+        return {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": retry_text,
             },
         }
 
@@ -415,6 +524,7 @@ class NotificationService:
     def create_summary_from_result(
         result: Dict[str, Any],
         key_learnings: Optional[List[KeyLearning]] = None,
+        dedup_result: Optional[DeduplicationResult] = None,
     ) -> PipelineSummary:
         """Create PipelineSummary from pipeline result dict.
 
@@ -424,20 +534,32 @@ class NotificationService:
         Args:
             result: Pipeline result dictionary (from PipelineResult.to_dict()).
             key_learnings: Optional list of extracted key learnings.
+            dedup_result: Optional deduplication result for paper categorization.
 
         Returns:
             PipelineSummary object.
         """
-        return PipelineSummary(
-            date=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-            topics_processed=result.get("topics_processed", 0),
-            topics_failed=result.get("topics_failed", 0),
-            papers_discovered=result.get("papers_discovered", 0),
-            papers_processed=result.get("papers_processed", 0),
-            papers_with_extraction=result.get("papers_with_extraction", 0),
-            total_tokens_used=result.get("total_tokens_used", 0),
-            total_cost_usd=result.get("total_cost_usd", 0.0),
-            output_files=result.get("output_files", []),
-            errors=result.get("errors", []),
-            key_learnings=key_learnings or [],
-        )
+        # Build base summary
+        summary_data = {
+            "date": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            "topics_processed": result.get("topics_processed", 0),
+            "topics_failed": result.get("topics_failed", 0),
+            "papers_discovered": result.get("papers_discovered", 0),
+            "papers_processed": result.get("papers_processed", 0),
+            "papers_with_extraction": result.get("papers_with_extraction", 0),
+            "total_tokens_used": result.get("total_tokens_used", 0),
+            "total_cost_usd": result.get("total_cost_usd", 0.0),
+            "output_files": result.get("output_files", []),
+            "errors": result.get("errors", []),
+            "key_learnings": key_learnings or [],
+        }
+
+        # Add deduplication data if provided
+        if dedup_result is not None:
+            summary_data["new_papers_count"] = dedup_result.new_count
+            summary_data["retry_papers_count"] = dedup_result.retry_count
+            summary_data["duplicate_papers_count"] = dedup_result.duplicate_count
+            summary_data["total_papers_checked"] = dedup_result.total_checked
+            summary_data["new_paper_titles"] = dedup_result.get_new_paper_titles()
+
+        return PipelineSummary(**summary_data)

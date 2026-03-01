@@ -66,6 +66,19 @@ class ResearchPipeline:
         # Context (initialized on run)
         self._context: Optional[PipelineContext] = None
 
+    @property
+    def context(self) -> Optional[PipelineContext]:
+        """Get the pipeline context after execution.
+
+        Returns:
+            PipelineContext if pipeline has been run, None otherwise.
+
+        Note:
+            This property provides read-only access to the pipeline context
+            for post-execution operations such as notification deduplication.
+        """
+        return self._context
+
     async def run(self) -> PipelineResult:
         """Execute the complete research pipeline.
 

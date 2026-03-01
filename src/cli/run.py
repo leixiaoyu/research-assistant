@@ -195,8 +195,8 @@ async def _send_notifications(
 
         # Phase 3.8: Deduplication-aware notifications
         dedup_result: Optional[DeduplicationResult] = None
-        if pipeline is not None and hasattr(pipeline, "_context"):
-            context = pipeline._context
+        if pipeline is not None:
+            context = pipeline.context
             if context is not None:
                 # Get all discovered papers from context
                 all_papers = []

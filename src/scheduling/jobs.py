@@ -15,7 +15,7 @@ Usage:
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional
 import structlog
 
 from src.observability.context import set_correlation_id, clear_correlation_id
@@ -236,8 +236,8 @@ class DailyResearchJob(BaseJob):
 
             # Phase 3.8: Deduplication-aware notifications
             dedup_result: Optional[DeduplicationResult] = None
-            if pipeline is not None and hasattr(pipeline, "_context"):
-                context = pipeline._context
+            if pipeline is not None:
+                context = pipeline.context
                 if context is not None:
                     # Get all discovered papers from context
                     all_papers = []

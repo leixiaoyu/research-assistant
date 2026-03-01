@@ -192,8 +192,8 @@ class DailyResearchJob(BaseJob):
             errors=len(result.errors),
         )
 
-        # Phase 3.7: Send notifications (fail-safe - never breaks pipeline)
-        await self._send_notifications(result, config)
+        # Phase 3.7 + 3.8: Send notifications with deduplication (fail-safe)
+        await self._send_notifications(result, config, pipeline)
 
         return result.to_dict()
 
@@ -201,18 +201,22 @@ class DailyResearchJob(BaseJob):
         self,
         result: Any,
         config: Any,
+        pipeline: Any = None,
     ) -> None:
-        """Send pipeline notifications (Phase 3.7).
+        """Send pipeline notifications (Phase 3.7 + 3.8 deduplication).
 
         Notifications are fail-safe - errors are logged but never raised.
 
         Args:
             result: PipelineResult from pipeline execution.
             config: ResearchConfig with notification settings.
+            pipeline: ResearchPipeline instance for accessing context (Phase 3.8).
         """
         try:
             from src.services.notification_service import NotificationService
+            from src.services.notification import NotificationDeduplicator
             from src.services.report_parser import ReportParser
+            from src.models.notification import DeduplicationResult
 
             notification_settings = config.settings.notification_settings
 
@@ -230,11 +234,36 @@ class DailyResearchJob(BaseJob):
                     max_per_topic=notification_settings.slack.max_learnings_per_topic,
                 )
 
+            # Phase 3.8: Deduplication-aware notifications
+            dedup_result: Optional[DeduplicationResult] = None
+            if pipeline is not None:
+                context = pipeline.context
+                if context is not None:
+                    # Get all discovered papers from context
+                    all_papers = []
+                    for papers in context.discovered_papers.values():
+                        all_papers.extend(papers)
+
+                    # Create deduplicator with registry service
+                    registry_service = getattr(context, "registry_service", None)
+                    deduplicator = NotificationDeduplicator(registry_service)
+
+                    # Categorize papers
+                    if all_papers:
+                        dedup_result = deduplicator.categorize_papers(all_papers)
+                        logger.info(
+                            "notification_dedup_completed",
+                            new=dedup_result.new_count,
+                            duplicate=dedup_result.duplicate_count,
+                            total=dedup_result.total_checked,
+                        )
+
             # Create notification service and send
             service = NotificationService(notification_settings)
             summary = service.create_summary_from_result(
                 result=result.to_dict(),
                 key_learnings=learnings,
+                dedup_result=dedup_result,
             )
 
             notification_result = await service.send_pipeline_summary(summary)

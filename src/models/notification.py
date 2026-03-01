@@ -4,6 +4,7 @@ Provides Pydantic models for:
 - SlackConfig: Slack webhook and notification settings
 - KeyLearning: Extracted learning from a paper
 - NotificationSettings: Container for all notification providers
+- DeduplicationResult: Paper categorization for dedup-aware notifications
 
 Usage:
     from src.models.notification import NotificationSettings, SlackConfig
@@ -75,6 +76,26 @@ class SlackConfig(BaseModel):
         ge=1.0,
         le=60.0,
         description="HTTP timeout for webhook requests",
+    )
+
+    # Deduplication display options (Phase 3.8)
+    show_duplicates_count: bool = Field(
+        default=True,
+        description="Show count of duplicate papers in notification",
+    )
+    show_retry_papers: bool = Field(
+        default=True,
+        description="Show papers being retried (previously failed)",
+    )
+    max_new_papers_listed: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Maximum new paper titles to list in notification",
+    )
+    include_total_checked: bool = Field(
+        default=True,
+        description="Include total papers checked count in notification",
     )
 
     @field_validator("webhook_url", mode="before")
@@ -176,6 +197,73 @@ class NotificationResult(BaseModel):
     )
 
 
+class DeduplicationResult(BaseModel):
+    """Result of categorizing papers for notification deduplication.
+
+    Categorizes discovered papers into three groups based on registry status:
+    - new_papers: Papers not found in registry (truly new discoveries)
+    - retry_papers: Papers with FAILED/SKIPPED status (retry candidates)
+    - duplicate_papers: Papers with PROCESSED/MAPPED status (already notified)
+
+    Attributes:
+        new_papers: List of paper metadata dicts for new papers.
+        retry_papers: List of paper metadata dicts for retry candidates.
+        duplicate_papers: List of paper metadata dicts for duplicates.
+    """
+
+    new_papers: List[dict] = Field(
+        default_factory=list,
+        description="Papers not in registry (truly new)",
+    )
+    retry_papers: List[dict] = Field(
+        default_factory=list,
+        description="Papers with FAILED/SKIPPED status (retry candidates)",
+    )
+    duplicate_papers: List[dict] = Field(
+        default_factory=list,
+        description="Papers with PROCESSED/MAPPED status (already notified)",
+    )
+
+    @property
+    def new_count(self) -> int:
+        """Count of new papers."""
+        return len(self.new_papers)
+
+    @property
+    def retry_count(self) -> int:
+        """Count of retry papers."""
+        return len(self.retry_papers)
+
+    @property
+    def duplicate_count(self) -> int:
+        """Count of duplicate papers."""
+        return len(self.duplicate_papers)
+
+    @property
+    def total_checked(self) -> int:
+        """Total papers checked for deduplication."""
+        return (
+            len(self.new_papers) + len(self.retry_papers) + len(self.duplicate_papers)
+        )
+
+    def get_new_paper_titles(self, max_titles: int = 5) -> List[str]:
+        """Get titles of new papers for display.
+
+        Args:
+            max_titles: Maximum number of titles to return.
+
+        Returns:
+            List of paper titles (truncated to max_titles).
+        """
+        titles = []
+        for paper in self.new_papers[:max_titles]:
+            title = paper.get("title", "Untitled")
+            if len(title) > 80:
+                title = title[:77] + "..."
+            titles.append(title)
+        return titles
+
+
 class PipelineSummary(BaseModel):
     """Summary of pipeline execution for notifications.
 
@@ -207,6 +295,32 @@ class PipelineSummary(BaseModel):
     output_files: List[str] = Field(default_factory=list)
     errors: List[dict] = Field(default_factory=list)
     key_learnings: List[KeyLearning] = Field(default_factory=list)
+
+    # Deduplication-aware fields (Phase 3.8)
+    new_papers_count: int = Field(
+        default=0,
+        ge=0,
+        description="Count of truly new papers (not in registry)",
+    )
+    retry_papers_count: int = Field(
+        default=0,
+        ge=0,
+        description="Count of papers being retried (previously failed)",
+    )
+    duplicate_papers_count: int = Field(
+        default=0,
+        ge=0,
+        description="Count of duplicate papers (already processed)",
+    )
+    new_paper_titles: List[str] = Field(
+        default_factory=list,
+        description="Titles of new papers for display (limited)",
+    )
+    total_papers_checked: int = Field(
+        default=0,
+        ge=0,
+        description="Total papers checked for deduplication",
+    )
 
     @property
     def status(self) -> str:

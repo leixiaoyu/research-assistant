@@ -17,6 +17,7 @@ from src.models.notification import (
     NotificationSettings,
     NotificationResult,
     PipelineSummary,
+    DeduplicationResult,
 )
 
 
@@ -370,3 +371,207 @@ class TestPipelineSummary:
                 date="2025-01-23",
                 total_cost_usd=-0.5,
             )
+
+    def test_dedup_fields_default_values(self) -> None:
+        """Test new deduplication fields have correct defaults."""
+        summary = PipelineSummary(date="2025-01-23 09:00 UTC")
+
+        assert summary.new_papers_count == 0
+        assert summary.retry_papers_count == 0
+        assert summary.duplicate_papers_count == 0
+        assert summary.new_paper_titles == []
+        assert summary.total_papers_checked == 0
+
+    def test_dedup_fields_with_values(self) -> None:
+        """Test deduplication fields with explicit values."""
+        summary = PipelineSummary(
+            date="2025-01-23",
+            new_papers_count=5,
+            retry_papers_count=2,
+            duplicate_papers_count=10,
+            new_paper_titles=["Paper 1", "Paper 2", "Paper 3"],
+            total_papers_checked=17,
+        )
+
+        assert summary.new_papers_count == 5
+        assert summary.retry_papers_count == 2
+        assert summary.duplicate_papers_count == 10
+        assert len(summary.new_paper_titles) == 3
+        assert summary.total_papers_checked == 17
+
+
+class TestSlackConfigDedupOptions:
+    """Tests for SlackConfig deduplication options (Phase 3.8)."""
+
+    def test_dedup_options_default_values(self) -> None:
+        """Test deduplication options have correct defaults."""
+        config = SlackConfig()
+
+        assert config.show_duplicates_count is True
+        assert config.show_retry_papers is True
+        assert config.max_new_papers_listed == 5
+        assert config.include_total_checked is True
+
+    def test_dedup_options_custom_values(self) -> None:
+        """Test deduplication options with custom values."""
+        config = SlackConfig(
+            show_duplicates_count=False,
+            show_retry_papers=False,
+            max_new_papers_listed=10,
+            include_total_checked=False,
+        )
+
+        assert config.show_duplicates_count is False
+        assert config.show_retry_papers is False
+        assert config.max_new_papers_listed == 10
+        assert config.include_total_checked is False
+
+    def test_max_new_papers_listed_bounds(self) -> None:
+        """Test max_new_papers_listed validation."""
+        # Valid values
+        assert SlackConfig(max_new_papers_listed=1).max_new_papers_listed == 1
+        assert SlackConfig(max_new_papers_listed=20).max_new_papers_listed == 20
+
+        # Invalid values
+        with pytest.raises(ValidationError):
+            SlackConfig(max_new_papers_listed=0)
+
+        with pytest.raises(ValidationError):
+            SlackConfig(max_new_papers_listed=21)
+
+
+class TestDeduplicationResult:
+    """Tests for DeduplicationResult model (Phase 3.8)."""
+
+    def test_empty_result(self) -> None:
+        """Test DeduplicationResult with no papers."""
+        result = DeduplicationResult()
+
+        assert result.new_papers == []
+        assert result.retry_papers == []
+        assert result.duplicate_papers == []
+        assert result.new_count == 0
+        assert result.retry_count == 0
+        assert result.duplicate_count == 0
+        assert result.total_checked == 0
+
+    def test_all_new_papers(self) -> None:
+        """Test DeduplicationResult with only new papers."""
+        papers = [
+            {"title": "Paper 1", "doi": "10.1234/1"},
+            {"title": "Paper 2", "doi": "10.1234/2"},
+            {"title": "Paper 3", "doi": "10.1234/3"},
+        ]
+        result = DeduplicationResult(new_papers=papers)
+
+        assert result.new_count == 3
+        assert result.retry_count == 0
+        assert result.duplicate_count == 0
+        assert result.total_checked == 3
+
+    def test_all_duplicate_papers(self) -> None:
+        """Test DeduplicationResult with only duplicate papers."""
+        papers = [
+            {"title": "Paper 1", "doi": "10.1234/1"},
+            {"title": "Paper 2", "doi": "10.1234/2"},
+        ]
+        result = DeduplicationResult(duplicate_papers=papers)
+
+        assert result.new_count == 0
+        assert result.retry_count == 0
+        assert result.duplicate_count == 2
+        assert result.total_checked == 2
+
+    def test_all_retry_papers(self) -> None:
+        """Test DeduplicationResult with only retry papers."""
+        papers = [
+            {"title": "Paper 1", "doi": "10.1234/1"},
+        ]
+        result = DeduplicationResult(retry_papers=papers)
+
+        assert result.new_count == 0
+        assert result.retry_count == 1
+        assert result.duplicate_count == 0
+        assert result.total_checked == 1
+
+    def test_mixed_papers(self) -> None:
+        """Test DeduplicationResult with mixed paper types."""
+        result = DeduplicationResult(
+            new_papers=[
+                {"title": "New Paper 1"},
+                {"title": "New Paper 2"},
+            ],
+            retry_papers=[
+                {"title": "Retry Paper 1"},
+            ],
+            duplicate_papers=[
+                {"title": "Dup Paper 1"},
+                {"title": "Dup Paper 2"},
+                {"title": "Dup Paper 3"},
+            ],
+        )
+
+        assert result.new_count == 2
+        assert result.retry_count == 1
+        assert result.duplicate_count == 3
+        assert result.total_checked == 6
+
+    def test_get_new_paper_titles(self) -> None:
+        """Test get_new_paper_titles method."""
+        result = DeduplicationResult(
+            new_papers=[
+                {"title": "Paper 1"},
+                {"title": "Paper 2"},
+                {"title": "Paper 3"},
+            ]
+        )
+
+        titles = result.get_new_paper_titles()
+        assert len(titles) == 3
+        assert titles[0] == "Paper 1"
+        assert titles[1] == "Paper 2"
+        assert titles[2] == "Paper 3"
+
+    def test_get_new_paper_titles_with_limit(self) -> None:
+        """Test get_new_paper_titles respects max_titles limit."""
+        result = DeduplicationResult(
+            new_papers=[
+                {"title": "Paper 1"},
+                {"title": "Paper 2"},
+                {"title": "Paper 3"},
+                {"title": "Paper 4"},
+                {"title": "Paper 5"},
+            ]
+        )
+
+        titles = result.get_new_paper_titles(max_titles=2)
+        assert len(titles) == 2
+        assert titles[0] == "Paper 1"
+        assert titles[1] == "Paper 2"
+
+    def test_get_new_paper_titles_truncates_long_titles(self) -> None:
+        """Test long titles are truncated."""
+        long_title = "A" * 100  # Exceeds 80 char limit
+        result = DeduplicationResult(new_papers=[{"title": long_title}])
+
+        titles = result.get_new_paper_titles()
+        assert len(titles) == 1
+        assert len(titles[0]) == 80
+        assert titles[0].endswith("...")
+
+    def test_get_new_paper_titles_missing_title(self) -> None:
+        """Test papers without title get 'Untitled'."""
+        result = DeduplicationResult(
+            new_papers=[{"doi": "10.1234/1"}]  # No title field
+        )
+
+        titles = result.get_new_paper_titles()
+        assert len(titles) == 1
+        assert titles[0] == "Untitled"
+
+    def test_get_new_paper_titles_empty(self) -> None:
+        """Test get_new_paper_titles with no papers."""
+        result = DeduplicationResult()
+
+        titles = result.get_new_paper_titles()
+        assert titles == []

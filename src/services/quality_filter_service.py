@@ -42,6 +42,37 @@ class QualityFilterService:
         venue_scores: Mapping of venue names to quality scores
     """
 
+    # =========================================================================
+    # Scoring Constants
+    # =========================================================================
+
+    # Citation score: Uses log1p normalization. With factor of 10:
+    # 10 citations -> ~0.24, 100 -> ~0.46, 1000 -> ~0.69, 10000 -> ~0.92
+    CITATION_NORMALIZATION_FACTOR: float = 10.0
+
+    # Recency score: Half-life decay model where decay_rate determines how
+    # quickly older papers lose value. With 0.2: 5 years -> 0.5 score
+    RECENCY_DECAY_RATE: float = 0.2
+    RECENCY_MIN_SCORE: float = 0.1  # Floor score for very old papers
+
+    # Engagement score: Log normalization for HuggingFace upvotes.
+    # With factor of 7: 10 upvotes -> ~0.35, 100 -> ~0.66, 500 -> ~0.86
+    ENGAGEMENT_NORMALIZATION_FACTOR: float = 7.0
+
+    # Completeness score: Minimum abstract length to consider "complete"
+    # 50 chars filters out placeholder abstracts like "Abstract not available"
+    MIN_ABSTRACT_LENGTH: int = 50
+
+    # Default score for unknown/missing values (neutral midpoint)
+    DEFAULT_SCORE: float = 0.5
+
+    # Completeness weights for each metadata field
+    COMPLETENESS_WEIGHT_ABSTRACT: float = 0.3  # Required, higher weight
+    COMPLETENESS_WEIGHT_AUTHORS: float = 0.2  # Required
+    COMPLETENESS_WEIGHT_VENUE: float = 0.2  # Optional but valuable
+    COMPLETENESS_WEIGHT_PDF: float = 0.2  # Optional but valuable
+    COMPLETENESS_WEIGHT_DOI: float = 0.1  # Optional
+
     # Default venue scores for common venues (can be extended)
     DEFAULT_VENUE_SCORES: Dict[str, float] = {
         # Top-tier conferences (A*)
@@ -110,7 +141,7 @@ class QualityFilterService:
                         venues = data.get("venues", data)
                         for venue, info in venues.items():
                             if isinstance(info, dict):
-                                score = info.get("score", 0.5)
+                                score = info.get("score", self.DEFAULT_SCORE)
                             else:
                                 score = info
                             scores[self._normalize_venue(venue)] = score
@@ -217,7 +248,7 @@ class QualityFilterService:
         # Compute weighted average
         total_weight = weights.total_weight
         if total_weight == 0:
-            return 0.5  # Default if no weights
+            return self.DEFAULT_SCORE  # Default if no weights
 
         score = (
             weights.citation * citation_score
@@ -247,7 +278,7 @@ class QualityFilterService:
             Citation score (0.0-1.0)
         """
         citation_count = paper.citation_count or 0
-        return min(1.0, math.log1p(citation_count) / 10)
+        return min(1.0, math.log1p(citation_count) / self.CITATION_NORMALIZATION_FACTOR)
 
     def _calculate_venue_score(self, paper: PaperMetadata) -> float:
         """Venue quality score based on rankings.
@@ -259,7 +290,7 @@ class QualityFilterService:
             Venue score (0.0-1.0), default 0.5 for unknown venues
         """
         if not paper.venue:
-            return 0.5  # Default for no venue
+            return self.DEFAULT_SCORE  # Default for no venue
 
         venue_key = self._normalize_venue(paper.venue)
 
@@ -272,7 +303,7 @@ class QualityFilterService:
             if known_venue in venue_key or venue_key in known_venue:
                 return score
 
-        return 0.5  # Default for unknown venues
+        return self.DEFAULT_SCORE  # Default for unknown venues
 
     def _calculate_recency_score(self, paper: PaperMetadata) -> float:
         """Recency score with 5-year half-life decay.
@@ -291,7 +322,7 @@ class QualityFilterService:
             Recency score (0.1-1.0)
         """
         if not paper.publication_date:
-            return 0.5  # Default for unknown date
+            return self.DEFAULT_SCORE  # Default for unknown date
 
         try:
             # Parse publication date
@@ -303,18 +334,19 @@ class QualityFilterService:
                 elif len(date_str) >= 7:  # YYYY-MM or YYYY-MM-DD
                     pub_year = int(date_str[:4])
                 else:
-                    return 0.5
+                    return self.DEFAULT_SCORE
             else:
                 pub_year = paper.publication_date.year
 
             current_year = datetime.now().year
             years_old = max(0, current_year - pub_year)
 
-            # Half-life decay: score = 1 / (1 + 0.2 * years)
-            return max(0.1, 1.0 / (1 + 0.2 * years_old))
+            # Half-life decay: score = 1 / (1 + decay_rate * years)
+            decay_score = 1.0 / (1 + self.RECENCY_DECAY_RATE * years_old)
+            return max(self.RECENCY_MIN_SCORE, decay_score)
 
         except (ValueError, AttributeError):
-            return 0.5  # Default for parse errors
+            return self.DEFAULT_SCORE  # Default for parse errors
 
     def _calculate_engagement_score(self, paper: PaperMetadata) -> float:
         """Engagement score from community signals (e.g., upvotes).
@@ -335,11 +367,7 @@ class QualityFilterService:
             return 0.0
 
         # Logarithmic scaling: normalize to 0-1 range
-        # 10 upvotes -> ~0.35
-        # 50 upvotes -> ~0.56
-        # 100 upvotes -> ~0.66
-        # 500 upvotes -> ~0.86
-        return min(1.0, math.log1p(upvotes) / 7)
+        return min(1.0, math.log1p(upvotes) / self.ENGAGEMENT_NORMALIZATION_FACTOR)
 
     def _calculate_completeness_score(self, paper: PaperMetadata) -> float:
         """Metadata completeness score.
@@ -361,28 +389,28 @@ class QualityFilterService:
         checks = 0.0
 
         # Required fields (higher weight)
-        if paper.abstract and len(paper.abstract) > 50:
-            score += 0.3
-        checks += 0.3
+        if paper.abstract and len(paper.abstract) > self.MIN_ABSTRACT_LENGTH:
+            score += self.COMPLETENESS_WEIGHT_ABSTRACT
+        checks += self.COMPLETENESS_WEIGHT_ABSTRACT
 
         if paper.authors and len(paper.authors) > 0:
-            score += 0.2
-        checks += 0.2
+            score += self.COMPLETENESS_WEIGHT_AUTHORS
+        checks += self.COMPLETENESS_WEIGHT_AUTHORS
 
         # Optional but valuable fields
         if paper.venue:
-            score += 0.2
-        checks += 0.2
+            score += self.COMPLETENESS_WEIGHT_VENUE
+        checks += self.COMPLETENESS_WEIGHT_VENUE
 
         if paper.open_access_pdf or paper.pdf_available:
-            score += 0.2
-        checks += 0.2
+            score += self.COMPLETENESS_WEIGHT_PDF
+        checks += self.COMPLETENESS_WEIGHT_PDF
 
         if paper.doi:
-            score += 0.1
-        checks += 0.1
+            score += self.COMPLETENESS_WEIGHT_DOI
+        checks += self.COMPLETENESS_WEIGHT_DOI
 
-        return score / checks if checks > 0 else 0.5
+        return score / checks if checks > 0 else self.DEFAULT_SCORE
 
     def _calculate_author_score(self, paper: PaperMetadata) -> float:
         """Author reputation score.
@@ -399,7 +427,7 @@ class QualityFilterService:
         # Author h-index not typically available from APIs
         # Would need additional author lookup service
         # For now, return default
-        return 0.5
+        return self.DEFAULT_SCORE
 
     def _normalize_venue(self, venue: str) -> str:
         """Normalize venue name for matching.

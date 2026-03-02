@@ -19,10 +19,14 @@ Usage:
 
 from enum import Enum
 from typing import List, Optional, TYPE_CHECKING
-from pydantic import BaseModel, Field, ConfigDict, computed_field
+from pydantic import BaseModel, Field, ConfigDict, computed_field, model_validator
+
+import structlog
 
 if TYPE_CHECKING:
     from src.models.paper import PaperMetadata
+
+logger = structlog.get_logger()
 
 
 class QueryFocus(str, Enum):
@@ -112,6 +116,23 @@ class QualityWeights(BaseModel):
             + self.completeness
             + self.author
         )
+
+    @model_validator(mode="after")
+    def validate_weights_sum(self) -> "QualityWeights":
+        """Validate that weights sum to approximately 1.0.
+
+        Logs a warning if weights are significantly off from 1.0,
+        which could lead to inconsistent scoring.
+        """
+        total = self.total_weight
+        if not (0.99 <= total <= 1.01):
+            logger.warning(
+                "quality_weights_not_normalized",
+                total_weight=total,
+                expected=1.0,
+                message="Weights do not sum to 1.0, scoring may be inconsistent",
+            )
+        return self
 
 
 class ScoredPaper(BaseModel):

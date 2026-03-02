@@ -1,8 +1,8 @@
-"""Discovery service with multi-provider intelligence (Phase 3.2 & 3.4)."""
+"""Discovery service with multi-provider intelligence (Phase 3.2, 3.4 & 6)."""
 
 import asyncio
 import time
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, TYPE_CHECKING
 import structlog
 
 from src.services.providers.base import DiscoveryProvider, APIError
@@ -14,11 +14,17 @@ from src.models.config import (
     ProviderType,
     ProviderSelectionConfig,
     PDFStrategy,
+    EnhancedDiscoveryConfig,
 )
 from src.models.paper import PaperMetadata
 from src.models.provider import ProviderMetrics, ProviderComparison
+from src.models.discovery import DiscoveryResult
 from src.utils.provider_selector import ProviderSelector
 from src.services.quality_scorer import QualityScorer
+
+# Phase 6: Enhanced Discovery Pipeline imports
+if TYPE_CHECKING:
+    from src.services.llm import LLMService
 
 logger = structlog.get_logger()
 
@@ -578,3 +584,90 @@ class DiscoveryService:
             fastest_provider=fastest,
             most_results_provider=most_results,
         )
+
+    # =========================================================================
+    # Phase 6: Enhanced Discovery Pipeline Integration
+    # =========================================================================
+
+    async def enhanced_search(
+        self,
+        topic: ResearchTopic,
+        llm_service: Optional["LLMService"] = None,
+        config: Optional[EnhancedDiscoveryConfig] = None,
+    ) -> DiscoveryResult:
+        """Search using the Phase 6 enhanced discovery pipeline.
+
+        This method implements the 4-stage discovery enhancement:
+        1. Query Decomposition: Break broad queries into focused sub-queries
+        2. Multi-Source Retrieval: Query multiple providers with smart routing
+        3. Quality Filtering: Score papers on multiple quality signals
+        4. Relevance Ranking: LLM-based semantic relevance scoring
+
+        Args:
+            topic: Research topic with query and settings.
+            llm_service: Optional LLM service for query decomposition and
+                relevance ranking. If not provided, these stages are skipped.
+            config: Optional enhanced discovery configuration.
+
+        Returns:
+            DiscoveryResult with scored and ranked papers, metrics, and queries.
+
+        Note:
+            If llm_service is not provided, the pipeline runs in degraded mode:
+            - Query decomposition returns only the original query
+            - Relevance ranking uses quality score only
+        """
+        # Import here to avoid circular dependencies
+        from src.services.enhanced_discovery_service import EnhancedDiscoveryService
+        from src.services.query_decomposer import QueryDecomposer
+        from src.services.quality_filter_service import QualityFilterService
+        from src.services.relevance_ranker import RelevanceRanker
+
+        effective_config = config or EnhancedDiscoveryConfig()  # type: ignore[call-arg]
+
+        # Create Phase 6 components
+        query_decomposer = QueryDecomposer(
+            llm_service=llm_service,
+            enable_cache=True,
+        )
+
+        quality_filter = QualityFilterService(
+            min_citations=0,
+            min_quality_score=effective_config.min_quality_score,
+        )
+
+        relevance_ranker = RelevanceRanker(
+            llm_service=llm_service,
+            min_relevance_score=effective_config.min_relevance_score,
+            batch_size=10,
+            enable_cache=True,
+        )
+
+        # Create enhanced discovery service
+        enhanced_service = EnhancedDiscoveryService(
+            providers=self.providers,
+            query_decomposer=query_decomposer,
+            quality_filter=quality_filter,
+            relevance_ranker=relevance_ranker,
+            config=effective_config,
+        )
+
+        logger.info(
+            "enhanced_search_starting",
+            query=topic.query[:50],
+            providers=list(self.providers.keys()),
+            llm_enabled=llm_service is not None,
+        )
+
+        # Run enhanced discovery
+        result = await enhanced_service.discover(topic)
+
+        logger.info(
+            "enhanced_search_completed",
+            query=topic.query[:50],
+            papers_found=result.paper_count,
+            avg_quality=result.metrics.avg_quality_score,
+            avg_relevance=result.metrics.avg_relevance_score,
+        )
+
+        return result

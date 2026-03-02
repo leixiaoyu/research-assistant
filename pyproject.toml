@@ -84,7 +84,7 @@ omit = [
 precision = 2
 show_missing = true
 skip_covered = false
-fail_under = 98.5  # Minimum combined (line + branch) coverage required
+fail_under = 99  # Minimum combined (line + branch) coverage required
 # Exclude common patterns that don't need coverage
 exclude_lines = [
     "pragma: no cover",

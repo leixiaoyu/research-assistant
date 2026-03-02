@@ -98,9 +98,9 @@ fi
 
 echo "   ✓ Pragma audit passed"
 
-echo "🧪 Running Tests with Coverage (>=98.5% required, branch coverage enabled)..."
+echo "🧪 Running Tests with Coverage (>=99% required, branch coverage enabled)..."
 # Use absolute path for coverage to ensure consistency
 # Note: branch coverage is now enabled in pyproject.toml
-$PYTHON_CMD -m pytest --cov=src --cov-branch --cov-report=term-missing --cov-fail-under=98.5 tests/
+$PYTHON_CMD -m pytest --cov=src --cov-branch --cov-report=term-missing --cov-fail-under=99 tests/
 
 echo "✅ All checks passed!"

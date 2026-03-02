@@ -15,6 +15,7 @@ Usage:
 import asyncio
 import json
 import re
+from collections import OrderedDict
 from typing import List, Optional, TYPE_CHECKING
 
 import structlog
@@ -57,12 +58,18 @@ class RelevanceRanker:
         batch_size: Papers per LLM request (default: 10)
     """
 
+    # Default maximum cache entries to prevent unbounded memory growth
+    DEFAULT_MAX_CACHE_SIZE: int = 5000
+    # Default maximum concurrent LLM batches to prevent rate limiting
+    DEFAULT_MAX_CONCURRENT_BATCHES: int = 3
+
     def __init__(
         self,
         llm_service: Optional["LLMService"] = None,
         min_relevance_score: float = 0.5,
         batch_size: int = 10,
         enable_cache: bool = True,
+        max_cache_size: int = DEFAULT_MAX_CACHE_SIZE,
     ) -> None:
         """Initialize RelevanceRanker.
 
@@ -72,12 +79,14 @@ class RelevanceRanker:
             min_relevance_score: Minimum relevance score (0.0-1.0)
             batch_size: Number of papers per LLM batch
             enable_cache: Enable caching of relevance scores
+            max_cache_size: Maximum cache entries (LRU eviction when exceeded)
         """
         self._llm_service = llm_service
         self.min_relevance_score = min_relevance_score
         self.batch_size = batch_size
-        self._cache: dict[str, float] = {} if enable_cache else {}
+        self._cache: OrderedDict[str, float] = OrderedDict()
         self._cache_enabled = enable_cache
+        self._max_cache_size = max_cache_size
 
     @property
     def llm_service(self) -> Optional["LLMService"]:
@@ -203,7 +212,7 @@ class RelevanceRanker:
         )
 
         # Process batches concurrently with semaphore
-        semaphore = asyncio.Semaphore(3)  # Max 3 concurrent batches
+        semaphore = asyncio.Semaphore(self.DEFAULT_MAX_CONCURRENT_BATCHES)
         scored_papers: List[ScoredPaper] = []
 
         async def process_batch(batch: List[ScoredPaper]) -> List[ScoredPaper]:
@@ -245,6 +254,8 @@ class RelevanceRanker:
         for paper in papers:
             cache_key = self._get_cache_key(paper.paper_id, query)
             if self._cache_enabled and cache_key in self._cache:
+                # Move to end for LRU ordering
+                self._cache.move_to_end(cache_key)
                 cached_scores[paper.paper_id] = self._cache[cache_key]
             else:
                 uncached_papers.append(paper)
@@ -290,9 +301,8 @@ class RelevanceRanker:
         result_scores = dict(cached_scores)
         for paper, score in zip(uncached_papers, scores):
             result_scores[paper.paper_id] = score
-            if self._cache_enabled:
-                cache_key = self._get_cache_key(paper.paper_id, query)
-                self._cache[cache_key] = score
+            cache_key = self._get_cache_key(paper.paper_id, query)
+            self._cache_put(cache_key, score)
 
         return self._apply_scores(papers, result_scores)
 
@@ -416,6 +426,31 @@ class RelevanceRanker:
         # Normalize query for caching
         normalized_query = query.lower().strip()[:100]
         return f"{paper_id}:{normalized_query}"
+
+    def _cache_put(self, key: str, value: float) -> None:
+        """Add item to cache with LRU eviction.
+
+        Args:
+            key: Cache key
+            value: Relevance score to cache
+        """
+        if not self._cache_enabled:
+            return
+
+        # If key exists, update and move to end
+        if key in self._cache:
+            self._cache[key] = value
+            self._cache.move_to_end(key)
+            return
+
+        # Evict oldest entries if at capacity
+        while len(self._cache) >= self._max_cache_size:
+            evicted_key = next(iter(self._cache))
+            del self._cache[evicted_key]
+            logger.debug("relevance_ranker_cache_evicted", key=evicted_key[:30])
+
+        # Add new entry
+        self._cache[key] = value
 
     def clear_cache(self) -> None:
         """Clear the relevance score cache."""

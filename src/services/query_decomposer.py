@@ -14,6 +14,7 @@ Usage:
 
 import json
 import re
+from collections import OrderedDict
 from typing import List, Optional, TYPE_CHECKING
 
 import structlog
@@ -64,13 +65,17 @@ class QueryDecomposer:
 
     Attributes:
         llm_service: LLM service for query generation
-        cache: Simple cache for decomposed queries
+        cache: Bounded LRU cache for decomposed queries
     """
+
+    # Default maximum cache entries to prevent unbounded memory growth
+    DEFAULT_MAX_CACHE_SIZE: int = 1000
 
     def __init__(
         self,
         llm_service: Optional["LLMService"] = None,
         enable_cache: bool = True,
+        max_cache_size: int = DEFAULT_MAX_CACHE_SIZE,
     ) -> None:
         """Initialize QueryDecomposer.
 
@@ -78,10 +83,12 @@ class QueryDecomposer:
             llm_service: LLM service for decomposition. If None, decomposition
                 is disabled and only the original query is returned.
             enable_cache: Enable caching of decomposed queries
+            max_cache_size: Maximum cache entries (LRU eviction when exceeded)
         """
         self._llm_service = llm_service
-        self._cache: dict[str, List[DecomposedQuery]] = {} if enable_cache else {}
+        self._cache: OrderedDict[str, List[DecomposedQuery]] = OrderedDict()
         self._cache_enabled = enable_cache
+        self._max_cache_size = max_cache_size
 
     @property
     def llm_service(self) -> Optional["LLMService"]:
@@ -116,9 +123,11 @@ class QueryDecomposer:
         query = query.strip()
         cache_key = f"{query}:{max_subqueries}:{include_original}"
 
-        # Check cache
+        # Check cache (with LRU update)
         if self._cache_enabled and cache_key in self._cache:
             logger.debug("query_decomposer_cache_hit", query=query[:50])
+            # Move to end for LRU ordering
+            self._cache.move_to_end(cache_key)
             return self._cache[cache_key]
 
         # If no LLM service, return original query only
@@ -135,8 +144,7 @@ class QueryDecomposer:
                     weight=1.0,
                 )
             ]
-            if self._cache_enabled:
-                self._cache[cache_key] = result
+            self._cache_put(cache_key, result)
             return result
 
         logger.info(
@@ -164,8 +172,7 @@ class QueryDecomposer:
             result.extend(subqueries)
 
             # Cache result
-            if self._cache_enabled:
-                self._cache[cache_key] = result
+            self._cache_put(cache_key, result)
 
             logger.info(
                 "query_decomposer_completed",
@@ -190,8 +197,7 @@ class QueryDecomposer:
                     weight=1.0,
                 )
             ]
-            if self._cache_enabled:
-                self._cache[cache_key] = result
+            self._cache_put(cache_key, result)
             return result
 
     async def _generate_subqueries(
@@ -319,6 +325,31 @@ class QueryDecomposer:
         }
 
         return focus_map.get(focus_str, QueryFocus.RELATED)
+
+    def _cache_put(self, key: str, value: List[DecomposedQuery]) -> None:
+        """Add item to cache with LRU eviction.
+
+        Args:
+            key: Cache key
+            value: Value to cache
+        """
+        if not self._cache_enabled:
+            return
+
+        # If key exists, update and move to end
+        if key in self._cache:
+            self._cache[key] = value
+            self._cache.move_to_end(key)
+            return
+
+        # Evict oldest entries if at capacity
+        while len(self._cache) >= self._max_cache_size:
+            evicted_key = next(iter(self._cache))
+            del self._cache[evicted_key]
+            logger.debug("query_decomposer_cache_evicted", key=evicted_key[:30])
+
+        # Add new entry
+        self._cache[key] = value
 
     def clear_cache(self) -> None:
         """Clear the decomposition cache."""

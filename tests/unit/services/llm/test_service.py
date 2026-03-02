@@ -320,6 +320,135 @@ class TestLLMServiceExtraction:
                 )
 
 
+class TestLLMServiceComplete:
+    """Tests for LLMService.complete() method."""
+
+    @pytest.mark.asyncio
+    async def test_complete_success(
+        self, llm_config: LLMConfig, cost_limits: CostLimits
+    ) -> None:
+        """Test successful completion."""
+        from src.services.llm.providers.base import LLMResponse
+
+        service = LLMService(config=llm_config, cost_limits=cost_limits)
+
+        mock_response = LLMResponse(
+            content="Generated response text",
+            input_tokens=50,
+            output_tokens=20,
+            model="claude-3-5-sonnet",
+            provider="anthropic",
+            latency_ms=100.0,
+        )
+
+        provider = service._providers["anthropic"]
+        provider.generate = AsyncMock(return_value=mock_response)
+
+        response = await service.complete(
+            prompt="What is machine learning?",
+            system_prompt="You are a helpful assistant.",
+            temperature=0.3,
+            max_tokens=500,
+        )
+
+        assert response.content == "Generated response text"
+        assert response.input_tokens == 50
+        assert response.output_tokens == 20
+        provider.generate.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_complete_with_defaults(
+        self, llm_config: LLMConfig, cost_limits: CostLimits
+    ) -> None:
+        """Test completion with default parameters."""
+        from src.services.llm.providers.base import LLMResponse
+
+        service = LLMService(config=llm_config, cost_limits=cost_limits)
+
+        mock_response = LLMResponse(
+            content="Response",
+            input_tokens=10,
+            output_tokens=5,
+            model="claude-3-5-sonnet",
+            provider="anthropic",
+            latency_ms=50.0,
+        )
+
+        provider = service._providers["anthropic"]
+        provider.generate = AsyncMock(return_value=mock_response)
+
+        response = await service.complete(prompt="Hello")
+
+        assert response.content == "Response"
+        # Should use config defaults
+        call_kwargs = provider.generate.call_args.kwargs
+        assert call_kwargs["temperature"] == llm_config.temperature
+        assert call_kwargs["max_tokens"] == llm_config.max_tokens
+
+    @pytest.mark.asyncio
+    async def test_complete_fallback_on_primary_failure(
+        self, cost_limits: CostLimits
+    ) -> None:
+        """Test fallback when primary provider fails."""
+        from src.models.llm import FallbackProviderConfig
+        from src.services.llm.providers.base import LLMResponse
+        from src.utils.exceptions import LLMAPIError
+
+        config = LLMConfig(
+            provider="anthropic",
+            api_key="test-key",
+            model="claude-3-5-sonnet",
+            max_tokens=4096,
+            temperature=0.0,
+            retry=RetryConfig(),
+            circuit_breaker=CircuitBreakerConfig(enabled=False),
+            fallback=FallbackProviderConfig(
+                enabled=True,
+                provider="google",
+                model="gemini-1.5-pro",
+                api_key="test-google-key",
+            ),
+        )
+
+        service = LLMService(config=config, cost_limits=cost_limits)
+
+        # Primary fails
+        primary_provider = service._providers["anthropic"]
+        primary_provider.generate = AsyncMock(side_effect=LLMAPIError("Primary failed"))
+
+        # Fallback succeeds
+        fallback_response = LLMResponse(
+            content="Fallback response",
+            input_tokens=10,
+            output_tokens=5,
+            model="gemini-1.5-pro",
+            provider="google",
+            latency_ms=50.0,
+        )
+        fallback_provider = service._providers["google"]
+        fallback_provider.generate = AsyncMock(return_value=fallback_response)
+
+        response = await service.complete(prompt="Test prompt")
+
+        assert response.content == "Fallback response"
+        assert service.usage_stats.total_fallback_activations == 1
+
+    @pytest.mark.asyncio
+    async def test_complete_all_providers_failed(
+        self, llm_config: LLMConfig, cost_limits: CostLimits
+    ) -> None:
+        """Test error when all providers fail."""
+        from src.utils.exceptions import LLMAPIError, AllProvidersFailedError
+
+        service = LLMService(config=llm_config, cost_limits=cost_limits)
+
+        provider = service._providers["anthropic"]
+        provider.generate = AsyncMock(side_effect=LLMAPIError("Provider failed"))
+
+        with pytest.raises(AllProvidersFailedError):
+            await service.complete(prompt="Test prompt")
+
+
 class TestLLMServiceFallbackInit:
     """Tests for fallback provider initialization edge cases."""
 

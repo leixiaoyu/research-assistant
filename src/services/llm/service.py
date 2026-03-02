@@ -313,6 +313,156 @@ class LLMService:
             "All LLM providers failed", provider_errors=provider_errors
         )
 
+    async def complete(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> LLMResponse:
+        """Generate text completion for a prompt.
+
+        This is a simpler interface than extract() for general text generation
+        tasks like query decomposition, relevance scoring, etc.
+
+        Args:
+            prompt: The user prompt to complete
+            system_prompt: Optional system prompt for context
+            temperature: Temperature for generation (default: config value)
+            max_tokens: Maximum tokens to generate (default: config value)
+
+        Returns:
+            LLMResponse with generated content
+
+        Raises:
+            LLMAPIError: If the API call fails
+            AllProvidersFailedError: If all providers fail
+        """
+        # Check cost limits before calling
+        self._check_cost_limits()
+
+        # Use config defaults if not specified
+        effective_temperature = (
+            temperature if temperature is not None else self.config.temperature
+        )
+        effective_max_tokens = max_tokens or self.config.max_tokens
+
+        # Build full prompt with system prompt if provided
+        full_prompt = prompt
+        if system_prompt:
+            full_prompt = f"System: {system_prompt}\n\nUser: {prompt}"
+
+        logger.debug(
+            "llm_complete_started",
+            provider=self.config.provider,
+            prompt_length=len(prompt),
+            max_tokens=effective_max_tokens,
+        )
+
+        provider_errors: Dict[str, str] = {}
+
+        # Try primary provider
+        try:
+            return await self._complete_with_provider(
+                provider_name=self.config.provider,
+                prompt=full_prompt,
+                temperature=effective_temperature,
+                max_tokens=effective_max_tokens,
+            )
+        except (LLMAPIError, LLMProviderError) as e:
+            provider_errors[self.config.provider] = str(e)
+            logger.warning(
+                "complete_primary_provider_failed",
+                provider=self.config.provider,
+                error=str(e),
+            )
+
+        # Try fallback provider if configured
+        if self.fallback_provider and self.fallback_provider in self._providers:
+            logger.info(
+                "complete_attempting_fallback",
+                fallback_provider=self.fallback_provider,
+            )
+            self.usage_stats.total_fallback_activations += 1
+            self._cost_tracker.record_fallback()
+
+            try:
+                return await self._complete_with_provider(
+                    provider_name=self.fallback_provider,
+                    prompt=full_prompt,
+                    temperature=effective_temperature,
+                    max_tokens=effective_max_tokens,
+                )
+            except (LLMAPIError, LLMProviderError) as e:
+                provider_errors[self.fallback_provider] = str(e)
+                logger.warning(
+                    "complete_fallback_provider_failed",
+                    provider=self.fallback_provider,
+                    error=str(e),
+                )
+
+        # All providers failed
+        raise AllProvidersFailedError(
+            "All LLM providers failed for completion", provider_errors=provider_errors
+        )
+
+    async def _complete_with_provider(
+        self,
+        provider_name: str,
+        prompt: str,
+        temperature: float,
+        max_tokens: int,
+    ) -> LLMResponse:
+        """Complete using a specific provider.
+
+        Args:
+            provider_name: Name of provider to use
+            prompt: Full prompt to complete
+            temperature: Generation temperature
+            max_tokens: Maximum tokens to generate
+
+        Returns:
+            LLMResponse with generated content
+        """
+        provider = self._providers[provider_name]
+        health = self._provider_health.get(provider_name)
+
+        # Check circuit breaker
+        if health and hasattr(health, "circuit_breaker") and health.circuit_breaker:
+            health.circuit_breaker.check_or_raise()
+
+        try:
+            response = await provider.generate(
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+
+            # Record success in circuit breaker
+            if health and hasattr(health, "circuit_breaker") and health.circuit_breaker:
+                health.circuit_breaker.record_success()
+
+            # Update usage stats
+            total_tokens = response.input_tokens + response.output_tokens
+            self.usage_stats.total_tokens += total_tokens
+
+            logger.debug(
+                "llm_complete_success",
+                provider=provider_name,
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
+                total_tokens=total_tokens,
+            )
+
+            return response
+
+        except Exception as e:
+            # Record failure in circuit breaker
+            if health and hasattr(health, "circuit_breaker") and health.circuit_breaker:
+                health.circuit_breaker.record_failure()
+
+            raise LLMAPIError(f"Provider {provider_name} failed: {e}") from e
+
     async def _extract_with_provider(
         self,
         provider_name: str,

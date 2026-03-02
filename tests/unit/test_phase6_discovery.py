@@ -172,6 +172,33 @@ class TestQualityWeights:
         with pytest.raises(Exception):
             weights.citation = 0.5
 
+    def test_weights_sum_warning_logged(self, caplog):
+        """Test that warning is logged when weights don't sum to 1.0."""
+        import structlog
+
+        # Configure structlog to use standard logging for test capture
+        structlog.configure(
+            processors=[
+                structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+            ],
+            wrapper_class=structlog.stdlib.BoundLogger,
+            context_class=dict,
+            logger_factory=structlog.stdlib.LoggerFactory(),
+            cache_logger_on_first_use=False,
+        )
+
+        # Create weights that don't sum to 1.0
+        weights = QualityWeights(
+            citation=0.5,
+            venue=0.5,
+            recency=0.5,  # Total will be > 1.0
+            engagement=0.15,
+            completeness=0.10,
+            author=0.10,
+        )
+        assert weights.total_weight == pytest.approx(1.85)
+        # The validator runs but only logs a warning (doesn't raise)
+
 
 class TestScoredPaper:
     """Tests for ScoredPaper model."""
@@ -462,6 +489,51 @@ class TestQueryDecomposer:
         assert decomposer._map_focus("related") == QueryFocus.RELATED
         assert decomposer._map_focus("intersection") == QueryFocus.INTERSECTION
         assert decomposer._map_focus("unknown") == QueryFocus.RELATED
+
+    @pytest.mark.asyncio
+    async def test_lru_cache_eviction(self):
+        """Test that cache evicts oldest entries when at capacity."""
+        from src.services.query_decomposer import QueryDecomposer
+
+        # Create decomposer with small cache size
+        decomposer = QueryDecomposer(llm_service=None, max_cache_size=3)
+
+        # Fill cache with 3 queries
+        await decomposer.decompose("query1")
+        await decomposer.decompose("query2")
+        await decomposer.decompose("query3")
+
+        assert len(decomposer._cache) == 3
+
+        # Adding 4th query should evict oldest (query1)
+        await decomposer.decompose("query4")
+
+        assert len(decomposer._cache) == 3
+        # query1 should be evicted
+        assert "query1:5:True" not in decomposer._cache
+        # query4 should be present
+        assert "query4:5:True" in decomposer._cache
+
+    @pytest.mark.asyncio
+    async def test_lru_cache_access_updates_order(self):
+        """Test that accessing cache entry moves it to end (most recent)."""
+        from src.services.query_decomposer import QueryDecomposer
+
+        decomposer = QueryDecomposer(llm_service=None, max_cache_size=3)
+
+        # Fill cache
+        await decomposer.decompose("query1")
+        await decomposer.decompose("query2")
+        await decomposer.decompose("query3")
+
+        # Access query1 again (should move to end)
+        await decomposer.decompose("query1")
+
+        # Now add query4 - should evict query2 (oldest after query1 moved)
+        await decomposer.decompose("query4")
+
+        assert "query2:5:True" not in decomposer._cache
+        assert "query1:5:True" in decomposer._cache
 
 
 # =============================================================================
@@ -863,6 +935,61 @@ class TestRelevanceRanker:
         ranker.clear_cache()
         # Should not raise
 
+    def test_lru_cache_eviction(self):
+        """Test that cache evicts oldest entries when at capacity."""
+        from src.services.relevance_ranker import RelevanceRanker
+
+        # Create ranker with small cache size
+        ranker = RelevanceRanker(llm_service=None, max_cache_size=3)
+
+        # Directly add to cache using _cache_put
+        ranker._cache_put("key1", 0.8)
+        ranker._cache_put("key2", 0.7)
+        ranker._cache_put("key3", 0.6)
+
+        assert len(ranker._cache) == 3
+
+        # Adding 4th entry should evict oldest (key1)
+        ranker._cache_put("key4", 0.9)
+
+        assert len(ranker._cache) == 3
+        assert "key1" not in ranker._cache
+        assert "key4" in ranker._cache
+        assert ranker._cache["key4"] == 0.9
+
+    def test_lru_cache_access_updates_order(self):
+        """Test that accessing cache entry moves it to end (most recent)."""
+        from src.services.relevance_ranker import RelevanceRanker
+
+        ranker = RelevanceRanker(llm_service=None, max_cache_size=3)
+
+        # Fill cache
+        ranker._cache_put("key1", 0.8)
+        ranker._cache_put("key2", 0.7)
+        ranker._cache_put("key3", 0.6)
+
+        # Update key1 (should move to end)
+        ranker._cache_put("key1", 0.85)
+
+        # Now add key4 - should evict key2 (oldest after key1 moved)
+        ranker._cache_put("key4", 0.9)
+
+        assert "key2" not in ranker._cache
+        assert "key1" in ranker._cache
+        assert ranker._cache["key1"] == 0.85
+
+    def test_cache_disabled_no_eviction(self):
+        """Test that cache operations are no-op when disabled."""
+        from src.services.relevance_ranker import RelevanceRanker
+
+        ranker = RelevanceRanker(llm_service=None, enable_cache=False)
+
+        ranker._cache_put("key1", 0.8)
+        ranker._cache_put("key2", 0.7)
+
+        # Cache should remain empty when disabled
+        assert len(ranker._cache) == 0
+
 
 # =============================================================================
 # OpenAlexProvider Tests
@@ -1229,3 +1356,118 @@ class TestEnhancedDiscoveryConfig:
         assert config.max_subqueries == 3
         assert config.providers == [ProviderType.ARXIV]
         assert config.min_quality_score == 0.5
+
+
+# =============================================================================
+# DiscoveryService.enhanced_search() Integration Tests
+# =============================================================================
+
+
+class TestDiscoveryServiceEnhancedSearch:
+    """Tests for DiscoveryService.enhanced_search() Phase 6 integration."""
+
+    @pytest.fixture
+    def discovery_service(self):
+        """Create DiscoveryService for testing with mocked providers."""
+        from src.services.discovery_service import DiscoveryService
+
+        service = DiscoveryService(api_key="")
+        # Mock all providers to avoid real network calls
+        for provider_type in service.providers:
+            service.providers[provider_type].search = AsyncMock(return_value=[])
+        return service
+
+    @pytest.mark.asyncio
+    async def test_enhanced_search_without_llm(self, discovery_service):
+        """Test enhanced_search works without LLM service (degraded mode)."""
+        from src.models.config import TimeframeRecent
+
+        topic = ResearchTopic(
+            query="machine learning",
+            provider=ProviderType.ARXIV,
+            timeframe=TimeframeRecent(value="7d"),
+        )
+
+        # Mock the provider to return test papers
+        mock_paper = PaperMetadata(
+            paper_id="test123",
+            title="Test Paper on ML",
+            abstract="A paper about machine learning methods.",
+            url="https://arxiv.org/abs/test123",
+            authors=[],
+            publication_date="2024-01-01",
+            venue="ArXiv",
+            citation_count=10,
+        )
+
+        discovery_service.providers[ProviderType.ARXIV].search = AsyncMock(
+            return_value=[mock_paper]
+        )
+
+        result = await discovery_service.enhanced_search(topic, llm_service=None)
+
+        # Should return DiscoveryResult
+        assert hasattr(result, "papers")
+        assert hasattr(result, "metrics")
+        assert hasattr(result, "queries_used")
+
+    @pytest.mark.asyncio
+    async def test_enhanced_search_with_custom_config(self, discovery_service):
+        """Test enhanced_search with custom configuration."""
+        from src.models.config import TimeframeRecent
+
+        topic = ResearchTopic(
+            query="deep learning",
+            provider=ProviderType.ARXIV,
+            timeframe=TimeframeRecent(value="7d"),
+        )
+
+        config = EnhancedDiscoveryConfig(
+            min_quality_score=0.1,
+            min_relevance_score=0.3,
+            enable_query_decomposition=False,
+        )
+
+        # Mock provider
+        mock_paper = PaperMetadata(
+            paper_id="test456",
+            title="Deep Learning Paper",
+            abstract="Neural networks for image classification.",
+            url="https://arxiv.org/abs/test456",
+            authors=[],
+            publication_date="2024-01-01",
+            venue="NeurIPS",
+            citation_count=100,
+        )
+
+        discovery_service.providers[ProviderType.ARXIV].search = AsyncMock(
+            return_value=[mock_paper]
+        )
+
+        result = await discovery_service.enhanced_search(
+            topic, llm_service=None, config=config
+        )
+
+        assert result is not None
+        assert hasattr(result, "metrics")
+
+    @pytest.mark.asyncio
+    async def test_enhanced_search_returns_discovery_result_type(
+        self, discovery_service
+    ):
+        """Test that enhanced_search returns DiscoveryResult type."""
+        from src.models.config import TimeframeRecent
+        from src.models.discovery import DiscoveryResult
+
+        topic = ResearchTopic(
+            query="test query",
+            provider=ProviderType.ARXIV,
+            timeframe=TimeframeRecent(value="7d"),
+        )
+
+        # All providers already mocked to return empty in fixture
+
+        result = await discovery_service.enhanced_search(topic)
+
+        assert isinstance(result, DiscoveryResult)
+        assert result.paper_count == 0

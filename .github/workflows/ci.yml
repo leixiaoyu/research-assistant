@@ -25,6 +25,12 @@ jobs:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
     
+    - name: Install system dependencies
+      run: |
+        # Required for building Pillow from source (no pre-built wheels for Python 3.14 yet)
+        sudo apt-get update
+        sudo apt-get install -y libjpeg-dev zlib1g-dev libpng-dev libfreetype6-dev
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip

@@ -73,6 +73,7 @@ addopts = [
 
 [tool.coverage.run]
 source = ["src"]
+branch = true  # Enable branch coverage measurement
 omit = [
     "*/tests/*",
     "*/__pycache__/*",
@@ -83,7 +84,16 @@ omit = [
 precision = 2
 show_missing = true
 skip_covered = false
-fail_under = 95
+fail_under = 99  # Minimum combined (line + branch) coverage required
+# Exclude common patterns that don't need coverage
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
 
 [tool.bandit]
 exclude_dirs = ["tests", "venv"]

@@ -118,7 +118,8 @@ def calculate_title_similarity(title1: str, title2: str) -> float:
     intersection = len(trigrams1 & trigrams2)
     union = len(trigrams1 | trigrams2)
 
-    if union == 0:
+    if union == 0:  # pragma: no cover
+        # Defensive: mathematically unreachable since get_trigrams always returns non-empty set
         return 0.0
 
     return intersection / union

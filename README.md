@@ -2,7 +2,7 @@
 
 > Automate the discovery, extraction, and synthesis of cutting-edge AI research papers with intelligent LLM-powered analysis.
 
-[![Python 3.10.19](https://img.shields.io/badge/python-3.10.19-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.14](https://img.shields.io/badge/python-3.14-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Security: High](https://img.shields.io/badge/security-high-green.svg)](docs/security/)
 [![Test Coverage: 99%](https://img.shields.io/badge/coverage-99%25-brightgreen.svg)](tests/)
@@ -59,7 +59,7 @@ ARISP automates the research process by:
 ### Prerequisites
 
 **Required:**
-- Python 3.10+
+- Python 3.14+
 - LLM API key (Anthropic or Google) - for Phase 2 extraction
 
 **Optional:**
@@ -72,8 +72,8 @@ ARISP automates the research process by:
 git clone https://github.com/leixiaoyu/research-assistant.git
 cd research-assistant
 
-# Create virtual environment (requires Python 3.10+)
-python3.10 -m venv venv
+# Create virtual environment (requires Python 3.14+)
+python3.14 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
@@ -231,7 +231,7 @@ output/
 ### Core Technologies
 | Category | Technology | Purpose |
 |----------|-----------|---------|
-| Language | Python 3.10+ | Rich ecosystem, async support |
+| Language | Python 3.14+ | Rich ecosystem, async support, free-threading |
 | Data Models | Pydantic V2 | Runtime validation, type safety |
 | Discovery | **ArXiv API** (default) | **No API key required** |
 | Discovery | Semantic Scholar API (optional) | Comprehensive coverage |
@@ -262,7 +262,7 @@ output/
 - ✅ **Memory Usage**: <100MB idle
 - ✅ **LLM Cost**: ~$0.005 per paper (abstract-only mode)
 - ✅ **Rate Limiting**: ArXiv-compliant (3s minimum delay)
-- ✅ **Environment**: Python 3.10+ (CI/CD enforced)
+- ✅ **Environment**: Python 3.14+ (CI/CD enforced)
 
 ## 🔒 Security
 

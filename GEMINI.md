@@ -215,9 +215,9 @@ The instruction "clean up workspace/repo" does NOT authorize worktree removal.
 
 ### PR Requirements (Non-Negotiable)
 Before a Pull Request can be merged into `main`:
-1. **CI Status:** The "test (3.10)" workflow must pass with **100% success rate**.
+1. **CI Status:** The "test (3.14)" workflow must pass with **100% success rate**.
 2. **Linting & Types:** **Flake8**, **Black** (formatting), and **Mypy** (static analysis) must pass with zero issues.
-3. **Coverage:** The "test (3.10)" workflow must verify **≥99% test coverage per module**.
+3. **Coverage:** The "test (3.14)" workflow must verify **≥99% test coverage per module**.
 4. **Approval:** At least **one approving review** from a human teammate is required.
 5. **Admin Enforcement:** These rules apply to **all users**, including administrators. No bypasses.
 
@@ -241,7 +241,7 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
       ```
    2. **Initialize:** Set up the environment (crucial for accurate testing):
       ```bash
-      python3.10 -m venv venv
+      python3.14 -m venv venv
       source venv/bin/activate
       pip install -r requirements.txt
       cp .env.template .env

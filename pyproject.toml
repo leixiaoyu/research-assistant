@@ -3,7 +3,7 @@ name = "research-assist"
 version = "0.1.0"
 description = "Automated Research Ingestion & Synthesis Pipeline (ARISP)"
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10,<3.15"
 license = {text = "MIT"}
 authors = [
     {name = "Raymond Lei", email = "leixiaoyu@example.com"}
@@ -16,6 +16,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 
 [build-system]
@@ -24,7 +26,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.black]
 line-length = 88
-target-version = ['py310']
+target-version = ['py312']  # Black's highest supported version (code is compatible with 3.14)
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -53,7 +55,7 @@ use_parentheses = true
 ensure_newline_before_comments = true
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.14"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false

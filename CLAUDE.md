@@ -212,9 +212,9 @@ The instruction "clean up workspace/repo" does NOT authorize worktree removal.
 
 ### PR Requirements (Non-Negotiable)
 Before a Pull Request can be merged into `main`:
-1. **CI Status:** The "test (3.10)" workflow must pass with **100% success rate**.
+1. **CI Status:** The "test (3.14)" workflow must pass with **100% success rate**.
 2. **Linting & Types:** **Flake8**, **Black** (formatting), and **Mypy** (static analysis) must pass with zero issues.
-3. **Coverage:** The "test (3.10)" workflow must verify **≥99% test coverage per module**.
+3. **Coverage:** The "test (3.14)" workflow must verify **≥99% test coverage per module**.
 4. **Approval:** At least **one approving review** from a human teammate is required.
 5. **Admin Enforcement:** These rules apply to **all users**, including administrators. No bypasses.
 
@@ -238,7 +238,7 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
       ```
    2. **Initialize:** Set up the environment (crucial for accurate testing):
       ```bash
-      python3.10 -m venv venv
+      python3.14 -m venv venv
       source venv/bin/activate
       pip install -r requirements.txt
       cp .env.template .env
@@ -437,7 +437,7 @@ Every feature must function **100% of the time** according to its specification 
 - **Daily Variation:** Topics can change each day via config updates
 
 ## Tech Stack
-* **Language:** Python 3.10+
+* **Language:** Python 3.14+
 * **Data Models:** Pydantic V2 (Strict)
 * **PDF Parser:** `marker-pdf` (preserves code syntax during PDF-to-MD conversion)
 * **APIs:** Semantic Scholar API (discovery), Gemini 1.5 Pro or Claude 3.5 Sonnet (extraction)
@@ -446,8 +446,8 @@ Every feature must function **100% of the time** according to its specification 
 ## Development Setup
 
 ```bash
-# Create virtual environment (requires Python 3.10+)
-python3.10 -m venv venv
+# Create virtual environment (requires Python 3.14+)
+python3.14 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
@@ -728,7 +728,7 @@ The project includes a comprehensive verification script that runs all required 
 
 **GitHub Actions Workflow (`ci.yml`):**
 - Runs on: All pull requests and pushes to `main`
-- Python Version: 3.10 (enforced)
+- Python Version: 3.14 (enforced)
 - Checks:
   1. Black formatting
   2. Flake8 linting

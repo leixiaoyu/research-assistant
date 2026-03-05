@@ -111,7 +111,7 @@ validate_environment() {
     # Check venv exists
     if [[ ! -d "$VENV_PATH" ]]; then
         log_error "Virtual environment not found at: $VENV_PATH"
-        log_error "Run: python3.10 -m venv venv"
+        log_error "Run: python3.14 -m venv venv"
         exit 3
     fi
 
@@ -165,11 +165,11 @@ main() {
     PYTHON_VERSION=$(python --version 2>&1)
     log_info "Python version: $PYTHON_VERSION"
 
-    # Verify it's Python 3.10+
+    # Verify it's Python 3.14+
     PYTHON_MAJOR=$(python -c "import sys; print(sys.version_info.major)")
     PYTHON_MINOR=$(python -c "import sys; print(sys.version_info.minor)")
-    if [[ "$PYTHON_MAJOR" -lt 3 ]] || [[ "$PYTHON_MAJOR" -eq 3 && "$PYTHON_MINOR" -lt 10 ]]; then
-        log_error "Python 3.10+ required, found: $PYTHON_VERSION"
+    if [[ "$PYTHON_MAJOR" -lt 3 ]] || [[ "$PYTHON_MAJOR" -eq 3 && "$PYTHON_MINOR" -lt 14 ]]; then
+        log_error "Python 3.14+ required, found: $PYTHON_VERSION"
         exit 3
     fi
 

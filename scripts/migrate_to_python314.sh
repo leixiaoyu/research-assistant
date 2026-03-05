@@ -1,10 +1,10 @@
 #!/bin/bash
-# Migration Script: Upgrade Virtual Environment to Python 3.10
-# This script safely migrates from Python 3.9 to Python 3.10 and installs marker-pdf
+# Migration Script: Upgrade Virtual Environment to Python 3.14
+# This script safely migrates to Python 3.14 and installs marker-pdf
 
 set -e  # Exit on error
 
-echo "🔄 ARISP Python 3.10 Migration Script"
+echo "🔄 ARISP Python 3.14 Migration Script"
 echo "======================================"
 echo ""
 
@@ -14,17 +14,17 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Check if Python 3.10 is available
-if ! command -v /opt/homebrew/bin/python3.10 &> /dev/null; then
-    echo -e "${RED}❌ Python 3.10 not found at /opt/homebrew/bin/python3.10${NC}"
+# Check if Python 3.14 is available
+if ! command -v /opt/homebrew/bin/python3.14 &> /dev/null; then
+    echo -e "${RED}❌ Python 3.14 not found at /opt/homebrew/bin/python3.14${NC}"
     echo ""
-    echo "Please install Python 3.10 first:"
-    echo "  brew install python@3.10"
+    echo "Please install Python 3.14 first:"
+    echo "  brew install python@3.14"
     exit 1
 fi
 
-PYTHON310_PATH="/opt/homebrew/bin/python3.10"
-PYTHON_VERSION=$($PYTHON310_PATH --version)
+PYTHON314_PATH="/opt/homebrew/bin/python3.14"
+PYTHON_VERSION=$($PYTHON314_PATH --version)
 echo -e "${GREEN}✓ Found: $PYTHON_VERSION${NC}"
 echo ""
 
@@ -41,9 +41,9 @@ else
     echo ""
 fi
 
-# Step 2: Create new venv with Python 3.10
-echo "🏗️  Step 2: Creating new virtual environment with Python 3.10..."
-$PYTHON310_PATH -m venv venv
+# Step 2: Create new venv with Python 3.14
+echo "🏗️  Step 2: Creating new virtual environment with Python 3.14..."
+$PYTHON314_PATH -m venv venv
 echo -e "${GREEN}✓ Virtual environment created${NC}"
 echo ""
 

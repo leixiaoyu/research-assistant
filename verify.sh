@@ -5,21 +5,21 @@ set -e
 # This script runs all checks required for PR approval.
 # IMPORTANT: Run this script inside an activated virtual environment.
 
-# Detect Python 3.10 command
-if command -v python3.10 &> /dev/null; then
-    PYTHON_CMD="python3.10"
+# Detect Python 3.14 command
+if command -v python3.14 &> /dev/null; then
+    PYTHON_CMD="python3.14"
 elif command -v python3 &> /dev/null; then
     PYTHON_CMD="python3"
-    # Verify it's Python 3.10+
+    # Verify it's Python 3.14+
     PYTHON_VERSION=$($PYTHON_CMD --version 2>&1 | awk '{print $2}')
     MAJOR=$(echo $PYTHON_VERSION | cut -d. -f1)
     MINOR=$(echo $PYTHON_VERSION | cut -d. -f2)
-    if [ "$MAJOR" -lt 3 ] || ([ "$MAJOR" -eq 3 ] && [ "$MINOR" -lt 10 ]); then
-        echo "❌ Error: Python 3.10+ required, found $PYTHON_VERSION"
+    if [ "$MAJOR" -lt 3 ] || ([ "$MAJOR" -eq 3 ] && [ "$MINOR" -lt 14 ]); then
+        echo "❌ Error: Python 3.14+ required, found $PYTHON_VERSION"
         exit 1
     fi
 else
-    echo "❌ Error: Python 3.10+ not found. Please install Python 3.10 or higher."
+    echo "❌ Error: Python 3.14+ not found. Please install Python 3.14 or higher."
     exit 1
 fi
 

@@ -16,7 +16,7 @@ anthropic>=0.18.0
 google-genai>=1.0.0  # New unified SDK (replaces deprecated google-generativeai)
 
 # PDF Processing (Phase 2)
-# NOTE: Requires Python 3.10+ (marker-pdf uses modern type hints)
+# NOTE: Requires Python 3.14+ (marker-pdf uses modern type hints)
 marker-pdf>=1.0.0  # PDF to Markdown conversion with code preservation
 
 # Retry & Error Handling
@@ -45,7 +45,7 @@ pytest-asyncio>=0.21.0
 pytest-cov>=4.1.0
 pytest-mock>=3.12.0
 black==24.1.1
-mypy>=1.5.0
+mypy>=1.19.0  # Requires 1.19+ for Python 3.14 support
 flake8>=6.1.0
 isort>=5.12.0
 

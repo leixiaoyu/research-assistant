@@ -437,6 +437,7 @@ class RegistryService:
         pdf_path: Optional[str] = None,
         markdown_path: Optional[str] = None,
         existing_entry: Optional[RegistryEntry] = None,
+        discovery_only: bool = False,
     ) -> RegistryEntry:
         """Register a paper in the global registry.
 
@@ -449,6 +450,9 @@ class RegistryService:
             pdf_path: Path to downloaded PDF.
             markdown_path: Path to converted markdown.
             existing_entry: Existing entry to update (for backfill).
+            discovery_only: If True, register paper at discovery time without
+                requiring extraction. This enables deduplication for papers
+                that may be filtered out before extraction.
 
         Returns:
             Created or updated registry entry.
@@ -456,34 +460,49 @@ class RegistryService:
         state = self.load()
         target_hash = calculate_extraction_hash(extraction_targets)
 
+        # Check if paper already exists in registry (may have been registered
+        # at discovery time before quality filtering)
+        if not existing_entry:
+            match = self.resolve_identity(paper)
+            if match.matched and match.entry:
+                existing_entry = match.entry
+
         if existing_entry:
-            # Update existing entry
+            # Update existing entry (either passed in or found via identity)
             entry = existing_entry
-            entry.extraction_target_hash = target_hash
-            entry.processed_at = datetime.now(timezone.utc)
+            # Only update extraction fields if not discovery_only
+            if not discovery_only:
+                entry.extraction_target_hash = target_hash
+                entry.processed_at = datetime.now(timezone.utc)
+                if pdf_path:
+                    entry.pdf_path = pdf_path
+                if markdown_path:
+                    entry.markdown_path = markdown_path
+                # Update metadata snapshot with potentially richer data
+                entry.metadata_snapshot = paper.model_dump(mode="json")
+
             entry.add_topic_affiliation(topic_slug)
-
-            if pdf_path:
-                entry.pdf_path = pdf_path
-            if markdown_path:
-                entry.markdown_path = markdown_path
-
-            # Update metadata snapshot
-            entry.metadata_snapshot = paper.model_dump(mode="json")
 
             logger.info(
                 "registry_entry_updated",
                 paper_id=entry.paper_id,
                 topic=topic_slug,
+                discovery_only=discovery_only,
             )
         else:
-            # Build identifiers
+            # Build identifiers - include both arxiv_id and paper_id
             identifiers = {}
             if paper.doi:
                 identifiers["doi"] = paper.doi
+            # Check arxiv_id first (explicit ArXiv ID field)
+            if hasattr(paper, "arxiv_id") and paper.arxiv_id:
+                identifiers["arxiv"] = paper.arxiv_id
+            # Also check paper_id format
             if paper.paper_id:
                 if "." in paper.paper_id and paper.paper_id[0].isdigit():
-                    identifiers["arxiv"] = paper.paper_id
+                    # ArXiv format: YYMM.NNNNN
+                    if "arxiv" not in identifiers:
+                        identifiers["arxiv"] = paper.paper_id
                 else:
                     identifiers["semantic_scholar"] = paper.paper_id
 
@@ -493,8 +512,8 @@ class RegistryService:
                 title_normalized=normalize_title(paper.title),
                 extraction_target_hash=target_hash,
                 topic_affiliations=[topic_slug],
-                pdf_path=pdf_path,
-                markdown_path=markdown_path,
+                pdf_path=pdf_path if not discovery_only else None,
+                markdown_path=markdown_path if not discovery_only else None,
                 metadata_snapshot=paper.model_dump(mode="json"),
             )
 
@@ -503,6 +522,7 @@ class RegistryService:
                 paper_id=entry.paper_id,
                 title=paper.title[:50] if paper.title else "N/A",
                 topic=topic_slug,
+                discovery_only=discovery_only,
             )
 
         # Add to state and save

@@ -149,6 +149,37 @@ class FilterService:
 
         return [paper for paper, score in scored_papers]
 
+    def calculate_quality_score(self, paper: PaperMetadata) -> float:
+        """Calculate quality score for a single paper.
+
+        Public method for scoring individual papers without filtering.
+        Used by the pipeline to compute quality scores for Delta reporting
+        before any filtering is applied.
+
+        Args:
+            paper: Paper to score
+
+        Returns:
+            Quality score between 0.0 and 1.0
+        """
+        # Use citation and recency scores (relevance requires query)
+        citation_score = self._citation_score(paper.citation_count)
+        recency_score = self._recency_score(paper.year)
+
+        # Weighted average using config weights (excluding relevance)
+        citation_weight = self.config.citation_weight
+        recency_weight = self.config.recency_weight
+        total_weight = citation_weight + recency_weight
+
+        if total_weight == 0:
+            return 0.5  # Default if no weights
+
+        score = (
+            citation_weight * citation_score + recency_weight * recency_score
+        ) / total_weight
+
+        return min(1.0, max(0.0, score))
+
     def _calculate_score(self, paper: PaperMetadata, query: str) -> PaperScore:
         """
         Calculate relevance score for paper.

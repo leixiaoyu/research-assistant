@@ -223,6 +223,27 @@ class QualityFilterService:
 
         return scored_papers
 
+    def calculate_quality_score(
+        self,
+        paper: PaperMetadata,
+        weights: Optional[QualityWeights] = None,
+    ) -> float:
+        """Calculate quality score for a single paper.
+
+        Public method for scoring individual papers without filtering.
+        Used by the pipeline to compute quality scores for Delta reporting
+        before any filtering is applied.
+
+        Args:
+            paper: Paper to score
+            weights: Optional custom weights (overrides instance weights)
+
+        Returns:
+            Quality score between 0.0 and 1.0
+        """
+        effective_weights = weights or self.weights
+        return self._calculate_quality_score(paper, effective_weights)
+
     def _calculate_quality_score(
         self,
         paper: PaperMetadata,

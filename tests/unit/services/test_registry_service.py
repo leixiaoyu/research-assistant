@@ -659,6 +659,92 @@ class TestRegistryServiceErrorHandling:
         assert entry2.pdf_path == "/data/pdfs/new.pdf"
         assert entry2.markdown_path == "/data/md/new.md"
 
+    def test_register_discovery_only_creates_entry(
+        self, service, sample_paper, sample_targets
+    ):
+        """Test discovery_only=True creates registry entry without paths."""
+        entry = service.register_paper(
+            sample_paper,
+            topic_slug="test-topic",
+            extraction_targets=sample_targets,
+            discovery_only=True,
+        )
+
+        assert entry is not None
+        assert entry.title_normalized is not None
+        assert "test-topic" in entry.topic_affiliations
+        # discovery_only should not set paths
+        assert entry.pdf_path is None
+        assert entry.markdown_path is None
+
+    def test_register_discovery_only_then_full_updates(
+        self, service, sample_paper, sample_targets
+    ):
+        """Test that full registration after discovery_only updates entry."""
+        # First: discovery_only registration
+        entry1 = service.register_paper(
+            sample_paper,
+            topic_slug="test-topic",
+            extraction_targets=sample_targets,
+            discovery_only=True,
+        )
+        original_id = entry1.paper_id
+
+        # Second: full registration with paths
+        entry2 = service.register_paper(
+            sample_paper,
+            topic_slug="test-topic",
+            extraction_targets=sample_targets,
+            pdf_path="/data/pdfs/paper.pdf",
+            markdown_path="/data/md/paper.md",
+        )
+
+        # Should update existing entry, not create new one
+        assert entry2.paper_id == original_id
+        assert entry2.pdf_path == "/data/pdfs/paper.pdf"
+        assert entry2.markdown_path == "/data/md/paper.md"
+
+    def test_register_discovery_only_prevents_duplicate(
+        self, service, sample_paper, sample_targets
+    ):
+        """Test that discovery_only registration prevents duplicates on re-discovery."""
+        # Day 1: discovery_only
+        entry1 = service.register_paper(
+            sample_paper,
+            topic_slug="test-topic",
+            extraction_targets=sample_targets,
+            discovery_only=True,
+        )
+
+        # Day 2: same paper discovered again - should find existing
+        action, existing = service.determine_action(
+            sample_paper, "test-topic", sample_targets
+        )
+
+        # Should SKIP (already processed for this topic)
+        assert action == ProcessingAction.SKIP
+        assert existing is not None
+        assert existing.paper_id == entry1.paper_id
+
+    def test_register_with_arxiv_id_field(self, service, sample_targets):
+        """Test registration includes arxiv_id from paper metadata."""
+        paper = PaperMetadata(
+            paper_id="2301.12345",
+            arxiv_id="2301.12345",
+            title="Test Paper with ArXiv ID",
+            abstract="Testing arxiv_id field.",
+            url="https://arxiv.org/abs/2301.12345",
+        )
+
+        entry = service.register_paper(
+            paper,
+            topic_slug="test-topic",
+            extraction_targets=sample_targets,
+        )
+
+        assert "arxiv" in entry.identifiers
+        assert entry.identifiers["arxiv"] == "2301.12345"
+
 
 class TestRegistryServiceFileLocking:
     """Tests for file locking functionality."""

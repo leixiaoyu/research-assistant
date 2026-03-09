@@ -148,6 +148,13 @@ class ConcurrentPipeline:
             "concurrent_processing_started", run_id=run_id, total_papers=len(papers)
         )
 
+        # Stage 0: Pre-compute quality scores for ALL papers (for Delta reporting)
+        # This ensures even filtered papers have quality scores in the Delta
+        paper_quality_scores: Dict[str, float] = {}
+        for paper in papers:
+            score = self.filter_service.calculate_quality_score(paper)
+            paper_quality_scores[paper.paper_id] = score * 100  # Convert to 0-100 scale
+
         # Stage 1: Registry-based identity resolution (Phase 3.5)
         new_papers: List[PaperMetadata] = []
         duplicates: List[PaperMetadata] = []
@@ -160,14 +167,33 @@ class ConcurrentPipeline:
                 action, existing_entry = self.registry_service.determine_action(
                     paper, topic_slug, targets
                 )
+                quality_score = paper_quality_scores.get(paper.paper_id, 0.0)
 
                 if action == ProcessingAction.FULL_PROCESS:
                     new_papers.append(paper)
-                    self._add_processing_result(paper, ProcessingStatus.NEW, topic_slug)
+                    self._add_processing_result(
+                        paper,
+                        ProcessingStatus.NEW,
+                        topic_slug,
+                        quality_score=quality_score,
+                        pdf_available=paper.pdf_available,
+                    )
+                    # Register paper at discovery time for deduplication
+                    # This ensures papers filtered before extraction are still tracked
+                    self.registry_service.register_paper(
+                        paper=paper,
+                        topic_slug=topic_slug,
+                        extraction_targets=targets,
+                        discovery_only=True,
+                    )
                 elif action == ProcessingAction.BACKFILL:
                     new_papers.append(paper)  # Process it
                     self._add_processing_result(
-                        paper, ProcessingStatus.BACKFILLED, topic_slug
+                        paper,
+                        ProcessingStatus.BACKFILLED,
+                        topic_slug,
+                        quality_score=quality_score,
+                        pdf_available=paper.pdf_available,
                     )
                     # Store existing entry for persistence update
                     if existing_entry:
@@ -176,7 +202,10 @@ class ConcurrentPipeline:
                     # Just add topic affiliation, no processing needed
                     duplicates.append(paper)
                     self._add_processing_result(
-                        paper, ProcessingStatus.MAPPED, topic_slug
+                        paper,
+                        ProcessingStatus.MAPPED,
+                        topic_slug,
+                        quality_score=quality_score,
                     )
                     # Register topic affiliation for MAP_ONLY
                     if existing_entry:
@@ -186,7 +215,10 @@ class ConcurrentPipeline:
                 else:  # SKIP
                     duplicates.append(paper)
                     self._add_processing_result(
-                        paper, ProcessingStatus.SKIPPED, topic_slug
+                        paper,
+                        ProcessingStatus.SKIPPED,
+                        topic_slug,
+                        quality_score=quality_score,
                     )
 
             logger.info(

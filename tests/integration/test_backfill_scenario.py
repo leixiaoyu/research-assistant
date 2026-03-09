@@ -369,6 +369,7 @@ class TestRegistryPersistenceE2E:
             side_effect=lambda papers: (papers, [])
         )
         services["filter"].filter_and_rank = Mock(side_effect=lambda papers, q: papers)
+        services["filter"].calculate_quality_score = Mock(return_value=0.5)
         services["checkpoint"].get_processed_ids = Mock(return_value=set())
         services["checkpoint"].save_checkpoint = Mock()
         services["checkpoint"].clear_checkpoint = Mock()

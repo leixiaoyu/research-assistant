@@ -45,6 +45,7 @@ def mock_services():
     services["dedup"].find_duplicates = Mock()
     services["dedup"].update_indices = Mock()
     services["filter"].filter_and_rank = Mock()
+    services["filter"].calculate_quality_score = Mock(return_value=0.5)
     services["checkpoint"].get_processed_ids = Mock(return_value=set())
     services["checkpoint"].save_checkpoint = Mock()
     services["checkpoint"].clear_checkpoint = Mock()

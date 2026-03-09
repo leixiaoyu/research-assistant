@@ -374,6 +374,76 @@ class TestQualityFilterServiceCoverage:
         score = service._calculate_quality_score(paper, weights)
         assert score == 0.5  # Default when no weights
 
+    def test_calculate_quality_score_public_method(self):
+        """Test public calculate_quality_score method for pipeline use."""
+        from src.services.quality_filter_service import QualityFilterService
+
+        service = QualityFilterService()
+        paper = PaperMetadata(
+            paper_id="test123",
+            title="Test Paper",
+            abstract="A test abstract for quality scoring.",
+            url="https://example.com",
+            citation_count=5,
+            venue="NeurIPS",
+            publication_date="2024-01-15",
+        )
+
+        # Public method should work
+        score = service.calculate_quality_score(paper)
+        assert 0.0 <= score <= 1.0
+        assert score > 0  # Should have non-zero score with good metadata
+
+    def test_calculate_quality_score_with_custom_weights(self):
+        """Test calculate_quality_score with custom weights."""
+        from src.services.quality_filter_service import QualityFilterService
+
+        service = QualityFilterService()
+        paper = PaperMetadata(
+            paper_id="test123",
+            title="Test Paper",
+            url="https://example.com",
+            citation_count=100,  # High citation
+        )
+
+        # Test with citation-only weight
+        citation_weights = QualityWeights(
+            citation=1.0,
+            venue=0.0,
+            recency=0.0,
+            engagement=0.0,
+            completeness=0.0,
+            author=0.0,
+        )
+        score = service.calculate_quality_score(paper, weights=citation_weights)
+        assert score > 0.3  # Should be high with 100 citations
+
+    def test_calculate_quality_score_huggingface_paper(self):
+        """Test quality scoring for HuggingFace papers with upvotes."""
+        from src.services.quality_filter_service import QualityFilterService
+
+        service = QualityFilterService()
+        # Simulate HuggingFace paper with upvotes but no citations
+        # Use MagicMock to allow upvotes attribute (not in PaperMetadata model)
+        paper = MagicMock()
+        paper.paper_id = "2401.12345"
+        paper.arxiv_id = "2401.12345"
+        paper.title = "Test HuggingFace Paper"
+        paper.abstract = "A trending paper from HuggingFace Daily Papers."
+        paper.url = "https://arxiv.org/abs/2401.12345"
+        paper.citation_count = 0  # New paper, no citations yet
+        paper.publication_date = "2024-01-15"
+        paper.venue = None
+        paper.authors = []
+        paper.open_access_pdf = "https://arxiv.org/pdf/2401.12345.pdf"
+        paper.pdf_available = True
+        paper.doi = None
+        paper.upvotes = 50  # HuggingFace engagement metric
+
+        score = service.calculate_quality_score(paper)
+        # Should have non-zero score due to engagement (upvotes) and recency
+        assert score > 0.1
+
 
 # =============================================================================
 # RelevanceRanker Coverage Tests

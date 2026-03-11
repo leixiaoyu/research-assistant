@@ -184,16 +184,8 @@ async def _send_notifications(
         from src.services.report_parser import ReportParser
         from src.models.notification import KeyLearning, DeduplicationResult
 
-        # Extract key learnings from output files
-        learnings: List[KeyLearning] = []
-        if notification_settings.slack.include_key_learnings:
-            parser = ReportParser()
-            learnings = parser.extract_key_learnings(
-                output_files=result.output_files,
-                max_per_topic=notification_settings.slack.max_learnings_per_topic,
-            )
-
         # Phase 3.8: Deduplication-aware notifications
+        # Calculate dedup FIRST to know if there are new papers
         dedup_result: Optional[DeduplicationResult] = None
         if pipeline is not None:
             context = pipeline.context
@@ -216,6 +208,28 @@ async def _send_notifications(
                         duplicate=dedup_result.duplicate_count,
                         total=dedup_result.total_checked,
                     )
+
+        # Extract key learnings ONLY if there are new papers (or no dedup info)
+        # Skip extraction for backfilled/duplicate papers to avoid showing old learnings
+        learnings: List[KeyLearning] = []
+        # If we have dedup info with zero new papers, skip learnings extraction
+        # If no dedup info (legacy mode), assume all papers are new
+        skip_learnings = (
+            dedup_result is not None
+            and dedup_result.new_count == 0
+            and dedup_result.total_checked > 0
+        )
+        if notification_settings.slack.include_key_learnings and not skip_learnings:
+            parser = ReportParser()
+            learnings = parser.extract_key_learnings(
+                output_files=result.output_files,
+                max_per_topic=notification_settings.slack.max_learnings_per_topic,
+            )
+        elif notification_settings.slack.include_key_learnings and skip_learnings:
+            logger.info(
+                "skipping_key_learnings_no_new_papers",
+                reason="No new papers discovered, skipping key learnings extraction",
+            )
 
         # Create notification service and send
         service = NotificationService(notification_settings)

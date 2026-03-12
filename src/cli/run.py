@@ -219,17 +219,18 @@ async def _send_notifications(
             and dedup_result.new_count == 0
             and dedup_result.total_checked > 0
         )
-        if notification_settings.slack.include_key_learnings and not skip_learnings:
-            parser = ReportParser()
-            learnings = parser.extract_key_learnings(
-                output_files=result.output_files,
-                max_per_topic=notification_settings.slack.max_learnings_per_topic,
-            )
-        elif notification_settings.slack.include_key_learnings and skip_learnings:
-            logger.info(
-                "skipping_key_learnings_no_new_papers",
-                reason="No new papers discovered, skipping key learnings extraction",
-            )
+        if notification_settings.slack.include_key_learnings:
+            if not skip_learnings:
+                parser = ReportParser()
+                learnings = parser.extract_key_learnings(
+                    output_files=result.output_files,
+                    max_per_topic=notification_settings.slack.max_learnings_per_topic,
+                )
+            else:
+                logger.info(
+                    "skipping_key_learnings_no_new_papers",
+                    reason="No new papers discovered, skipping extraction",
+                )
 
         # Create notification service and send
         service = NotificationService(notification_settings)

@@ -776,7 +776,7 @@ class TestSendNotifications:
 
     @pytest.mark.asyncio
     async def test_notification_with_pipeline_context_none(self):
-        """Test notification when pipeline.context is None (branch 192->214)."""
+        """Test notification when pipeline.context is None (legacy mode fallback)."""
         from src.cli.run import _send_notifications
         from src.models.notification import NotificationResult
 
@@ -810,7 +810,7 @@ class TestSendNotifications:
 
     @pytest.mark.asyncio
     async def test_notification_with_empty_discovered_papers(self):
-        """Test notification when discovered_papers is empty (branch 203->214)."""
+        """Test notification when discovered_papers is empty (no papers to dedup)."""
         from src.cli.run import _send_notifications
         from src.models.notification import NotificationResult
 

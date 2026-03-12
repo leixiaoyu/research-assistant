@@ -6,7 +6,7 @@ from pathlib import Path
 
 from src.services.extraction_service import ExtractionService
 from src.services.pdf_service import PDFService
-from src.services.llm_service import LLMService
+from src.services.llm import LLMService
 from src.services.pdf_extractors.fallback_service import FallbackPDFService
 from src.models.paper import PaperMetadata
 from src.models.extraction import PaperExtraction

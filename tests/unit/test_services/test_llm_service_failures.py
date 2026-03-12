@@ -6,7 +6,7 @@ Additional tests for edge cases in LLM service response parsing.
 import pytest
 from unittest.mock import Mock, patch
 
-from src.services.llm_service import LLMService
+from src.services.llm import LLMService
 from src.models.llm import LLMConfig, CostLimits
 from src.models.extraction import ExtractionTarget
 from src.utils.exceptions import JSONParseError

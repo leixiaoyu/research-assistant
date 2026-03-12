@@ -14,7 +14,7 @@ from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime, timedelta
 import json
 
-from src.services.llm_service import LLMService
+from src.services.llm import LLMService
 from src.models.llm import LLMConfig, CostLimits
 from src.models.extraction import ExtractionTarget
 from src.models.paper import PaperMetadata, Author

@@ -15,7 +15,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 from typing import List, Optional, Any, Dict
 
-from src.orchestration.research_pipeline import ResearchPipeline, PipelineResult
+from src.orchestration import ResearchPipeline, PipelineResult
 from src.services.registry_service import RegistryService
 from src.services.config_manager import ConfigManager
 from src.models.paper import PaperMetadata, Author
@@ -263,7 +263,7 @@ class TestPipelineRegistryIntegration:
                 "src.services.catalog_service.CatalogService.get_or_create_topic"
             ) as mock_get_topic,
             patch("src.services.pdf_service.PDFService"),
-            patch("src.services.llm_service.LLMService"),
+            patch("src.services.llm.LLMService"),
             patch(
                 "src.services.extraction_service.ExtractionService",
                 side_effect=capture_extraction_init,
@@ -314,7 +314,7 @@ class TestPipelineRegistryIntegration:
             ) as mock_get_topic,
             patch("src.services.catalog_service.CatalogService.add_run"),
             patch("src.services.pdf_service.PDFService"),
-            patch("src.services.llm_service.LLMService"),
+            patch("src.services.llm.LLMService"),
             patch(
                 "src.services.extraction_service.ExtractionService"
             ) as mock_extraction_cls,
@@ -381,7 +381,7 @@ class TestPipelineRegistryIntegration:
             ) as mock_get_topic,
             patch("src.services.catalog_service.CatalogService.add_run"),
             patch("src.services.pdf_service.PDFService"),
-            patch("src.services.llm_service.LLMService"),
+            patch("src.services.llm.LLMService"),
             patch(
                 "src.services.extraction_service.ExtractionService"
             ) as mock_extraction_cls,
@@ -446,7 +446,7 @@ class TestPipelineRegistryIntegration:
             ) as mock_get_topic,
             patch("src.services.catalog_service.CatalogService.add_run"),
             patch("src.services.pdf_service.PDFService"),
-            patch("src.services.llm_service.LLMService"),
+            patch("src.services.llm.LLMService"),
             patch(
                 "src.services.extraction_service.ExtractionService"
             ) as mock_extraction_cls,
@@ -569,7 +569,7 @@ class TestPipelineCatalogUpdate:
                 side_effect=capture_add_run,
             ),
             patch("src.services.pdf_service.PDFService"),
-            patch("src.services.llm_service.LLMService"),
+            patch("src.services.llm.LLMService"),
             patch(
                 "src.services.extraction_service.ExtractionService"
             ) as mock_extraction_cls,

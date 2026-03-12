@@ -13,7 +13,7 @@ import pytest
 import os
 from unittest.mock import Mock, AsyncMock, patch
 
-from src.services.llm_service import LLMService, ProviderHealth
+from src.services.llm import LLMService, ProviderHealth
 from src.models.llm import (
     LLMConfig,
     CostLimits,

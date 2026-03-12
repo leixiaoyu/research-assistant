@@ -30,7 +30,7 @@ from src.services.cache_service import CacheService
 from src.services.dedup_service import DeduplicationService
 from src.services.filter_service import FilterService
 from src.services.checkpoint_service import CheckpointService
-from src.services.llm_service import LLMService
+from src.services.llm import LLMService
 
 # Phase 3.5 integration
 from src.services.registry_service import RegistryService

@@ -748,7 +748,7 @@ class TestSendNotifications:
 
     @pytest.mark.asyncio
     async def test_notification_with_key_learnings(self):
-        """Test notification extracts key learnings when enabled."""
+        """Test notification extracts key learnings (no pipeline/legacy mode)."""
         from src.cli.run import _send_notifications
         from src.models.notification import NotificationResult
 
@@ -761,6 +761,7 @@ class TestSendNotifications:
         mock_config.settings.notification_settings.slack.include_key_learnings = True
         mock_config.settings.notification_settings.slack.max_learnings_per_topic = 2
 
+        # No pipeline = legacy mode, should extract learnings
         with patch("src.services.notification_service.NotificationService") as mock_svc:
             with patch("src.services.report_parser.ReportParser") as mock_parser:
                 mock_parser.return_value.extract_key_learnings.return_value = []
@@ -772,6 +773,191 @@ class TestSendNotifications:
                 await _send_notifications(mock_result, mock_config, True)
 
                 mock_parser.return_value.extract_key_learnings.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_notification_with_pipeline_context_none(self):
+        """Test notification when pipeline.context is None (legacy mode fallback)."""
+        from src.cli.run import _send_notifications
+        from src.models.notification import NotificationResult
+
+        mock_result = Mock()
+        mock_result.output_files = ["output/test.md"]
+        mock_result.to_dict.return_value = {}
+
+        mock_config = Mock()
+        mock_config.settings.notification_settings.slack.enabled = True
+        mock_config.settings.notification_settings.slack.include_key_learnings = True
+        mock_config.settings.notification_settings.slack.max_learnings_per_topic = 2
+
+        # Pipeline with context = None
+        mock_pipeline = Mock()
+        mock_pipeline.context = None
+
+        with patch("src.services.notification_service.NotificationService") as mock_svc:
+            with patch("src.services.report_parser.ReportParser") as mock_parser:
+                mock_parser.return_value.extract_key_learnings.return_value = []
+                mock_svc.return_value.create_summary_from_result.return_value = Mock()
+                mock_svc.return_value.send_pipeline_summary = AsyncMock(
+                    return_value=NotificationResult(success=True, provider="slack")
+                )
+
+                await _send_notifications(
+                    mock_result, mock_config, True, pipeline=mock_pipeline
+                )
+
+                # Should still extract learnings (legacy mode when context is None)
+                mock_parser.return_value.extract_key_learnings.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_notification_with_empty_discovered_papers(self):
+        """Test notification when discovered_papers is empty (no papers to dedup)."""
+        from src.cli.run import _send_notifications
+        from src.models.notification import NotificationResult
+
+        mock_result = Mock()
+        mock_result.output_files = ["output/test.md"]
+        mock_result.to_dict.return_value = {}
+
+        mock_config = Mock()
+        mock_config.settings.notification_settings.slack.enabled = True
+        mock_config.settings.notification_settings.slack.include_key_learnings = True
+        mock_config.settings.notification_settings.slack.max_learnings_per_topic = 2
+
+        # Pipeline with context but empty discovered_papers
+        mock_context = Mock()
+        mock_context.discovered_papers = {}  # Empty dict
+        mock_context.registry_service = None
+
+        mock_pipeline = Mock()
+        mock_pipeline.context = mock_context
+
+        with patch("src.services.notification_service.NotificationService") as mock_svc:
+            with patch("src.services.report_parser.ReportParser") as mock_parser:
+                with patch("src.services.notification.NotificationDeduplicator"):
+                    mock_parser.return_value.extract_key_learnings.return_value = []
+                    mock_svc.return_value.create_summary_from_result.return_value = (
+                        Mock()
+                    )
+                    mock_svc.return_value.send_pipeline_summary = AsyncMock(
+                        return_value=NotificationResult(success=True, provider="slack")
+                    )
+
+                    await _send_notifications(
+                        mock_result, mock_config, True, pipeline=mock_pipeline
+                    )
+
+                    # Should extract learnings (no dedup result when no papers)
+                    mock_parser.return_value.extract_key_learnings.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_notification_skips_learnings_when_no_new_papers(self):
+        """Test notification skips key learnings when dedup shows no new papers."""
+        from src.cli.run import _send_notifications
+        from src.models.notification import NotificationResult, DeduplicationResult
+
+        mock_result = Mock()
+        mock_result.output_files = ["output/test.md"]
+        mock_result.to_dict.return_value = {}
+
+        mock_config = Mock()
+        mock_config.settings.notification_settings.slack.enabled = True
+        mock_config.settings.notification_settings.slack.include_key_learnings = True
+        mock_config.settings.notification_settings.slack.max_learnings_per_topic = 2
+
+        # Pipeline with papers but all are duplicates
+        mock_context = Mock()
+        mock_context.discovered_papers = {
+            "topic-a": [{"title": "Paper 1"}, {"title": "Paper 2"}]
+        }
+        mock_context.registry_service = Mock()
+
+        mock_pipeline = Mock()
+        mock_pipeline.context = mock_context
+
+        # Dedup result showing no new papers (all duplicates)
+        dedup_result = DeduplicationResult(
+            new_papers=[],
+            retry_papers=[],
+            duplicate_papers=[{"title": "Paper 1"}, {"title": "Paper 2"}],
+        )
+
+        with patch("src.services.notification_service.NotificationService") as mock_svc:
+            with patch("src.services.report_parser.ReportParser") as mock_parser:
+                with patch(
+                    "src.services.notification.NotificationDeduplicator"
+                ) as mock_dedup:
+                    mock_dedup.return_value.categorize_papers.return_value = (
+                        dedup_result
+                    )
+                    mock_parser.return_value.extract_key_learnings.return_value = []
+                    mock_svc.return_value.create_summary_from_result.return_value = (
+                        Mock()
+                    )
+                    mock_svc.return_value.send_pipeline_summary = AsyncMock(
+                        return_value=NotificationResult(success=True, provider="slack")
+                    )
+
+                    await _send_notifications(
+                        mock_result, mock_config, True, pipeline=mock_pipeline
+                    )
+
+                    # Should NOT extract learnings (skip due to no new papers)
+                    mock_parser.return_value.extract_key_learnings.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_notification_extracts_learnings_when_new_papers(self):
+        """Test notification extracts learnings when dedup shows new papers."""
+        from src.cli.run import _send_notifications
+        from src.models.notification import NotificationResult, DeduplicationResult
+
+        mock_result = Mock()
+        mock_result.output_files = ["output/test.md"]
+        mock_result.to_dict.return_value = {}
+
+        mock_config = Mock()
+        mock_config.settings.notification_settings.slack.enabled = True
+        mock_config.settings.notification_settings.slack.include_key_learnings = True
+        mock_config.settings.notification_settings.slack.max_learnings_per_topic = 2
+
+        # Pipeline with papers, some are new
+        mock_context = Mock()
+        mock_context.discovered_papers = {
+            "topic-a": [{"title": "Paper 1"}, {"title": "Paper 2"}]
+        }
+        mock_context.registry_service = Mock()
+
+        mock_pipeline = Mock()
+        mock_pipeline.context = mock_context
+
+        # Dedup result showing some new papers
+        dedup_result = DeduplicationResult(
+            new_papers=[{"title": "Paper 1"}],
+            retry_papers=[],
+            duplicate_papers=[{"title": "Paper 2"}],
+        )
+
+        with patch("src.services.notification_service.NotificationService") as mock_svc:
+            with patch("src.services.report_parser.ReportParser") as mock_parser:
+                with patch(
+                    "src.services.notification.NotificationDeduplicator"
+                ) as mock_dedup:
+                    mock_dedup.return_value.categorize_papers.return_value = (
+                        dedup_result
+                    )
+                    mock_parser.return_value.extract_key_learnings.return_value = []
+                    mock_svc.return_value.create_summary_from_result.return_value = (
+                        Mock()
+                    )
+                    mock_svc.return_value.send_pipeline_summary = AsyncMock(
+                        return_value=NotificationResult(success=True, provider="slack")
+                    )
+
+                    await _send_notifications(
+                        mock_result, mock_config, True, pipeline=mock_pipeline
+                    )
+
+                    # Should extract learnings (new papers exist)
+                    mock_parser.return_value.extract_key_learnings.assert_called_once()
 
 
 class TestHealthCommand:

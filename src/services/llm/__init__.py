@@ -13,8 +13,8 @@ Usage:
     # or
     from src.services.llm.service import LLMService
 
-For backward compatibility, LLMService is also available from:
-    from src.services.llm_service import LLMService
+Example:
+    from src.services.llm import LLMService
 """
 
 from src.services.llm.service import LLMService

@@ -47,7 +47,7 @@ def create_phase2_service_patches():
     """Create patches for Phase 2 services."""
     return {
         "pdf_service": patch("src.services.pdf_service.PDFService"),
-        "llm_service": patch("src.services.llm_service.LLMService"),
+        "llm_service": patch("src.services.llm.LLMService"),
         "extraction_service": patch(
             "src.services.extraction_service.ExtractionService"
         ),

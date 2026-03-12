@@ -21,7 +21,7 @@ from src.models.paper import PaperMetadata
 from src.models.extraction import ExtractionTarget, ExtractedPaper
 
 from src.services.pdf_service import PDFService
-from src.services.llm_service import LLMService
+from src.services.llm import LLMService
 from src.services.pdf_extractors.fallback_service import FallbackPDFService
 from src.utils.exceptions import (
     PDFDownloadError,

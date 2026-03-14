@@ -16,11 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-# Import from scripts directory
-import sys
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-
+# Import from scripts directory (path configured in conftest.py)
 from validate_phase_specs import (
     ValidationIssue,
     extract_status,

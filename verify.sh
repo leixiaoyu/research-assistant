@@ -98,6 +98,45 @@ fi
 
 echo "   ✓ Pragma audit passed"
 
+echo "📝 Running Documentation Validation..."
+DOC_FAILED=0
+
+# Markdown linting (optional - only if markdownlint-cli2 is installed)
+if command -v markdownlint-cli2 &> /dev/null; then
+    echo "   Running markdownlint..."
+    if markdownlint-cli2 "**/*.md" --config .markdownlint.json 2>/dev/null; then
+        echo "   ✓ Markdown formatting valid"
+    else
+        echo "   ⚠ Markdown issues found (non-blocking in Phase A)"
+    fi
+else
+    echo "   ⊘ markdownlint-cli2 not installed, skipping"
+fi
+
+# Spell checking (optional - only if codespell is installed)
+if command -v codespell &> /dev/null; then
+    echo "   Running codespell..."
+    if codespell docs/ CLAUDE.md README.md --skip="*.json,*.lock" -q 3 2>/dev/null; then
+        echo "   ✓ Spelling check passed"
+    else
+        echo "   ⚠ Spelling errors found (non-blocking in Phase A)"
+    fi
+else
+    echo "   ⊘ codespell not installed, skipping"
+fi
+
+# Phase spec validation
+if [ -f "scripts/validate_phase_specs.py" ]; then
+    echo "   Running phase spec validation..."
+    if $PYTHON_CMD scripts/validate_phase_specs.py; then
+        echo "   ✓ Phase specifications valid"
+    else
+        echo "   ⚠ Phase spec issues found (non-blocking in Phase A)"
+    fi
+else
+    echo "   ⊘ Phase spec validation script not found, skipping"
+fi
+
 echo "🧪 Running Tests with Coverage (>=99% required, branch coverage enabled)..."
 # Use absolute path for coverage to ensure consistency
 # Note: branch coverage is now enabled in pyproject.toml

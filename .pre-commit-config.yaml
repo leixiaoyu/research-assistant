@@ -1,7 +1,35 @@
 # Pre-commit hooks for ARISP
 # See https://pre-commit.com for more information
+# Install: pip install pre-commit && pre-commit install
 
 repos:
+  # =============================================
+  # Documentation Validation Hooks (Phase A)
+  # =============================================
+
+  # Markdown linting with auto-fix support
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.13.0
+    hooks:
+      - id: markdownlint-cli2
+        name: Lint Markdown files
+        args: ["--fix"]
+        files: \.(md|markdown)$
+
+  # Spell checking for documentation and code
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.3.0
+    hooks:
+      - id: codespell
+        name: Check spelling in docs and code
+        args:
+          - "--skip=*.json,*.lock,*.csv,venv/*,__pycache__/*,.git/*"
+          - "--ignore-words=.codespell-ignore"
+        files: \.(md|py|yaml|yml|txt)$
+
+  # =============================================
+  # Security & Code Quality Hooks
+  # =============================================
   # Secret scanning with detect-secrets
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.4.0

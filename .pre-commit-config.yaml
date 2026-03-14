@@ -73,7 +73,9 @@ repos:
     hooks:
       - id: prevent-env-commit
         name: Prevent .env file commits
-        entry: bash -c 'if git diff --cached --name-only | grep -q "^\.env$"; then echo "ERROR: Attempted to commit .env file!"; exit 1; fi'
+        entry: >
+          bash -c 'if git diff --cached --name-only | grep -q "^\.env$";
+          then echo "ERROR: Attempted to commit .env file!"; exit 1; fi'
         language: system
         pass_filenames: false
 

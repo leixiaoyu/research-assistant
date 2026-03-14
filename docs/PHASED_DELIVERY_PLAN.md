@@ -1,9 +1,9 @@
 # ARISP Phased Delivery Plan
 **Automated Research Ingestion & Synthesis Pipeline**
 
-**Version:** 1.9
-**Date:** 2026-03-01
-**Status:** Phase 6 Core Components Complete, Integration Pending
+**Version:** 2.0
+**Date:** 2026-03-11
+**Status:** Phase 6 Cleanup Complete (Deprecated Modules Removed)
 
 ---
 
@@ -181,10 +181,18 @@ The original `ResearchPipeline` (824 lines, 14 functions) handled all pipeline p
 ---
 
 ### Phase 6: Enhanced Discovery Pipeline
-**Status:** 🔄 **IN PROGRESS** (Core Components Complete - Mar 1, 2026)
+**Status:** 🔄 **IN PROGRESS** (Core Components Complete, Cleanup Done - Mar 11, 2026)
 **Duration:** 2-3 weeks (estimated)
 **Dependencies:** Phase 3.4 (HuggingFace Provider), Phase 5.1 (LLMService)
 **Goal:** Improve paper relevance through 4-stage intelligent discovery pipeline
+
+#### Phase 6 Cleanup (Complete - Mar 11, 2026)
+✅ Removed deprecated `src/cli.py` (stub re-exporting from src.cli package)
+✅ Removed deprecated `src/services/llm_service.py` (replaced by src/services/llm/)
+✅ Removed deprecated `src/orchestration/research_pipeline.py` (replaced by pipeline.py)
+✅ Updated all imports across source and test files
+✅ Added LLM service coverage tests for edge cases
+✅ 2181 tests passing with 99.25% coverage
 
 #### Problem Addressed
 Despite retrieving 90+ papers, the synthesis phase covered 0 topics due to poor paper-query relevance matching. Single-query retrieval misses semantically related papers, and API default ordering includes irrelevant results.
@@ -256,7 +264,7 @@ Despite retrieving 90+ papers, the synthesis phase covered 0 topics due to poor 
 ### Non-Functional Requirements
 - [ ] 99.9% pipeline reliability
 - [ ] Mean time to recovery < 10 minutes
-- [x] Test coverage >= 99% project-wide (currently 99.92%)
+- [x] Test coverage >= 99% project-wide (currently 99.25%)
 - [ ] Zero security vulnerabilities (verified by scan)
 
 [... Remaining sections unchanged ...]

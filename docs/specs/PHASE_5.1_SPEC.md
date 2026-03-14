@@ -1,10 +1,12 @@
 # Phase 5.1: LLMService Decomposition
-**Version:** 1.1
+**Version:** 1.2
 **Status:** ✅ Complete
 **Timeline:** 3-4 days (Completed Feb 24, 2026)
 **Dependencies:**
 - Phase 3.3 Complete (LLM Fallback & Resilience) ✅
 - All existing LLM tests passing ✅
+
+> **Note (Phase 6 Update - Mar 11, 2026):** The backward compatibility stub `src/services/llm_service.py` has been removed as part of Phase 6 cleanup. All imports should now use `from src.services.llm import LLMService`.
 
 ---
 

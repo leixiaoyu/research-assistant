@@ -1,10 +1,12 @@
 # Phase 5.2: ResearchPipeline Phase Extraction
-**Version:** 1.1
+**Version:** 1.2
 **Status:** ✅ Complete
 **Timeline:** 3-4 days (Completed Feb 25, 2026)
 **Dependencies:**
 - Phase 5.1 Complete (LLMService Decomposition)
 - All existing pipeline tests passing
+
+> **Note (Phase 6 Update - Mar 11, 2026):** The backward compatibility stub `src/orchestration/research_pipeline.py` has been removed as part of Phase 6 cleanup. All imports should now use `from src.orchestration import ResearchPipeline`.
 
 ---
 

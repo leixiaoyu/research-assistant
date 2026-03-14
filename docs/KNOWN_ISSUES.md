@@ -1,7 +1,7 @@
 # Known Issues & Limitations
 
-**Last Updated:** 2026-02-27
-**Project Status:** Phase 5.2 Complete
+**Last Updated:** 2026-03-11
+**Project Status:** Phase 6 Core Complete (Phase 5.1, 5.2 Complete, Deprecated Modules Removed)
 
 ---
 
@@ -58,8 +58,9 @@
 
 ## Notes
 
-- All Phase 5.2 features are working correctly
+- All Phase 5.2 and Phase 6 features are working correctly
 - Concurrent orchestration handles failures gracefully
 - Abstract-only extraction provides excellent results for most use cases
 - Current implementation is production-ready
-- ~1,840 tests passing with 99.92% coverage
+- 2181 tests passing with 99.25% coverage
+- Phase 6 cleanup complete: deprecated modules removed (src/cli.py, src/services/llm_service.py, src/orchestration/research_pipeline.py)

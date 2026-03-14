@@ -1,8 +1,8 @@
 # Phase 5: Architectural Refactoring (Code Health Initiative)
-**Version:** 1.1
-**Status:** 🚧 In Progress (Phase 5.1 & 5.2 Complete)
+**Version:** 1.2
+**Status:** ✅ Phase 5.1 & 5.2 Complete (Deprecated modules removed in Phase 6)
 **Timeline:** 4-6 weeks (incremental)
-**Last Updated:** 2026-02-27
+**Last Updated:** 2026-03-11
 **Dependencies:**
 - All Phase 3.x features complete ✅
 - Phase 4 observability complete ✅
@@ -19,10 +19,11 @@ Phase 5 is a **code health initiative** focused on refactoring the codebase to i
 - 140+ classes across 75 source files
 - 1,468 automated tests (99.58% coverage)
 
-**Current Stats (After Phase 5.2):**
+**Current Stats (After Phase 6 Cleanup):**
 - ~18,500+ lines of Python code (modular structure)
 - 150+ classes across 90+ source files
-- ~1,840 automated tests (99.92% coverage)
+- 2181 automated tests (99.25% coverage)
+- Deprecated compatibility stubs removed
 
 **Sub-Phases:**
 
@@ -55,12 +56,12 @@ All public APIs (CLI commands, service interfaces) MUST remain backward compatib
 
 ## Success Criteria (Overall)
 
-| Metric | Start | Current (Post 5.2) | Target |
-|--------|-------|-------------------|--------|
+| Metric | Start | Current (Post Phase 6) | Target |
+|--------|-------|------------------------|--------|
 | Largest file | 838 lines | 872 lines (service.py) | <300 lines |
 | Average file size | 237 lines | ~180 lines | <200 lines |
 | Files >500 lines | 10 | 3 | 0 |
-| Test coverage | 99.58% | 99.92% | ≥99% |
+| Test coverage | 99.58% | 99.25% | ≥99% |
 | Cyclomatic complexity (avg) | TBD | TBD | <10 |
 
 **Summary:** Phase 5.1 and 5.2 achieved functional decomposition with zero breaking changes. Some files exceed line targets but have clear single responsibilities. See individual spec files for details.

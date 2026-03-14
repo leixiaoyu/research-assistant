@@ -238,7 +238,7 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
       ```
    2. **Initialize:** Set up the environment (crucial for accurate testing):
       ```bash
-      python3.10 -m venv venv
+      python3.14 -m venv venv
       source venv/bin/activate
       pip install -r requirements.txt
       cp .env.template .env
@@ -437,7 +437,7 @@ Every feature must function **100% of the time** according to its specification 
 - **Daily Variation:** Topics can change each day via config updates
 
 ## Tech Stack
-* **Language:** Python 3.10+
+* **Language:** Python 3.14+ (upgraded from 3.10)
 * **Data Models:** Pydantic V2 (Strict)
 * **PDF Parser:** `marker-pdf` (preserves code syntax during PDF-to-MD conversion)
 * **APIs:** Semantic Scholar API (discovery), Gemini 1.5 Pro or Claude 3.5 Sonnet (extraction)
@@ -446,8 +446,8 @@ Every feature must function **100% of the time** according to its specification 
 ## Development Setup
 
 ```bash
-# Create virtual environment (requires Python 3.10+)
-python3.10 -m venv venv
+# Create virtual environment (requires Python 3.14+)
+python3.14 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies

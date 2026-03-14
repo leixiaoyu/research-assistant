@@ -1,6 +1,6 @@
 # Phase 5: Architectural Refactoring (Code Health Initiative)
 **Version:** 1.2
-**Status:** ✅ Phase 5.1 & 5.2 Complete (Deprecated modules removed in Phase 6)
+**Status:** ✅ Phase 5.1, 5.2 & 5.3 Complete (Deprecated modules removed in Phase 6)
 **Timeline:** 4-6 weeks (incremental)
 **Last Updated:** 2026-03-11
 **Dependencies:**
@@ -31,7 +31,7 @@ Phase 5 is a **code health initiative** focused on refactoring the codebase to i
 |-------|-------|----------|--------|------|--------|
 | 5.1 | LLMService Decomposition | HIGH | 3-4 days + 0.5 day integration | Low | ✅ Complete |
 | 5.2 | ResearchPipeline Refactoring | HIGH | 3-4 days + 0.5 day integration | Medium | ✅ Complete |
-| 5.3 | CLI Command Splitting | MEDIUM | 2 days + 0.5 day integration | Low | 📋 Planning |
+| 5.3 | CLI Command Splitting | MEDIUM | 2 days + 0.5 day integration | Low | ✅ Complete |
 | 5.4 | Utility Pattern Extraction | MEDIUM | 2 days + 0.5 day integration | Low | 📋 Planning |
 | 5.5 | Model Consolidation | LOW | 3-4 days + 0.5 day integration | Medium | 📋 Planning |
 | 5.6 | Service Layer Improvements | LOW | 3-4 days + 0.5 day integration | Medium | 📋 Planning |
@@ -64,7 +64,7 @@ All public APIs (CLI commands, service interfaces) MUST remain backward compatib
 | Test coverage | 99.58% | 99.25% | ≥99% |
 | Cyclomatic complexity (avg) | TBD | TBD | <10 |
 
-**Summary:** Phase 5.1 and 5.2 achieved functional decomposition with zero breaking changes. Some files exceed line targets but have clear single responsibilities. See individual spec files for details.
+**Summary:** Phase 5.1, 5.2, and 5.3 achieved functional decomposition with zero breaking changes. Some files exceed line targets but have clear single responsibilities. See individual spec files for details.
 
 ---
 
@@ -73,16 +73,17 @@ All public APIs (CLI commands, service interfaces) MUST remain backward compatib
 ```
 Week 1: Phase 5.1 (LLMService)        ✅ COMPLETED (Feb 24, 2026)
 Week 2: Phase 5.2 (ResearchPipeline)  ✅ COMPLETED (Feb 25, 2026)
-Week 3: Phase 5.3 + 5.4 (CLI + Utilities) - Next
-Week 4: Phase 5.5 (Models) - Optional
-Week 5: Phase 5.6 (Services) - Optional
+Week 3: Phase 5.3 (CLI Splitting)     ✅ COMPLETED (Feb 28, 2026)
+Week 4: Phase 5.4 (Utilities)         📋 Planning - Deferred
+Week 5: Phase 5.5 (Models)            📋 Planning - Optional
+Week 6: Phase 5.6 (Services)          📋 Planning - Optional
 ```
 
-Phases 5.5 and 5.6 are optional and can be deferred based on team capacity.
+Phases 5.4, 5.5, and 5.6 are optional and can be deferred based on team capacity.
 
 **Note:** Each phase includes 0.5 day of integration testing. Total estimate: 5-7 weeks including buffer.
 
-**Progress:** 2 of 6 sub-phases complete. Core high-priority refactoring (5.1, 5.2) is done.
+**Progress:** 3 of 6 sub-phases complete. Core high-priority refactoring (5.1, 5.2, 5.3) is done.
 
 ---
 

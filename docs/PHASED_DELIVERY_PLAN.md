@@ -22,7 +22,7 @@ This document outlines a phased delivery plan to build the Automated Research In
 
 ┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
 │Phase 3.6 │Phase 3.7 │Phase 5.1 │Phase 5.2 │Phase 5.3 │Phase 5.4 │Phase 5.5 │ Phase 6  │
-│✅Complete│✅Complete│✅Complete│✅Complete│(Planning)│(Future)  │(Future)  │🔄 Core   │
+│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│(Future)  │(Future)  │🔄 Core   │
 │          │          │          │          │          │          │          │ Complete │
 │ Delta    │Cross-    │   LLM    │Research  │   CLI    │ Utility  │ Model    │ Enhanced │
 │ Briefs   │Synthesis │ Decompose│ Pipeline │ Commands │ Patterns │Consolid. │ Discovery│
@@ -177,6 +177,26 @@ The original `ResearchPipeline` (824 lines, 14 functions) handled all pipeline p
 ✅ 100% test coverage maintained
 
 **Details:** See [PHASE_5.2_SPEC.md](specs/PHASE_5.2_SPEC.md) for full package structure and file sizes.
+
+---
+
+### Phase 5.3: CLI Command Splitting
+**Status:** ✅ **COMPLETED** (Feb 28, 2026)
+**Duration:** 2 days
+**Dependencies:** Phase 5.2 Complete
+**Goal:** Split monolithic CLI into modular command structure
+
+#### Problem Addressed
+The original `cli.py` (716 lines) contained all CLI commands in a single file, making it difficult to test individual commands in isolation and maintain clear separation of concerns.
+
+#### Key Deliverables
+✅ CLI package with 9 focused modules (`src/cli/`)
+✅ Dedicated modules: run.py (265), schedule.py (217), synthesize.py (159), utils.py (120), catalog.py (82)
+✅ Shared utilities module for config loading and error handling
+✅ Backward-compatible CLI invocations preserved
+✅ 51 CLI tests passing with full coverage
+
+**Details:** See [PHASE_5.3_SPEC.md](specs/PHASE_5.3_SPEC.md) for full package structure and file sizes.
 
 ---
 

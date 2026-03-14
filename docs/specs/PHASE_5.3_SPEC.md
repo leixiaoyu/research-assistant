@@ -1,11 +1,13 @@
 # Phase 5.3: CLI Command Splitting
-**Version:** 1.0
-**Status:** 📋 Planning
-**Timeline:** 2 days
+**Version:** 1.1
+**Status:** ✅ Complete
+**Timeline:** 2 days (Completed Feb 28, 2026)
 **Dependencies:**
 - Phase 5.1 Complete (LLMService Decomposition)
 - Phase 5.2 Complete (ResearchPipeline Refactoring)
 - All existing CLI tests passing
+
+> **Note (Phase 6 Update - Mar 11, 2026):** The backward compatibility stub `src/cli.py` has been removed as part of Phase 6 cleanup. All imports should now use `from src.cli import app` or `python -m src.cli`.
 
 ---
 
@@ -14,10 +16,10 @@
 This phase refactors the CLI layer as defined in [SYSTEM_ARCHITECTURE.md §2 CLI Layer](../SYSTEM_ARCHITECTURE.md#cli-layer).
 
 **Architectural Gaps Addressed:**
-- ❌ Gap: Single 716-line file contains all CLI commands
-- ❌ Gap: Command logic mixed with orchestration code
-- ❌ Gap: Difficult to test individual commands in isolation
-- ❌ Gap: Legacy functions preserved alongside modern code
+- ✅ Gap: Single 716-line file contains all CLI commands → Split into 9 focused modules (955 total lines)
+- ✅ Gap: Command logic mixed with orchestration code → Clean separation via dedicated modules
+- ✅ Gap: Difficult to test individual commands in isolation → Each command independently testable
+- ✅ Gap: Legacy functions preserved alongside modern code → Legacy code removed
 
 **Components Modified:**
 - CLI: src/cli.py → New package structure
@@ -391,16 +393,24 @@ def display_error(message: str) -> None:
 
 ---
 
-## 9. File Size Targets
+## 9. File Size Results
 
-| File | Current | Target |
-|------|---------|--------|
-| cli.py | 716 lines | Deprecated (re-export only) |
-| cli/__init__.py | N/A | <50 lines |
-| cli/run.py | N/A | <150 lines |
-| cli/catalog.py | N/A | <100 lines |
-| cli/schedule.py | N/A | <100 lines |
-| cli/health.py | N/A | <80 lines |
-| cli/synthesize.py | N/A | <80 lines |
-| cli/validate.py | N/A | <60 lines |
-| cli/utils.py | N/A | <100 lines |
+| File | Before | After | Target | Status |
+|------|--------|-------|--------|--------|
+| cli.py | 716 lines | Removed (Phase 6) | Deprecated | ✅ |
+| cli/__init__.py | N/A | 54 lines | <50 lines | ⚠️ Slightly over |
+| cli/__main__.py | N/A | 9 lines | N/A | ✅ |
+| cli/run.py | N/A | 265 lines | <150 lines | ⚠️ Exceeds (coordination complexity) |
+| cli/catalog.py | N/A | 82 lines | <100 lines | ✅ |
+| cli/schedule.py | N/A | 217 lines | <100 lines | ⚠️ Exceeds (lifecycle management) |
+| cli/health.py | N/A | 24 lines | <80 lines | ✅ |
+| cli/synthesize.py | N/A | 159 lines | <80 lines | ⚠️ Exceeds |
+| cli/validate.py | N/A | 25 lines | <60 lines | ✅ |
+| cli/utils.py | N/A | 120 lines | <100 lines | ⚠️ Slightly over |
+
+**Total: 955 lines across 9 modules** (was 716 lines in monolithic file)
+
+**Notes:**
+- All modules follow Single Responsibility Principle
+- Files exceeding targets have clear justifications (coordination logic, lifecycle management)
+- Deprecated stub removed as part of Phase 6 cleanup

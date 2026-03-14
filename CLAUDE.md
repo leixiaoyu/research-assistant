@@ -212,9 +212,9 @@ The instruction "clean up workspace/repo" does NOT authorize worktree removal.
 
 ### PR Requirements (Non-Negotiable)
 Before a Pull Request can be merged into `main`:
-1. **CI Status:** The "test (3.14)" workflow must pass with **100% success rate**.
+1. **CI Status:** The "test (3.10)" workflow must pass with **100% success rate**.
 2. **Linting & Types:** **Flake8**, **Black** (formatting), and **Mypy** (static analysis) must pass with zero issues.
-3. **Coverage:** The "test (3.14)" workflow must verify **≥99% test coverage per module**.
+3. **Coverage:** The "test (3.10)" workflow must verify **≥99% test coverage per module**.
 4. **Approval:** At least **one approving review** from a human teammate is required.
 5. **Admin Enforcement:** These rules apply to **all users**, including administrators. No bypasses.
 
@@ -238,7 +238,7 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
       ```
    2. **Initialize:** Set up the environment (crucial for accurate testing):
       ```bash
-      python3.14 -m venv venv
+      python3.10 -m venv venv
       source venv/bin/activate
       pip install -r requirements.txt
       cp .env.template .env
@@ -437,7 +437,7 @@ Every feature must function **100% of the time** according to its specification 
 - **Daily Variation:** Topics can change each day via config updates
 
 ## Tech Stack
-* **Language:** Python 3.14+
+* **Language:** Python 3.10+
 * **Data Models:** Pydantic V2 (Strict)
 * **PDF Parser:** `marker-pdf` (preserves code syntax during PDF-to-MD conversion)
 * **APIs:** Semantic Scholar API (discovery), Gemini 1.5 Pro or Claude 3.5 Sonnet (extraction)
@@ -446,8 +446,8 @@ Every feature must function **100% of the time** according to its specification 
 ## Development Setup
 
 ```bash
-# Create virtual environment (requires Python 3.14+)
-python3.14 -m venv venv
+# Create virtual environment (requires Python 3.10+)
+python3.10 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
@@ -535,7 +535,7 @@ The pipeline consists of five main modules:
    - Handles deduplication logic and run tracking
    - Updates `catalog.json` atomically
 
-4. **`src/cli.py`** - Pipeline orchestration (Typer CLI)
+4. **`src/cli/`** - Pipeline orchestration (Typer CLI package)
    - Loads config via `config_manager`
    - Processes each topic in `research_config.yaml`
    - For each topic, determines output location (new or existing)
@@ -547,7 +547,7 @@ The pipeline consists of five main modules:
 
 **Phase 2 Modules (✅ Complete & Production Ready):**
 - **`src/services/pdf_service.py`**: PDF download, conversion, and cleanup management
-- **`src/services/llm_service.py`**: Multi-provider LLM service (Claude/Gemini) with cost tracking
+- **`src/services/llm/`**: Multi-provider LLM service package (Claude/Gemini) with cost tracking
 - **`src/services/extraction_service.py`**: Pipeline orchestration (PDF → conversion → LLM extraction)
 - **`src/output/enhanced_generator.py`**: Enhanced markdown with extraction results and statistics
 
@@ -562,8 +562,8 @@ The pipeline consists of five main modules:
 - **`src/models/concurrency.py`**: Resource limiting and backpressure configuration models
 
 **Test Coverage:**
-- **442 automated tests** (100% pass rate)
-- **99.10% overall coverage** (meets ≥99% requirement)
+- **2181 automated tests** (100% pass rate)
+- **99.25% overall coverage** (meets ≥99% requirement)
 - **Production E2E verified** with real ArXiv papers and live Gemini LLM
 - **Concurrent orchestration verified** with async worker pools and resource limiting
 
@@ -728,7 +728,7 @@ The project includes a comprehensive verification script that runs all required 
 
 **GitHub Actions Workflow (`ci.yml`):**
 - Runs on: All pull requests and pushes to `main`
-- Python Version: 3.14 (enforced)
+- Python Version: 3.10 (enforced)
 - Checks:
   1. Black formatting
   2. Flake8 linting

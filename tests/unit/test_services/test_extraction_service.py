@@ -4,7 +4,7 @@ from unittest.mock import Mock, AsyncMock, MagicMock
 
 from src.services.extraction_service import ExtractionService
 from src.services.pdf_service import PDFService
-from src.services.llm_service import LLMService
+from src.services.llm import LLMService
 from src.models.paper import PaperMetadata, Author
 from src.models.extraction import PaperExtraction, ExtractedPaper
 from src.utils.exceptions import PDFDownloadError, ExtractionError

@@ -232,7 +232,7 @@ class ResearchPipeline:
             config: Research configuration
         """
         from src.services.pdf_service import PDFService
-        from src.services.llm_service import LLMService
+        from src.services.llm import LLMService
         from src.services.extraction_service import ExtractionService
         from src.services.cache_service import CacheService
         from src.services.dedup_service import DeduplicationService

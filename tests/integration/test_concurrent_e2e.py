@@ -12,7 +12,7 @@ from src.models.dedup import DedupConfig
 from src.models.filters import FilterConfig
 
 from src.services.pdf_extractors.fallback_service import FallbackPDFService
-from src.services.llm_service import LLMService
+from src.services.llm import LLMService
 from src.services.cache_service import CacheService
 from src.services.dedup_service import DeduplicationService
 from src.services.filter_service import FilterService

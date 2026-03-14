@@ -87,7 +87,7 @@ class TestCLICoverage:
 
             # Mock ResearchPipeline
             with patch(
-                "src.orchestration.research_pipeline.ResearchPipeline"
+                "src.orchestration.pipeline.ResearchPipeline"
             ) as mock_pipeline_class:
                 mock_result = PipelineResult()
                 mock_result.topics_processed = 1
@@ -127,7 +127,7 @@ class TestCLICoverage:
             mock_cm.return_value.load_config.return_value = mock_config
 
             with patch(
-                "src.orchestration.research_pipeline.ResearchPipeline"
+                "src.orchestration.pipeline.ResearchPipeline"
             ) as mock_pipeline_class:
                 mock_result = PipelineResult()
                 mock_result.topics_processed = 1
@@ -500,7 +500,7 @@ class TestNoSynthesisFlag:
             mock_cm.return_value.load_config.return_value = mock_config
 
             with patch(
-                "src.orchestration.research_pipeline.ResearchPipeline"
+                "src.orchestration.pipeline.ResearchPipeline"
             ) as mock_pipeline_class:
                 mock_result = PipelineResult()
                 mock_result.topics_processed = 1

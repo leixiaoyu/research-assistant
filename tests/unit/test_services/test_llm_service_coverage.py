@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import Mock, patch, AsyncMock
-from src.services.llm_service import LLMService
-from src.models.llm import LLMConfig, CostLimits
+from src.services.llm import LLMService
+from src.models.llm import LLMConfig, CostLimits, FallbackProviderConfig
 from src.models.extraction import ExtractionTarget
 from src.utils.exceptions import (
     ExtractionError,
@@ -241,3 +241,111 @@ class TestLLMServiceCoverage:
         mock_response.content = [Mock(text="Invalid JSON")]
         with pytest.raises(JSONParseError):
             llm_service._parse_response(mock_response, [])
+
+    @pytest.mark.asyncio
+    async def test_complete_fallback_provider_failure(self, cost_limits):
+        """Test complete() when fallback provider also fails (lines 396-398)."""
+        from src.services.llm.exceptions import LLMProviderError
+
+        # Create config with fallback enabled
+        config = LLMConfig(
+            provider="anthropic",
+            model="claude-3-5-sonnet-20250122",
+            api_key="test-key",
+            max_tokens=1000,
+            fallback=FallbackProviderConfig(
+                enabled=True,
+                provider="google",
+                model="gemini-1.5-pro",
+                api_key="test-fallback-key",
+            ),
+        )
+
+        with patch("anthropic.AsyncAnthropic"):
+            with patch("google.genai.Client"):
+                service = LLMService(config, cost_limits)
+
+                # Mock primary provider to fail
+                primary_provider = Mock()
+                primary_provider.generate = AsyncMock(
+                    side_effect=LLMProviderError("Primary failed")
+                )
+                service._providers["anthropic"] = primary_provider
+
+                # Mock fallback provider to also fail
+                fallback_provider = Mock()
+                fallback_provider.generate = AsyncMock(
+                    side_effect=LLMProviderError("Fallback failed")
+                )
+                service._providers["google"] = fallback_provider
+                service.fallback_provider = "google"
+
+                with pytest.raises(AllProvidersFailedError):
+                    await service.complete("Test prompt")
+
+    def test_google_model_property_with_provider_model(self, llm_config, cost_limits):
+        """Test _google_model property accessing provider's _model attribute."""
+        with patch("anthropic.AsyncAnthropic"):
+            service = LLMService(llm_config, cost_limits)
+
+            # Add a mock google provider with _model attribute
+            mock_google_provider = Mock()
+            mock_google_provider._model = "gemini-1.5-pro"
+            service._providers["google"] = mock_google_provider
+
+            # Access the property
+            result = service._google_model
+            assert result == "gemini-1.5-pro"
+
+    @pytest.mark.asyncio
+    async def test_call_anthropic_raw_provider_not_available(
+        self, llm_config, cost_limits
+    ):
+        """Test _call_anthropic_raw raises error when provider unavailable."""
+        with patch("anthropic.AsyncAnthropic"):
+            service = LLMService(llm_config, cost_limits)
+
+            # Remove the anthropic provider
+            service._providers.pop("anthropic", None)
+
+            # Call with new signature (prompt_string, max_tokens)
+            with pytest.raises(LLMAPIError, match="Anthropic provider not available"):
+                await service._call_anthropic_raw("Test prompt", 1000)
+
+    @pytest.mark.asyncio
+    async def test_call_google_raw_provider_not_available(
+        self, llm_config, cost_limits
+    ):
+        """Test _call_google_raw raises error when provider unavailable."""
+        with patch("anthropic.AsyncAnthropic"):
+            service = LLMService(llm_config, cost_limits)
+
+            # Ensure no google provider
+            service._providers.pop("google", None)
+
+            # Call with new signature (prompt_string, max_tokens)
+            with pytest.raises(LLMAPIError, match="Google provider not available"):
+                await service._call_google_raw("Test prompt", 1000)
+
+    def test_extract_retry_after_from_headers(self, llm_service):
+        """Test _extract_retry_after extracts retry-after from response headers."""
+        # Test with retry-after header
+        mock_error = Mock()
+        mock_error.response = Mock()
+        mock_error.response.headers = {"retry-after": "30"}
+        result = llm_service._extract_retry_after(mock_error)
+        assert result == 30.0
+
+    def test_extract_retry_after_no_retry_header(self, llm_service):
+        """Test _extract_retry_after returns None when no retry-after header."""
+        mock_error = Mock()
+        mock_error.response = Mock()
+        mock_error.response.headers = {}
+        result = llm_service._extract_retry_after(mock_error)
+        assert result is None
+
+    def test_extract_retry_after_no_response(self, llm_service):
+        """Test _extract_retry_after handles error without response."""
+        mock_error = Mock(spec=[])  # No response attribute
+        result = llm_service._extract_retry_after(mock_error)
+        assert result is None

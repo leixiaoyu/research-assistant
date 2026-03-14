@@ -212,9 +212,9 @@ The instruction "clean up workspace/repo" does NOT authorize worktree removal.
 
 ### PR Requirements (Non-Negotiable)
 Before a Pull Request can be merged into `main`:
-1. **CI Status:** The "test (3.10)" workflow must pass with **100% success rate**.
+1. **CI Status:** The "test (3.14)" workflow must pass with **100% success rate**.
 2. **Linting & Types:** **Flake8**, **Black** (formatting), and **Mypy** (static analysis) must pass with zero issues.
-3. **Coverage:** The "test (3.10)" workflow must verify **≥99% test coverage per module**.
+3. **Coverage:** The "test (3.14)" workflow must verify **≥99% test coverage per module**.
 4. **Approval:** At least **one approving review** from a human teammate is required.
 5. **Admin Enforcement:** These rules apply to **all users**, including administrators. No bypasses.
 
@@ -307,15 +307,21 @@ See [SYSTEM_ARCHITECTURE.md §9 Security](docs/SYSTEM_ARCHITECTURE.md#security) 
 **Test coverage is a BLOCKING requirement for all commits and pushes to remote.**
 
 **Coverage Requirements:**
-- **Target:** 100% test coverage for all new code
-- **Minimum Acceptable:** 99% coverage per module
-- **Overall Project:** Must maintain ≥99% coverage at all times
+- **Measurement:** Combined line + branch coverage (both are measured)
+- **Target:** 100% combined coverage for all new code
+- **Minimum Acceptable:** ≥99% combined coverage per module
+- **Overall Project:** Must maintain ≥99% combined coverage at all times
 
-**If coverage falls below 99%, you MUST NOT commit or push. No exceptions.**
+**Coverage Types Explained:**
+- **Line Coverage:** Percentage of code lines executed by tests
+- **Branch Coverage:** Percentage of decision branches (if/else, loops) taken by tests
+- **Combined Coverage:** Weighted average of line and branch coverage (what we enforce)
+
+**If combined coverage falls below 99%, you MUST NOT commit or push. No exceptions.**
 
 **Pragmatic Approach:**
 - Aim for 100%, accept 99%+ with clear justification
-- Every uncovered line must be documented with reason (e.g., "unreachable defensive code", "external library limitation")
+- Every uncovered line/branch must be documented with reason (e.g., "unreachable defensive code", "external library limitation")
 - Coverage gaps must be tracked as technical debt and resolved within 1 sprint
 
 **Coverage Verification Checklist:**
@@ -323,8 +329,8 @@ See [SYSTEM_ARCHITECTURE.md §9 Security](docs/SYSTEM_ARCHITECTURE.md#security) 
 - [ ] Integration tests cover all service interactions
 - [ ] Edge cases have dedicated tests
 - [ ] Error paths are fully tested
-- [ ] `pytest --cov=src --cov-report=term-missing` shows ≥99%
-- [ ] Any uncovered lines documented in verification report
+- [ ] `pytest --cov=src --cov-branch --cov-report=term-missing` shows ≥99%
+- [ ] Any uncovered lines/branches documented in verification report
 
 **🚫 Pragma Prohibition (Non-Negotiable):**
 

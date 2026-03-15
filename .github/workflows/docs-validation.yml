@@ -58,24 +58,24 @@ jobs:
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
           HEAD_SHA="${{ github.event.pull_request.head.sha }}"
 
-          echo "Comparing $BASE_SHA...$HEAD_SHA"
+          echo "Comparing ${BASE_SHA}...${HEAD_SHA}"
 
           # Get changed files
-          CHANGED_SRC=$(git diff --name-only "$BASE_SHA"..."$HEAD_SHA" -- 'src/' | grep -v '__pycache__' | grep -v '\.pyc$' || true)
-          CHANGED_DOCS=$(git diff --name-only "$BASE_SHA"..."$HEAD_SHA" -- 'docs/' 'CLAUDE.md' 'README.md' '*.md' || true)
-          CHANGED_TESTS=$(git diff --name-only "$BASE_SHA"..."$HEAD_SHA" -- 'tests/' || true)
+          CHANGED_SRC=$(git diff --name-only "${BASE_SHA}"..."${HEAD_SHA}" -- 'src/' | grep -v '__pycache__' | grep -v '\.pyc$' || true)
+          CHANGED_DOCS=$(git diff --name-only "${BASE_SHA}"..."${HEAD_SHA}" -- 'docs/' 'CLAUDE.md' 'README.md' '*.md' || true)
+          CHANGED_TESTS=$(git diff --name-only "${BASE_SHA}"..."${HEAD_SHA}" -- 'tests/' || true)
 
           echo "Changed source files:"
-          echo "$CHANGED_SRC"
+          echo "${CHANGED_SRC}"
           echo ""
           echo "Changed documentation files:"
-          echo "$CHANGED_DOCS"
+          echo "${CHANGED_DOCS}"
           echo ""
 
           # If source changed but no docs changed (and not just tests)
-          if [ -n "$CHANGED_SRC" ] && [ -z "$CHANGED_DOCS" ]; then
+          if [ -n "${CHANGED_SRC}" ] && [ -z "${CHANGED_DOCS}" ]; then
             # Allow if only test files changed alongside source
-            if [ -n "$CHANGED_TESTS" ]; then
+            if [ -n "${CHANGED_TESTS}" ]; then
               echo "::notice::Source code changed with tests but no documentation. Consider updating docs if API changed."
               exit 0
             fi

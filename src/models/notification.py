@@ -6,6 +6,8 @@ Provides Pydantic models for:
 - NotificationSettings: Container for all notification providers
 - DeduplicationResult: Paper categorization for dedup-aware notifications
 
+Phase 7.1: Added discovery_stats support to PipelineSummary.
+
 Usage:
     from src.models.notification import NotificationSettings, SlackConfig
 
@@ -17,7 +19,7 @@ Usage:
     )
 """
 
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
@@ -320,6 +322,15 @@ class PipelineSummary(BaseModel):
         default=0,
         ge=0,
         description="Total papers checked for deduplication",
+    )
+
+    # Discovery statistics (Phase 7.1)
+    discovery_stats: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Discovery statistics from Phase 7.1 "
+            "(total_discovered, new_count, filtered_count, etc.)"
+        ),
     )
 
     @property

@@ -1,10 +1,11 @@
-"""Discovery data models for Phase 6: Enhanced Discovery Pipeline.
+"""Discovery data models for Phase 6 & 7.1: Enhanced Discovery Pipeline.
 
 This module defines data structures for:
 - Query decomposition (sub-queries with focus areas)
 - Quality scoring weights
 - Scored papers with quality and relevance metrics
 - Discovery pipeline metrics and results
+- Phase 7.1: Discovery statistics, filtering results, and timeframe resolution
 
 Usage:
     from src.models.discovery import (
@@ -14,11 +15,16 @@ Usage:
         ScoredPaper,
         DiscoveryMetrics,
         DiscoveryResult,
+        DiscoveryStats,
+        FilteredPaper,
+        DiscoveryFilterResult,
+        ResolvedTimeframe,
     )
 """
 
 from enum import Enum
-from typing import List, Optional, TYPE_CHECKING
+from typing import List, Optional, Dict, TYPE_CHECKING
+from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict, computed_field, model_validator
 
 import structlog
@@ -345,3 +351,167 @@ class DiscoveryResult(BaseModel):
         """
         sorted_papers = sorted(self.papers, key=lambda p: p.final_score, reverse=True)
         return sorted_papers[:n]
+
+
+# Phase 7.1: Discovery Foundation Models
+
+
+class DiscoveryStats(BaseModel):
+    """Statistics from discovery filtering operation.
+
+    Tracks the number of papers discovered, filtered, and the breakdown
+    of filter reasons for incremental discovery.
+
+    Attributes:
+        total_discovered: Total papers discovered from provider
+        new_count: Number of new papers not in registry
+        filtered_count: Number of papers filtered out as duplicates
+        filter_breakdown: Breakdown of filter reasons (doi, arxiv, title, provider_id)
+        incremental_query: Whether this was an incremental query
+        query_start_date: Start date for incremental queries
+    """
+
+    total_discovered: int = Field(
+        ..., ge=0, description="Total papers discovered from provider"
+    )
+    new_count: int = Field(
+        ..., ge=0, description="Number of new papers not in registry"
+    )
+    filtered_count: int = Field(
+        ..., ge=0, description="Number of papers filtered out as duplicates"
+    )
+    filter_breakdown: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Breakdown of filter reasons (doi, arxiv, title, provider_id)",
+    )
+    incremental_query: bool = Field(
+        default=False, description="Whether this was an incremental query"
+    )
+    query_start_date: Optional[datetime] = Field(
+        default=None, description="Start date for incremental queries"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "total_discovered": 25,
+                "new_count": 18,
+                "filtered_count": 7,
+                "filter_breakdown": {"doi": 5, "arxiv": 2, "title": 0},
+                "incremental_query": True,
+                "query_start_date": "2025-01-20T00:00:00Z",
+            }
+        }
+    )
+
+
+class FilteredPaper(BaseModel):
+    """Information about a paper that was filtered out.
+
+    Records the paper metadata, why it was filtered, and which
+    existing registry entry it matched.
+
+    Attributes:
+        paper: Paper metadata that was filtered
+        filter_reason: Reason for filtering (doi, arxiv, title, provider_id)
+        matched_entry_id: Registry entry ID that matched this paper
+    """
+
+    paper: "PaperMetadata" = Field(..., description="Paper metadata that was filtered")
+    filter_reason: str = Field(
+        ...,
+        description="Reason for filtering (doi, arxiv, title, provider_id)",
+    )
+    matched_entry_id: str = Field(
+        ..., description="Registry entry ID that matched this paper"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "paper": {
+                    "paper_id": "2301.12345",
+                    "title": "Sample Paper",
+                    "url": "https://example.com/paper",
+                },
+                "filter_reason": "doi",
+                "matched_entry_id": "entry_2025-01-20_001",
+            }
+        }
+    )
+
+
+class DiscoveryFilterResult(BaseModel):
+    """Result of discovery filtering operation.
+
+    Contains the list of new papers to process, filtered papers for
+    tracking, and statistics about the filtering operation.
+
+    Attributes:
+        new_papers: New papers not in registry
+        filtered_papers: Papers filtered out as duplicates
+        stats: Filtering statistics
+    """
+
+    new_papers: List["PaperMetadata"] = Field(
+        default_factory=list, description="New papers not in registry"
+    )
+    filtered_papers: List[FilteredPaper] = Field(
+        default_factory=list, description="Papers filtered out as duplicates"
+    )
+    stats: DiscoveryStats = Field(..., description="Filtering statistics")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "new_papers": [],
+                "filtered_papers": [],
+                "stats": {
+                    "total_discovered": 25,
+                    "new_count": 18,
+                    "filtered_count": 7,
+                    "filter_breakdown": {"doi": 5, "arxiv": 2},
+                    "incremental_query": True,
+                },
+            }
+        }
+    )
+
+
+class ResolvedTimeframe(BaseModel):
+    """Resolved timeframe for discovery query.
+
+    Converts configuration timeframe into concrete start/end dates,
+    with support for incremental queries based on last run time.
+
+    Attributes:
+        start_date: Query start date (inclusive)
+        end_date: Query end date (inclusive)
+        is_incremental: Whether this is based on last run time
+        overlap_buffer_hours: Hours of overlap to prevent gaps
+        original_timeframe: Original timeframe configuration (stored as dict)
+    """
+
+    start_date: datetime = Field(..., description="Query start date (inclusive)")
+    end_date: datetime = Field(..., description="Query end date (inclusive)")
+    is_incremental: bool = Field(
+        default=False, description="Whether this is based on last run time"
+    )
+    overlap_buffer_hours: int = Field(
+        default=1, ge=0, le=168, description="Hours of overlap to prevent gaps"
+    )
+    original_timeframe: Optional[Dict] = Field(
+        default=None, description="Original timeframe configuration (as dict)"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "start_date": "2025-01-20T00:00:00Z",
+                "end_date": "2025-01-24T23:59:59Z",
+                "is_incremental": True,
+                "overlap_buffer_hours": 1,
+                "original_timeframe": None,
+            }
+        }
+    )

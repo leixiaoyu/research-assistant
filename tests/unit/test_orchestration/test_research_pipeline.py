@@ -14,6 +14,7 @@ import tempfile
 from src.orchestration import ResearchPipeline, PipelineResult, PipelineContext
 from src.orchestration.phases import SynthesisPhase, CrossSynthesisPhase
 from src.services.providers.base import APIError
+from src.models.paper import PaperMetadata, Author
 
 
 class TestPipelineResult:
@@ -251,22 +252,17 @@ settings:
 
             pipeline = ResearchPipeline(config_path=config_path, enable_phase2=False)
 
-            # Create mock paper with proper author objects
-            mock_author = Mock()
-            mock_author.name = "Author 1"
-            mock_paper = Mock()
-            mock_paper.title = "Test Paper"
-            mock_paper.paper_id = "123"
-            mock_paper.doi = None
-            mock_paper.abstract = "Abstract"
-            mock_paper.authors = [mock_author]
-            mock_paper.publication_date = None
-            mock_paper.venue = None
-            mock_paper.open_access_pdf = None
-            mock_paper.citation_count = 0
+            # Create real PaperMetadata for Phase 7.1 compatibility
+            test_paper = PaperMetadata(
+                paper_id="123",
+                title="Test Paper",
+                url="https://example.com/paper",
+                abstract="Abstract",
+                authors=[Author(name="Author 1")],
+            )
 
             with patch("src.services.discovery_service.DiscoveryService") as mock_ds:
-                mock_ds.return_value.search = AsyncMock(return_value=[mock_paper])
+                mock_ds.return_value.search = AsyncMock(return_value=[test_paper])
 
                 with patch("src.services.catalog_service.CatalogService") as mock_cs:
                     mock_cs.return_value.get_or_create_topic.return_value = Mock(
@@ -284,6 +280,12 @@ settings:
                         mock_cm.get_output_path.return_value = topic_dir
                         mock_cm_class.return_value = mock_cm
                         # Load config should return proper config
+                        # Phase 7.1: Disable filtering for this unit test
+                        mock_filter = MagicMock()
+                        mock_filter.enabled = False
+                        mock_incr = MagicMock()
+                        mock_incr.enabled = False
+
                         mock_cm.load_config.return_value = MagicMock(
                             research_topics=[
                                 MagicMock(
@@ -299,6 +301,8 @@ settings:
                                 llm_settings=None,
                                 cost_limits=None,
                                 concurrency=None,
+                                discovery_filter_settings=mock_filter,
+                                incremental_discovery_settings=mock_incr,
                             ),
                         )
 

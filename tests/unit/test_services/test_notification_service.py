@@ -853,3 +853,163 @@ class TestSlackMessageBuilderDedup:
             if block.get("type") == "section":
                 text = block.get("text", {}).get("text", "")
                 assert ":arrows_counterclockwise:" not in text
+
+
+class TestSlackMessageBuilderDiscoveryStats:
+    """Tests for discovery statistics in Slack messages (Phase 7.1)."""
+
+    @pytest.fixture
+    def builder(self) -> SlackMessageBuilder:
+        """Create a message builder with default settings."""
+        settings = NotificationSettings()
+        return SlackMessageBuilder(settings)
+
+    def test_build_discovery_stats_section(self, builder: SlackMessageBuilder) -> None:
+        """Test discovery stats section formatting."""
+        discovery_stats = {
+            "total_discovered": 25,
+            "new_count": 18,
+            "filtered_count": 7,
+            "filter_breakdown": {"doi": 5, "arxiv": 2, "title": 0},
+            "incremental_query": True,
+        }
+
+        block = builder._build_discovery_stats_section(discovery_stats)
+
+        assert block["type"] == "section"
+        text = block["text"]["text"]
+        assert ":mag:" in text
+        assert "Discovery Stats" in text
+        assert "incremental" in text.lower()
+        assert "25" in text  # total_discovered
+        assert "18" in text  # new_count
+        assert "7" in text  # filtered_count
+        assert "5 by doi" in text
+        assert "2 by arxiv" in text
+
+    def test_build_discovery_stats_section_full_timeframe(
+        self, builder: SlackMessageBuilder
+    ) -> None:
+        """Test discovery stats with full timeframe query."""
+        discovery_stats = {
+            "total_discovered": 30,
+            "new_count": 30,
+            "filtered_count": 0,
+            "filter_breakdown": {},
+            "incremental_query": False,
+        }
+
+        block = builder._build_discovery_stats_section(discovery_stats)
+
+        text = block["text"]["text"]
+        assert "full timeframe" in text.lower()
+        assert "30" in text
+        assert "none" in text.lower()  # no filter breakdown
+
+    def test_build_discovery_stats_section_zero_filtered(
+        self, builder: SlackMessageBuilder
+    ) -> None:
+        """Test discovery stats when no papers were filtered."""
+        discovery_stats = {
+            "total_discovered": 10,
+            "new_count": 10,
+            "filtered_count": 0,
+            "filter_breakdown": {},
+            "incremental_query": True,
+        }
+
+        block = builder._build_discovery_stats_section(discovery_stats)
+
+        text = block["text"]["text"]
+        assert "10" in text
+        assert "0" in text or "none" in text.lower()
+
+    def test_build_pipeline_summary_with_discovery_stats(
+        self, builder: SlackMessageBuilder
+    ) -> None:
+        """Test pipeline summary includes discovery stats section."""
+        summary = PipelineSummary(
+            date="2025-01-23",
+            topics_processed=1,
+            papers_discovered=18,
+            discovery_stats={
+                "total_discovered": 25,
+                "new_count": 18,
+                "filtered_count": 7,
+                "filter_breakdown": {"doi": 5, "arxiv": 2},
+                "incremental_query": True,
+            },
+        )
+
+        payload = builder.build_pipeline_summary(summary)
+        blocks = payload["blocks"]
+
+        # Find discovery stats section
+        discovery_found = False
+        for block in blocks:
+            if block.get("type") == "section":
+                text = block.get("text", {}).get("text", "")
+                if ":mag:" in text and "Discovery Stats" in text:
+                    discovery_found = True
+                    assert "25" in text
+                    assert "18" in text
+                    assert "7" in text
+                    break
+
+        assert discovery_found, "Discovery stats section not found in payload"
+
+    def test_build_pipeline_summary_without_discovery_stats(
+        self, builder: SlackMessageBuilder
+    ) -> None:
+        """Test pipeline summary without discovery stats."""
+        summary = PipelineSummary(
+            date="2025-01-23",
+            topics_processed=1,
+            papers_discovered=10,
+        )
+
+        payload = builder.build_pipeline_summary(summary)
+        blocks = payload["blocks"]
+
+        # Check no discovery stats section
+        for block in blocks:
+            if block.get("type") == "section":
+                text = block.get("text", {}).get("text", "")
+                assert "Discovery Stats" not in text
+
+
+class TestCreateSummaryWithDiscoveryStats:
+    """Tests for create_summary_from_result with discovery stats (Phase 7.1)."""
+
+    def test_with_discovery_stats(self) -> None:
+        """Test conversion with discovery stats."""
+        result = {
+            "topics_processed": 1,
+            "papers_discovered": 18,
+            "discovery_stats": {
+                "total_discovered": 25,
+                "new_count": 18,
+                "filtered_count": 7,
+                "filter_breakdown": {"doi": 5, "arxiv": 2},
+                "incremental_query": True,
+            },
+        }
+
+        summary = NotificationService.create_summary_from_result(result)
+
+        assert summary.discovery_stats is not None
+        assert summary.discovery_stats["total_discovered"] == 25
+        assert summary.discovery_stats["new_count"] == 18
+        assert summary.discovery_stats["filtered_count"] == 7
+        assert summary.discovery_stats["incremental_query"] is True
+
+    def test_without_discovery_stats(self) -> None:
+        """Test conversion without discovery stats."""
+        result = {
+            "topics_processed": 1,
+            "papers_discovered": 10,
+        }
+
+        summary = NotificationService.create_summary_from_result(result)
+
+        assert summary.discovery_stats is None

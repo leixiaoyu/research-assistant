@@ -109,15 +109,11 @@ class ResultAggregator:
         )
 
     def _deduplicate(self, papers: List[PaperMetadata]) -> List[PaperMetadata]:
-        """Remove duplicates across sources.
+        """Remove duplicates across sources using Union-Find algorithm.
 
-        Deduplication priority:
-        1. DOI (exact match)
-        2. ArXiv ID (exact match)
-        3. Paper ID (exact match)
-        4. Title similarity (normalized, case-insensitive)
-
-        When merging duplicates, prefer richest metadata and track source_count.
+        Uses a Connected Components approach where papers sharing ANY identifier
+        (DOI, ArXiv ID, paper_id, or normalized title) are grouped together.
+        This prevents losing unique papers when identifiers partially overlap.
 
         Args:
             papers: List of papers to deduplicate
@@ -125,80 +121,98 @@ class ResultAggregator:
         Returns:
             Deduplicated list with merged metadata
         """
-        # Group by unique identifiers
-        doi_groups: Dict[str, List[PaperMetadata]] = {}
-        arxiv_groups: Dict[str, List[PaperMetadata]] = {}
-        paper_id_groups: Dict[str, List[PaperMetadata]] = {}
-        title_groups: Dict[str, List[PaperMetadata]] = {}
+        if not papers:
+            return []
 
-        for paper in papers:
-            grouped = False
+        n = len(papers)
 
-            # Group by DOI first (highest priority)
+        # Union-Find data structure
+        parent = list(range(n))
+        rank = [0] * n
+
+        def find(x: int) -> int:
+            """Find with path compression."""
+            if parent[x] != x:
+                parent[x] = find(parent[x])
+            return parent[x]
+
+        def union(x: int, y: int) -> None:
+            """Union by rank."""
+            px, py = find(x), find(y)
+            if px == py:
+                return
+            if rank[px] < rank[py]:
+                px, py = py, px
+            parent[py] = px
+            if rank[px] == rank[py]:
+                rank[px] += 1
+
+        # Build identifier -> paper indices mapping
+        doi_map: Dict[str, List[int]] = {}
+        arxiv_map: Dict[str, List[int]] = {}
+        paper_id_map: Dict[str, List[int]] = {}
+        title_map: Dict[str, List[int]] = {}
+
+        for i, paper in enumerate(papers):
+            # Track DOI
             if paper.doi:
-                normalized_doi = paper.doi.lower().strip()
-                if normalized_doi not in doi_groups:
-                    doi_groups[normalized_doi] = []
-                doi_groups[normalized_doi].append(paper)
-                grouped = True
+                key = f"doi:{paper.doi.lower().strip()}"
+                if key not in doi_map:
+                    doi_map[key] = []
+                doi_map[key].append(i)
 
-            # Group by ArXiv ID
-            if not grouped and paper.arxiv_id:
-                normalized_arxiv = paper.arxiv_id.lower().strip()
-                if normalized_arxiv not in arxiv_groups:
-                    arxiv_groups[normalized_arxiv] = []
-                arxiv_groups[normalized_arxiv].append(paper)
-                grouped = True
+            # Track ArXiv ID
+            if paper.arxiv_id:
+                key = f"arxiv:{paper.arxiv_id.lower().strip()}"
+                if key not in arxiv_map:
+                    arxiv_map[key] = []
+                arxiv_map[key].append(i)
 
-            # Group by paper_id
-            if not grouped and paper.paper_id:
-                if paper.paper_id not in paper_id_groups:
-                    paper_id_groups[paper.paper_id] = []
-                paper_id_groups[paper.paper_id].append(paper)
-                grouped = True
+            # Track paper_id
+            if paper.paper_id:
+                key = f"pid:{paper.paper_id}"
+                if key not in paper_id_map:
+                    paper_id_map[key] = []
+                paper_id_map[key].append(i)
 
-            # Fall back to title grouping
-            if not grouped:
-                normalized_title = self._normalize_title(paper.title)
-                if normalized_title not in title_groups:
-                    title_groups[normalized_title] = []
-                title_groups[normalized_title].append(paper)
+            # Track normalized title
+            norm_title = self._normalize_title(paper.title)
+            if norm_title:
+                key = f"title:{norm_title}"
+                if key not in title_map:
+                    title_map[key] = []
+                title_map[key].append(i)
 
-        # Merge each group
+        # Union papers sharing any identifier
+        for indices in doi_map.values():
+            for j in range(1, len(indices)):
+                union(indices[0], indices[j])
+
+        for indices in arxiv_map.values():
+            for j in range(1, len(indices)):
+                union(indices[0], indices[j])
+
+        for indices in paper_id_map.values():
+            for j in range(1, len(indices)):
+                union(indices[0], indices[j])
+
+        for indices in title_map.values():
+            for j in range(1, len(indices)):
+                union(indices[0], indices[j])
+
+        # Group papers by their root component
+        components: Dict[int, List[PaperMetadata]] = {}
+        for i, paper in enumerate(papers):
+            root = find(i)
+            if root not in components:
+                components[root] = []
+            components[root].append(paper)
+
+        # Merge each component and collect results
         result: List[PaperMetadata] = []
-        seen_titles: Set[str] = set()
-
-        # Process DOI groups
-        for group in doi_groups.values():
+        for group in components.values():
             merged = self._merge_group(group)
-            norm_title = self._normalize_title(merged.title)
-            if norm_title not in seen_titles:
-                result.append(merged)
-                seen_titles.add(norm_title)
-
-        # Process ArXiv groups
-        for group in arxiv_groups.values():
-            merged = self._merge_group(group)
-            norm_title = self._normalize_title(merged.title)
-            if norm_title not in seen_titles:
-                result.append(merged)
-                seen_titles.add(norm_title)
-
-        # Process paper_id groups
-        for group in paper_id_groups.values():
-            merged = self._merge_group(group)
-            norm_title = self._normalize_title(merged.title)
-            if norm_title not in seen_titles:
-                result.append(merged)
-                seen_titles.add(norm_title)
-
-        # Process title groups
-        for group in title_groups.values():
-            merged = self._merge_group(group)
-            norm_title = self._normalize_title(merged.title)
-            if norm_title not in seen_titles:
-                result.append(merged)
-                seen_titles.add(norm_title)
+            result.append(merged)
 
         return result
 

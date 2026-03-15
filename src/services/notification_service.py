@@ -72,6 +72,10 @@ class SlackMessageBuilder:
         if self.config.slack.include_cost_summary and summary.total_cost_usd > 0:
             blocks.append(self._build_cost_section(summary))
 
+        # Discovery stats section (Phase 7.1)
+        if hasattr(summary, "discovery_stats") and summary.discovery_stats:
+            blocks.append(self._build_discovery_stats_section(summary.discovery_stats))
+
         # New papers section (if there are new papers)
         if summary.new_papers_count > 0 and summary.new_paper_titles:
             blocks.append({"type": "divider"})
@@ -135,7 +139,10 @@ class SlackMessageBuilder:
         }
 
     def _build_stats_section(self, summary: PipelineSummary) -> Dict[str, Any]:
-        """Build statistics section."""
+        """Build statistics section.
+
+        Phase 7.1: Added discovery statistics support.
+        """
         stats_text = (
             f"*Date:* {summary.date}\n"
             f"*Topics:* {summary.topics_processed} processed, "
@@ -189,6 +196,55 @@ class SlackMessageBuilder:
             "text": {
                 "type": "mrkdwn",
                 "text": cost_text,
+            },
+        }
+
+    def _build_discovery_stats_section(
+        self, discovery_stats: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Build discovery statistics section (Phase 7.1).
+
+        Args:
+            discovery_stats: Discovery statistics dictionary with fields:
+                - total_discovered: Total papers discovered
+                - new_count: New papers (not filtered)
+                - filtered_count: Papers filtered as duplicates
+                - filter_breakdown: Dict with filter method counts
+                  (doi, arxiv, title, provider_id)
+                - incremental_query: Whether this was an incremental query
+
+        Returns:
+            Slack block with discovery statistics.
+        """
+        total = discovery_stats.get("total_discovered", 0)
+        new = discovery_stats.get("new_count", 0)
+        filtered = discovery_stats.get("filtered_count", 0)
+        breakdown = discovery_stats.get("filter_breakdown", {})
+        is_incremental = discovery_stats.get("incremental_query", False)
+
+        # Build filter breakdown text
+        breakdown_parts = []
+        for method, count in breakdown.items():
+            if count > 0:
+                breakdown_parts.append(f"{count} by {method}")
+
+        breakdown_text = ", ".join(breakdown_parts) if breakdown_parts else "none"
+
+        # Build stats text
+        query_type = "incremental" if is_incremental else "full timeframe"
+        stats_text = (
+            f":mag: *Discovery Stats* ({query_type})\n"
+            f"*Total discovered:* {total}\n"
+            f"*New papers:* {new}\n"
+            f"*Filtered as duplicate:* {filtered}\n"
+            f"*Filter breakdown:* {breakdown_text}"
+        )
+
+        return {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": stats_text,
             },
         }
 
@@ -531,6 +587,8 @@ class NotificationService:
         Convenience method to convert pipeline result dictionary
         to a PipelineSummary object.
 
+        Phase 7.1: Added discovery_stats support.
+
         Args:
             result: Pipeline result dictionary (from PipelineResult.to_dict()).
             key_learnings: Optional list of extracted key learnings.
@@ -561,5 +619,9 @@ class NotificationService:
             summary_data["duplicate_papers_count"] = dedup_result.duplicate_count
             summary_data["total_papers_checked"] = dedup_result.total_checked
             summary_data["new_paper_titles"] = dedup_result.get_new_paper_titles()
+
+        # Add discovery stats if available (Phase 7.1)
+        if "discovery_stats" in result and result["discovery_stats"]:
+            summary_data["discovery_stats"] = result["discovery_stats"]
 
         return PipelineSummary(**summary_data)

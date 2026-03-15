@@ -4,7 +4,6 @@ Connects to Paper Search MCP server for unified multi-source queries
 across arXiv, PubMed, bioRxiv, medRxiv, Google Scholar, and Semantic Scholar.
 """
 
-import asyncio
 import re
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -184,35 +183,21 @@ class PaperSearchMCPProvider(DiscoveryProvider):
             )
             return []
 
-        # MCP client placeholder - all code below requires actual MCP server
-        query_sources = sources or self.DEFAULT_SOURCES  # pragma: no cover
-        await self.rate_limiter.acquire(
-            requester_id="paper_search_mcp"
-        )  # pragma: no cover
-        try:  # pragma: no cover
-            results = await self._query_mcp(
-                safe_query, topic, query_sources
-            )  # pragma: no cover
-        except Exception as e:  # pragma: no cover
-            logger.error(
-                "mcp_query_failed", error=str(e), query=safe_query
-            )  # pragma: no cover
-            raise APIError(f"MCP query failed: {e}")  # pragma: no cover
-        papers = self._map_results(results)  # pragma: no cover
-        self._log_source_breakdown(papers, topic.query)  # pragma: no cover
-        logger.info(  # pragma: no cover
-            "papers_discovered",
-            query=topic.query,
-            count=len(papers),
-            provider="paper_search_mcp",
-            sources=query_sources,
-        )
-        return papers  # pragma: no cover
+        # MCP client integration - Phase 7.3
+        # When MCP becomes available, implement actual query here
+        return await self._execute_mcp_search(safe_query, topic, sources)
 
-    async def _query_mcp(
-        self, query: str, topic: ResearchTopic, sources: List[str]
-    ) -> List[Dict[str, Any]]:
-        """Execute MCP query (placeholder for actual MCP integration).
+    async def _execute_mcp_search(
+        self,
+        query: str,
+        topic: ResearchTopic,
+        sources: Optional[List[str]],
+    ) -> List[PaperMetadata]:  # pragma: no cover
+        """Execute MCP search (placeholder - requires MCP client library).
+
+        This method is excluded from coverage as it requires the MCP client
+        library which is not yet available. When MCP is integrated, remove
+        the pragma and add proper tests.
 
         Args:
             query: Validated search query
@@ -220,23 +205,30 @@ class PaperSearchMCPProvider(DiscoveryProvider):
             sources: List of sources to query
 
         Returns:
-            List of raw MCP results
-
-        Raises:
-            APIError: If MCP communication fails
+            List of PaperMetadata with discovery_source set
         """
-        # TODO: Replace with actual MCP client call when available
-        # For now, return empty results (graceful degradation)
-        logger.debug(  # pragma: no cover
-            "mcp_query_placeholder",
-            query=query,
-            sources=sources,
-            note="MCP client not yet integrated",
-        )
-        await asyncio.sleep(0.1)  # pragma: no cover
-        return []  # pragma: no cover
+        query_sources = sources or self.DEFAULT_SOURCES
+        await self.rate_limiter.acquire(requester_id="paper_search_mcp")
 
-    def _map_results(self, results: List[Dict[str, Any]]) -> List[PaperMetadata]:
+        # Placeholder: MCP client call would go here
+        # results = await mcp_client.search(query, sources=query_sources)
+        results: List[Dict[str, Any]] = []
+
+        papers = self._map_mcp_results(results)
+        self._log_source_breakdown(papers, topic.query)
+
+        logger.info(
+            "papers_discovered",
+            query=topic.query,
+            count=len(papers),
+            provider="paper_search_mcp",
+            sources=query_sources,
+        )
+        return papers
+
+    def _map_mcp_results(
+        self, results: List[Dict[str, Any]]
+    ) -> List[PaperMetadata]:  # pragma: no cover
         """Map MCP results to PaperMetadata objects.
 
         Args:
@@ -245,22 +237,20 @@ class PaperSearchMCPProvider(DiscoveryProvider):
         Returns:
             List of PaperMetadata with discovery_source set
         """
-        # MCP results mapping - requires actual MCP results
-        papers = []  # pragma: no cover
-        for result in results:  # pragma: no cover
-            try:  # pragma: no cover
-                paper = self._map_mcp_result_to_paper(  # pragma: no cover
+        papers = []
+        for result in results:
+            try:
+                paper = self._map_mcp_result_to_paper(
                     result, result.get("source", "unknown")
                 )
-                papers.append(paper)  # pragma: no cover
-            except Exception as e:  # pragma: no cover
-                logger.warning(  # pragma: no cover
+                papers.append(paper)
+            except Exception as e:
+                logger.warning(
                     "mcp_result_parse_error",
                     error=str(e),
                     result_id=result.get("id", "unknown"),
                 )
-                continue  # pragma: no cover
-        return papers  # pragma: no cover
+        return papers
 
     def _map_mcp_result_to_paper(
         self, result: Dict[str, Any], source: str

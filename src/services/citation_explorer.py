@@ -203,37 +203,9 @@ class CitationExplorer:
 
         try:
             await self.rate_limiter.acquire()
-            session = await self._get_session()
-
-            # pragma: no cover - async HTTP context manager requires real network
-            async with session.get(
-                url,
-                params=params,
-                headers={"x-api-key": self.api_key},
-            ) as response:  # pragma: no cover
-                if response.status == 429:  # pragma: no cover
-                    logger.warning("citation_rate_limit", paper_id=paper_id)
-                    return []
-                if response.status != 200:  # pragma: no cover
-                    logger.warning(
-                        "citation_api_error",
-                        paper_id=paper_id,
-                        status=response.status,
-                    )
-                    return []
-
-                data = await response.json()  # pragma: no cover
-
-            papers = []  # pragma: no cover
-            for item in data.get("data", []):  # pragma: no cover
-                citing_paper = item.get("citingPaper", {})
-                if citing_paper:
-                    parsed = self._parse_paper(citing_paper, "semantic_scholar")
-                    if parsed:
-                        papers.append(parsed)
-
-            return papers  # pragma: no cover
-
+            return await self._fetch_citations(
+                url, params, paper_id, "citingPaper", "forward_citation"
+            )
         except Exception as e:
             logger.warning("forward_citation_error", paper_id=paper_id, error=str(e))
             return []
@@ -264,40 +236,66 @@ class CitationExplorer:
 
         try:
             await self.rate_limiter.acquire()
-            session = await self._get_session()
-
-            # pragma: no cover - async HTTP context manager requires real network
-            async with session.get(
-                url,
-                params=params,
-                headers={"x-api-key": self.api_key},
-            ) as response:  # pragma: no cover
-                if response.status == 429:  # pragma: no cover
-                    logger.warning("reference_rate_limit", paper_id=paper_id)
-                    return []
-                if response.status != 200:  # pragma: no cover
-                    logger.warning(
-                        "reference_api_error",
-                        paper_id=paper_id,
-                        status=response.status,
-                    )
-                    return []
-
-                data = await response.json()  # pragma: no cover
-
-            papers = []  # pragma: no cover
-            for item in data.get("data", []):  # pragma: no cover
-                cited_paper = item.get("citedPaper", {})
-                if cited_paper:
-                    parsed = self._parse_paper(cited_paper, "semantic_scholar")
-                    if parsed:
-                        papers.append(parsed)
-
-            return papers  # pragma: no cover
-
+            return await self._fetch_citations(
+                url, params, paper_id, "citedPaper", "backward_citation"
+            )
         except Exception as e:
             logger.warning("backward_citation_error", paper_id=paper_id, error=str(e))
             return []
+
+    async def _fetch_citations(
+        self,
+        url: str,
+        params: dict,
+        paper_id: str,
+        result_key: str,
+        error_prefix: str,
+    ) -> List[PaperMetadata]:  # pragma: no cover
+        """Fetch citations from Semantic Scholar API.
+
+        This method is excluded from coverage as it requires real network
+        calls. The HTTP context manager pattern cannot be easily mocked
+        for unit tests. Integration tests should cover this path.
+
+        Args:
+            url: API endpoint URL
+            params: Query parameters
+            paper_id: Paper ID for logging
+            result_key: Key to extract from response (citingPaper/citedPaper)
+            error_prefix: Prefix for error logging
+
+        Returns:
+            List of parsed papers
+        """
+        session = await self._get_session()
+
+        async with session.get(
+            url,
+            params=params,
+            headers={"x-api-key": self.api_key},
+        ) as response:
+            if response.status == 429:
+                logger.warning(f"{error_prefix}_rate_limit", paper_id=paper_id)
+                return []
+            if response.status != 200:
+                logger.warning(
+                    f"{error_prefix}_api_error",
+                    paper_id=paper_id,
+                    status=response.status,
+                )
+                return []
+
+            data = await response.json()
+
+        papers = []
+        for item in data.get("data", []):
+            paper_data = item.get(result_key, {})
+            if paper_data:
+                parsed = self._parse_paper(paper_data, "semantic_scholar")
+                if parsed:
+                    papers.append(parsed)
+
+        return papers
 
     def _parse_paper(
         self,

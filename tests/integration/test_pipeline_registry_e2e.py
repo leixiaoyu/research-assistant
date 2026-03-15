@@ -27,6 +27,8 @@ from src.models.config import (
     PDFSettings,
     LLMSettings,
     CostLimitSettings,
+    DiscoveryFilterSettings,
+    IncrementalDiscoverySettings,
 )
 from src.models.extraction import (
     ExtractionTarget,
@@ -86,6 +88,9 @@ def mock_config(temp_output_dir) -> ResearchConfig:
                 max_daily_spend_usd=1.0,
                 max_total_spend_usd=5.0,
             ),
+            # Phase 7.1: Disable incremental discovery and filtering for legacy tests
+            discovery_filter_settings=DiscoveryFilterSettings(enabled=False),
+            incremental_discovery_settings=IncrementalDiscoverySettings(enabled=False),
         ),
     )
 
@@ -828,6 +833,11 @@ class TestPipelineEdgeCases:
             settings=GlobalSettings(
                 output_base_dir=str(temp_output_dir / "output"),
                 semantic_scholar_api_key="test-api-key-12345",
+                # Phase 7.1: Disable incremental discovery for this test
+                discovery_filter_settings=DiscoveryFilterSettings(enabled=False),
+                incremental_discovery_settings=IncrementalDiscoverySettings(
+                    enabled=False
+                ),
             ),
         )
 

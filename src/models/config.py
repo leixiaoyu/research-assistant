@@ -135,6 +135,12 @@ class ResearchTopic(BaseModel):
         description="PDF rate threshold to trigger ArXiv supplement (0-1)",
     )
 
+    # Phase 7.1: Incremental discovery
+    force_full_timeframe: bool = Field(
+        default=False,
+        description="Override incremental discovery (always use full timeframe)",
+    )
+
     @field_validator("query")
     @classmethod
     def validate_query(cls, v: str) -> str:
@@ -265,6 +271,42 @@ class ProviderSelectionConfig(BaseModel):
     )
 
 
+class DiscoveryFilterSettings(BaseModel):
+    """Discovery-time filtering settings (Phase 7.1)"""
+
+    enabled: bool = Field(
+        True,
+        description="Enable quality filtering during discovery phase",
+    )
+    register_at_discovery: bool = Field(
+        True,
+        description="Register papers when discovered (prevents reprocessing)",
+    )
+    verbose_logging: bool = Field(
+        False,
+        description="Log each filtered paper with rejection reason",
+    )
+
+
+class IncrementalDiscoverySettings(BaseModel):
+    """Incremental discovery settings (Phase 7.1)"""
+
+    enabled: bool = Field(
+        True,
+        description="Use last run timestamp for queries (incremental mode)",
+    )
+    overlap_buffer_hours: int = Field(
+        1,
+        ge=0,
+        le=48,
+        description="Safety overlap buffer in hours for edge cases",
+    )
+    reset_on_query_change: bool = Field(
+        True,
+        description="Reset timestamp if query text changes",
+    )
+
+
 class GlobalSettings(BaseModel):
     """Global pipeline settings"""
 
@@ -313,6 +355,15 @@ class GlobalSettings(BaseModel):
     enhanced_discovery: Optional["EnhancedDiscoveryConfig"] = Field(
         default=None,
         description="Enhanced discovery pipeline settings (Phase 6)",
+    )
+    # Phase 7.1: Discovery optimization settings
+    discovery_filter_settings: DiscoveryFilterSettings = Field(
+        default_factory=DiscoveryFilterSettings,  # type: ignore[arg-type]
+        description="Discovery-time filtering settings (Phase 7.1)",
+    )
+    incremental_discovery_settings: IncrementalDiscoverySettings = Field(
+        default_factory=IncrementalDiscoverySettings,  # type: ignore[arg-type]
+        description="Incremental discovery settings (Phase 7.1)",
     )
 
 

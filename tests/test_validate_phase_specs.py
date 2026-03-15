@@ -169,6 +169,22 @@ Some content without a status line.
         assert issues[0].severity == "ERROR"
         assert "Cannot read file" in issues[0].message
 
+    def test_detects_complete_without_indicators(self, tmp_path: Path) -> None:
+        """Warn when spec shows Complete but lacks completion indicators."""
+        content = """# Phase 5.4
+**Status:** Complete
+
+This phase has no verification results or checkmarks.
+"""
+        spec_file = tmp_path / "test_spec.md"
+        spec_file.write_text(content)
+        issues = validate_spec_file(spec_file)
+
+        assert len(issues) == 1
+        assert issues[0].severity == "WARN"
+        assert "Complete" in issues[0].message
+        assert "no completion indicators" in issues[0].message
+
 
 class TestValidationIssue:
     """Tests for ValidationIssue dataclass."""

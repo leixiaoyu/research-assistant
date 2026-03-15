@@ -1,12 +1,14 @@
 """Pipeline result data structure.
 
 Phase 5.2: Extracted from research_pipeline.py.
+Phase 7.1: Added discovery statistics support.
 """
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from src.models.cross_synthesis import CrossTopicSynthesisReport
+from src.models.discovery import DiscoveryStats
 
 
 @dataclass
@@ -14,6 +16,8 @@ class PipelineResult:
     """Result of a pipeline run.
 
     Aggregates statistics and output from all pipeline phases.
+
+    Phase 7.1: Added discovery_stats for observability.
     """
 
     topics_processed: int = 0
@@ -27,9 +31,14 @@ class PipelineResult:
     errors: List[Dict[str, str]] = field(default_factory=list)
     # Phase 3.7: Cross-topic synthesis report
     cross_synthesis_report: Optional[CrossTopicSynthesisReport] = None
+    # Phase 7.1: Discovery statistics (aggregated across all topics)
+    discovery_stats: Optional[DiscoveryStats] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for logging/serialization."""
+        """Convert to dictionary for logging/serialization.
+
+        Phase 7.1: Added discovery_stats to output.
+        """
         result = {
             "topics_processed": self.topics_processed,
             "topics_failed": self.topics_failed,
@@ -47,6 +56,15 @@ class PipelineResult:
                 "questions_answered": self.cross_synthesis_report.questions_answered,
                 "synthesis_cost_usd": self.cross_synthesis_report.total_cost_usd,
                 "synthesis_tokens": self.cross_synthesis_report.total_tokens_used,
+            }
+        # Include discovery stats if available (Phase 7.1)
+        if self.discovery_stats:
+            result["discovery_stats"] = {
+                "total_discovered": self.discovery_stats.total_discovered,
+                "new_count": self.discovery_stats.new_count,
+                "filtered_count": self.discovery_stats.filtered_count,
+                "filter_breakdown": self.discovery_stats.filter_breakdown,
+                "incremental_query": self.discovery_stats.incremental_query,
             }
         return result
 

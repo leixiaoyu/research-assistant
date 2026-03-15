@@ -50,7 +50,9 @@ ORCH_PRAGMA_COUNT=$(grep -r "pragma: no cover" src/orchestration/ --include="*.p
 ORCH_PRAGMA_LIMIT=5
 
 # Security code (utils/security.py) - should have minimal pragmas
-SECURITY_PRAGMA_COUNT=$(grep -c "pragma: no cover" src/utils/security.py 2>/dev/null || echo "0")
+SECURITY_PRAGMA_COUNT=$(grep -c "pragma: no cover" src/utils/security.py 2>/dev/null || true)
+SECURITY_PRAGMA_COUNT=${SECURITY_PRAGMA_COUNT:-0}
+SECURITY_PRAGMA_COUNT=$(echo "$SECURITY_PRAGMA_COUNT" | tr -d '[:space:]')
 SECURITY_PRAGMA_LIMIT=8
 
 # Models should have zero pragmas (pure data structures)

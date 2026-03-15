@@ -1,7 +1,11 @@
-"""Tests for PipelineResult."""
+"""Tests for PipelineResult.
+
+Phase 7.1: Added discovery_stats tests.
+"""
 
 from unittest.mock import MagicMock
 
+from src.models.discovery import DiscoveryStats
 from src.orchestration.result import PipelineResult
 
 
@@ -198,3 +202,57 @@ class TestPipelineResult:
         result.merge_topic_result(topic_result)
 
         assert len(result.output_files) == 0
+
+    def test_with_discovery_stats(self):
+        """Test PipelineResult with discovery stats (Phase 7.1)."""
+        stats = DiscoveryStats(
+            total_discovered=25,
+            new_count=18,
+            filtered_count=7,
+            filter_breakdown={"doi": 5, "arxiv": 2},
+            incremental_query=True,
+        )
+
+        result = PipelineResult(
+            topics_processed=1,
+            papers_discovered=18,
+            discovery_stats=stats,
+        )
+
+        assert result.discovery_stats == stats
+        assert result.discovery_stats.total_discovered == 25
+        assert result.discovery_stats.new_count == 18
+        assert result.discovery_stats.filtered_count == 7
+
+    def test_to_dict_with_discovery_stats(self):
+        """Test to_dict includes discovery stats (Phase 7.1)."""
+        stats = DiscoveryStats(
+            total_discovered=25,
+            new_count=18,
+            filtered_count=7,
+            filter_breakdown={"doi": 5, "arxiv": 2},
+            incremental_query=True,
+        )
+
+        result = PipelineResult(
+            topics_processed=1,
+            papers_discovered=18,
+            discovery_stats=stats,
+        )
+
+        d = result.to_dict()
+
+        assert "discovery_stats" in d
+        assert d["discovery_stats"]["total_discovered"] == 25
+        assert d["discovery_stats"]["new_count"] == 18
+        assert d["discovery_stats"]["filtered_count"] == 7
+        assert d["discovery_stats"]["filter_breakdown"] == {"doi": 5, "arxiv": 2}
+        assert d["discovery_stats"]["incremental_query"] is True
+
+    def test_to_dict_without_discovery_stats(self):
+        """Test to_dict when discovery_stats is None."""
+        result = PipelineResult(topics_processed=1)
+
+        d = result.to_dict()
+
+        assert "discovery_stats" not in d

@@ -5,11 +5,15 @@ Phase 7.1: Added discovery statistics support and integrated filtering.
 """
 
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from src.models.config import ResearchTopic
+from src.models.config import (
+    ResearchTopic,
+    TimeframeDateRange,
+    TimeframeType,
+)
 from src.models.discovery import DiscoveryStats
 from src.models.paper import PaperMetadata
 from src.orchestration.phases.base import PipelinePhase
@@ -135,8 +139,6 @@ class DiscoveryPhase(PipelinePhase[DiscoveryResult]):
                 resolver = TimeframeResolver(self.context.catalog_service)
                 resolved_timeframe = resolver.resolve(topic, topic_slug)
 
-                # Note: Resolved timeframe is used for stats tracking
-                # The actual search uses the topic's configured timeframe
                 self.logger.info(
                     "using_resolved_timeframe",
                     topic=topic.query,
@@ -162,8 +164,28 @@ class DiscoveryPhase(PipelinePhase[DiscoveryResult]):
                 topic_slug=topic_slug,
             )
 
-            # Execute discovery
-            papers = await self.context.discovery_service.search(topic)
+            # Execute discovery with resolved timeframe if available
+            # Phase 7.1: Create modified topic with incremental timeframe
+            if resolved_timeframe is not None and resolved_timeframe.is_incremental:
+                # Convert ResolvedTimeframe to TimeframeDateRange for provider
+                incremental_timeframe = TimeframeDateRange(
+                    type=TimeframeType.DATE_RANGE,
+                    start_date=resolved_timeframe.start_date.date(),
+                    end_date=resolved_timeframe.end_date.date(),
+                )
+                search_topic = topic.model_copy(
+                    update={"timeframe": incremental_timeframe}
+                )
+                self.logger.info(
+                    "using_incremental_search",
+                    topic=topic.query,
+                    start_date=incremental_timeframe.start_date.isoformat(),
+                    end_date=incremental_timeframe.end_date.isoformat(),
+                )
+            else:
+                search_topic = topic
+
+            papers = await self.context.discovery_service.search(search_topic)
 
             # Phase 7.1: Apply discovery filtering
             filter_enabled = (
@@ -235,7 +257,7 @@ class DiscoveryPhase(PipelinePhase[DiscoveryResult]):
 
             # Phase 7.1: Update last successful discovery timestamp
             if incremental_enabled and not topic.force_full_timeframe:
-                discovery_timestamp = datetime.utcnow()
+                discovery_timestamp = datetime.now(timezone.utc)
                 self.context.catalog_service.set_last_discovery_at(
                     topic_slug, discovery_timestamp
                 )

@@ -9,7 +9,7 @@ This enables:
 - Incremental discovery with overlap handling
 """
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import structlog
 
 from src.models.paper import PaperMetadata
@@ -18,7 +18,7 @@ from src.models.discovery import (
     FilteredPaper,
     DiscoveryStats,
 )
-from src.services.registry_service import RegistryService
+from src.services.registry_service import RegistryService, IdentityMatch
 
 logger = structlog.get_logger()
 
@@ -108,11 +108,11 @@ class DiscoveryFilter:
 
         # Check each paper against registry
         for paper in papers:
-            duplicate_reason = self._check_duplicate(paper)
+            # Single call to resolve_identity (DRY fix per PR #62 review)
+            duplicate_reason, match = self._check_duplicate(paper)
 
             if duplicate_reason:
-                # Paper is duplicate - get the matched entry for tracking
-                match = self.registry.resolve_identity(paper)
+                # Paper is duplicate - use match from _check_duplicate
                 matched_entry_id = match.entry.paper_id if match.entry else "unknown"
 
                 filtered_papers.append(
@@ -183,40 +183,43 @@ class DiscoveryFilter:
             stats=stats,
         )
 
-    def _check_duplicate(self, paper: PaperMetadata) -> Optional[str]:
+    def _check_duplicate(
+        self, paper: PaperMetadata
+    ) -> Tuple[Optional[str], IdentityMatch]:
         """Check if paper is duplicate using registry identity resolution.
 
         Args:
             paper: Paper to check against registry.
 
         Returns:
-            Filter reason if duplicate, None if new.
-            Reasons: "doi", "arxiv", "provider_id", "title"
+            Tuple of (filter_reason, match):
+            - filter_reason: "doi", "arxiv", "provider_id", "title", or None if new
+            - match: The IdentityMatch result for reuse (DRY optimization)
         """
-        # Use registry's identity resolution
+        # Use registry's identity resolution (single call)
         match = self.registry.resolve_identity(paper)
 
         if not match.matched:
-            return None
+            return None, match
 
         # Map match method to filter reason
         match_method = match.match_method or "unknown"
 
         # DOI match
         if match_method == "doi":
-            return "doi"
+            return "doi", match
 
         # ArXiv match
         if match_method == "arxiv":
-            return "arxiv"
+            return "arxiv", match
 
         # Title match
         if match_method == "title":
-            return "title"
+            return "title", match
 
         # Provider ID match (semantic_scholar, etc.)
         if match_method in ["semantic_scholar", "huggingface", "openalex"]:
-            return "provider_id"
+            return "provider_id", match
 
         # Fallback for unknown match methods
         logger.warning(
@@ -224,4 +227,4 @@ class DiscoveryFilter:
             method=match_method,
             paper_id=paper.paper_id,
         )
-        return "provider_id"
+        return "provider_id", match

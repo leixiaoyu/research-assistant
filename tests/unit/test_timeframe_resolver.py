@@ -4,7 +4,7 @@ Tests incremental discovery timeframe resolution logic.
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, MagicMock
 
 from src.utils.timeframe_resolver import TimeframeResolver
@@ -90,7 +90,7 @@ class TestTimeframeResolverFirstRun:
         assert result.original_timeframe == {"type": "recent", "value": "48h"}
 
         # Should span last 48 hours
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expected_start = now - timedelta(hours=48)
         assert abs((result.start_date - expected_start).total_seconds()) < 5
         assert abs((result.end_date - now).total_seconds()) < 5
@@ -114,7 +114,7 @@ class TestTimeframeResolverFirstRun:
 
         # Should start from 2020-01-01
         assert result.start_date == datetime(2020, 1, 1)
-        assert abs((result.end_date - datetime.utcnow()).total_seconds()) < 5
+        assert abs((result.end_date - datetime.now(timezone.utc)).total_seconds()) < 5
 
     def test_first_run_date_range_timeframe(
         self, resolver, mock_catalog_service, topic_date_range
@@ -151,7 +151,7 @@ class TestTimeframeResolverIncremental:
     ):
         """Should use incremental timeframe when previous timestamp exists."""
         # Setup: previous discovery 24 hours ago
-        last_discovery = datetime.utcnow() - timedelta(hours=24)
+        last_discovery = datetime.now(timezone.utc) - timedelta(hours=24)
         mock_catalog_service.get_last_discovery_at.return_value = last_discovery
         mock_catalog_service.detect_query_change.return_value = False
 
@@ -165,7 +165,7 @@ class TestTimeframeResolverIncremental:
         # Start should be last_discovery minus 1-hour buffer
         expected_start = last_discovery - timedelta(hours=1)
         assert abs((result.start_date - expected_start).total_seconds()) < 1
-        assert abs((result.end_date - datetime.utcnow()).total_seconds()) < 5
+        assert abs((result.end_date - datetime.now(timezone.utc)).total_seconds()) < 5
 
     def test_incremental_with_overlap_buffer(
         self, resolver, mock_catalog_service, topic_recent
@@ -188,7 +188,7 @@ class TestTimeframeResolverIncremental:
         self, resolver, mock_catalog_service, topic_since_year
     ):
         """Incremental mode should preserve since_year in original_timeframe."""
-        last_discovery = datetime.utcnow() - timedelta(hours=24)
+        last_discovery = datetime.now(timezone.utc) - timedelta(hours=24)
         mock_catalog_service.get_last_discovery_at.return_value = last_discovery
         mock_catalog_service.detect_query_change.return_value = False
 
@@ -203,7 +203,7 @@ class TestTimeframeResolverIncremental:
         self, resolver, mock_catalog_service, topic_date_range
     ):
         """Incremental mode should preserve date_range in original_timeframe."""
-        last_discovery = datetime.utcnow() - timedelta(hours=24)
+        last_discovery = datetime.now(timezone.utc) - timedelta(hours=24)
         mock_catalog_service.get_last_discovery_at.return_value = last_discovery
         mock_catalog_service.detect_query_change.return_value = False
 
@@ -221,7 +221,7 @@ class TestTimeframeResolverIncremental:
         self, resolver, mock_catalog_service, topic_recent
     ):
         """Incremental mode should handle unknown timeframe gracefully."""
-        last_discovery = datetime.utcnow() - timedelta(hours=24)
+        last_discovery = datetime.now(timezone.utc) - timedelta(hours=24)
         mock_catalog_service.get_last_discovery_at.return_value = last_discovery
         mock_catalog_service.detect_query_change.return_value = False
 
@@ -248,7 +248,7 @@ class TestTimeframeResolverQueryChange:
     ):
         """Query change should reset to full config timeframe."""
         # Setup: previous timestamp exists but query changed
-        last_discovery = datetime.utcnow() - timedelta(hours=24)
+        last_discovery = datetime.now(timezone.utc) - timedelta(hours=24)
         mock_catalog_service.get_last_discovery_at.return_value = last_discovery
         mock_catalog_service.detect_query_change.return_value = True
 
@@ -260,7 +260,7 @@ class TestTimeframeResolverQueryChange:
         assert result.overlap_buffer_hours == 0
 
         # Should span full 48 hours, not from last_discovery
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expected_start = now - timedelta(hours=48)
         assert abs((result.start_date - expected_start).total_seconds()) < 5
 
@@ -274,7 +274,7 @@ class TestTimeframeResolverForceFullTimeframe:
         """force_full_timeframe should ignore previous timestamp."""
         # Setup: previous timestamp exists but force_full is True
         topic_recent.force_full_timeframe = True
-        last_discovery = datetime.utcnow() - timedelta(hours=24)
+        last_discovery = datetime.now(timezone.utc) - timedelta(hours=24)
         mock_catalog_service.get_last_discovery_at.return_value = last_discovery
         mock_catalog_service.detect_query_change.return_value = False
 
@@ -286,7 +286,7 @@ class TestTimeframeResolverForceFullTimeframe:
         assert result.overlap_buffer_hours == 0
 
         # Should span full 48 hours
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expected_start = now - timedelta(hours=48)
         assert abs((result.start_date - expected_start).total_seconds()) < 5
 
@@ -296,9 +296,9 @@ class TestTimeframeResolverForceFullTimeframe:
         """force_full_timeframe should take precedence over all logic."""
         # Setup: force_full AND query changed
         topic_recent.force_full_timeframe = True
-        mock_catalog_service.get_last_discovery_at.return_value = (
-            datetime.utcnow() - timedelta(hours=24)
-        )
+        mock_catalog_service.get_last_discovery_at.return_value = datetime.now(
+            timezone.utc
+        ) - timedelta(hours=24)
         mock_catalog_service.detect_query_change.return_value = True
 
         # Execute
@@ -325,7 +325,7 @@ class TestTimeframeResolverUpdateLastRun:
 
     def test_update_last_run_with_current_time(self, resolver, mock_catalog_service):
         """update_last_run should work with current timestamp."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Execute
         resolver.update_last_run("test-topic", now)
@@ -354,7 +354,7 @@ class TestTimeframeResolverTimeframeTypes:
         result = resolver.resolve(topic, "test-topic")
 
         # Should span 72 hours
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expected_start = now - timedelta(hours=72)
         assert abs((result.start_date - expected_start).total_seconds()) < 5
 
@@ -372,7 +372,7 @@ class TestTimeframeResolverTimeframeTypes:
         result = resolver.resolve(topic, "test-topic")
 
         # Should span 7 days
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expected_start = now - timedelta(days=7)
         assert abs((result.start_date - expected_start).total_seconds()) < 5
 
@@ -430,7 +430,7 @@ class TestTimeframeResolverEdgeCases:
         self, resolver, mock_catalog_service, topic_recent
     ):
         """Should handle very recent last discovery (minutes ago)."""
-        last_discovery = datetime.utcnow() - timedelta(minutes=5)
+        last_discovery = datetime.now(timezone.utc) - timedelta(minutes=5)
         mock_catalog_service.get_last_discovery_at.return_value = last_discovery
         mock_catalog_service.detect_query_change.return_value = False
 
@@ -472,7 +472,7 @@ class TestTimeframeResolverEdgeCases:
         self, resolver, mock_catalog_service, topic_recent
     ):
         """Original timeframe should be preserved even in incremental mode."""
-        last_discovery = datetime.utcnow() - timedelta(hours=24)
+        last_discovery = datetime.now(timezone.utc) - timedelta(hours=24)
         mock_catalog_service.get_last_discovery_at.return_value = last_discovery
         mock_catalog_service.detect_query_change.return_value = False
 

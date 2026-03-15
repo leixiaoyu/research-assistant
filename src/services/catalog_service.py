@@ -1,5 +1,5 @@
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import structlog
 from src.models.catalog import CatalogRun, TopicCatalogEntry
@@ -134,13 +134,13 @@ class CatalogService:
                 topic_slug=topic_slug,
                 query="",  # Will be populated later
                 folder=topic_slug,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
                 last_successful_discovery_at=timestamp,
             )
         else:
             topic_entry = self.catalog.topics[topic_slug]
             topic_entry.last_successful_discovery_at = timestamp
-            topic_entry.last_updated = datetime.utcnow()
+            topic_entry.last_updated = datetime.now(timezone.utc)
 
         logger.info(
             "set_last_discovery_timestamp",

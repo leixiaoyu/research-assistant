@@ -546,8 +546,9 @@ class TestCheckDuplicate:
 
     def test_check_duplicate_new_paper(self, discovery_filter, sample_paper):
         """Test _check_duplicate returns None for new paper."""
-        result = discovery_filter._check_duplicate(sample_paper)
-        assert result is None
+        reason, match = discovery_filter._check_duplicate(sample_paper)
+        assert reason is None
+        assert match.matched is False
 
     def test_check_duplicate_by_doi(
         self, discovery_filter, registry_service, sample_paper
@@ -561,8 +562,9 @@ class TestCheckDuplicate:
         )
 
         # Check duplicate
-        result = discovery_filter._check_duplicate(sample_paper)
-        assert result == "doi"
+        reason, match = discovery_filter._check_duplicate(sample_paper)
+        assert reason == "doi"
+        assert match.matched is True
 
     def test_check_duplicate_by_arxiv(
         self, discovery_filter, registry_service, sample_paper_no_doi
@@ -576,8 +578,9 @@ class TestCheckDuplicate:
         )
 
         # Check duplicate
-        result = discovery_filter._check_duplicate(sample_paper_no_doi)
-        assert result == "arxiv"
+        reason, match = discovery_filter._check_duplicate(sample_paper_no_doi)
+        assert reason == "arxiv"
+        assert match.matched is True
 
     def test_check_duplicate_by_title(
         self, discovery_filter, registry_service, sample_paper_no_doi
@@ -601,8 +604,9 @@ class TestCheckDuplicate:
             citation_count=0,
         )
 
-        result = discovery_filter._check_duplicate(duplicate)
-        assert result == "title"
+        reason, match = discovery_filter._check_duplicate(duplicate)
+        assert reason == "title"
+        assert match.matched is True
 
     def test_check_duplicate_by_provider_id(
         self, discovery_filter, registry_service, sample_paper
@@ -627,8 +631,9 @@ class TestCheckDuplicate:
                 match_method="semantic_scholar",
             ),
         ):
-            result = discovery_filter._check_duplicate(sample_paper)
-            assert result == "provider_id"
+            reason, match = discovery_filter._check_duplicate(sample_paper)
+            assert reason == "provider_id"
+            assert match.matched is True
 
     def test_check_duplicate_unknown_match_method(
         self, discovery_filter, registry_service, sample_paper
@@ -653,9 +658,10 @@ class TestCheckDuplicate:
                 match_method="unknown_method",
             ),
         ):
-            result = discovery_filter._check_duplicate(sample_paper)
+            reason, match = discovery_filter._check_duplicate(sample_paper)
             # Should default to provider_id for unknown methods
-            assert result == "provider_id"
+            assert reason == "provider_id"
+            assert match.matched is True
 
     @pytest.mark.asyncio
     async def test_filter_breakdown_with_unexpected_reason(
@@ -669,11 +675,18 @@ class TestCheckDuplicate:
             discovery_only=True,
         )
 
-        # Mock _check_duplicate to return unexpected reason
+        # Mock _check_duplicate to return unexpected reason (with match tuple)
+        from src.models.registry import IdentityMatch
+
+        mock_match = IdentityMatch(
+            matched=True,
+            entry=registry_service.resolve_identity(sample_paper).entry,
+            match_method="unexpected",
+        )
         with patch.object(
             discovery_filter,
             "_check_duplicate",
-            return_value="unexpected_reason",
+            return_value=("unexpected_reason", mock_match),
         ):
             result = await discovery_filter.filter_papers(
                 papers=[sample_paper],

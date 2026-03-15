@@ -10,10 +10,10 @@ Usage:
     resolved = resolver.resolve(topic, topic_slug)
 
     # After successful discovery
-    resolver.update_last_run(topic_slug, datetime.utcnow())
+    resolver.update_last_run(topic_slug, datetime.now(timezone.utc))
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Dict, Any
 
 import structlog
@@ -142,7 +142,7 @@ class TimeframeResolver:
         Returns:
             ResolvedTimeframe with concrete dates
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         timeframe = topic.timeframe
 
         # Store original timeframe as dict for tracking
@@ -222,7 +222,7 @@ class TimeframeResolver:
         Returns:
             ResolvedTimeframe with incremental dates and buffer
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Apply 1-hour overlap buffer to prevent edge case gaps
         buffer_hours = 1

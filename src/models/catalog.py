@@ -38,6 +38,9 @@ class TopicCatalogEntry(BaseModel):
     last_updated: datetime = Field(default_factory=datetime.utcnow)
     runs: List[CatalogRun] = Field(default_factory=list)
     processed_papers: List[ProcessedPaper] = Field(default_factory=list)
+    # Phase 7.1: Discovery timestamp tracking
+    last_successful_discovery_at: Optional[datetime] = None
+    query_hash: Optional[str] = None
 
     def add_run(self, run: CatalogRun):
         """Add a run and update timestamp"""

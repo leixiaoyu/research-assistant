@@ -1,21 +1,33 @@
 """Discovery phase - paper discovery for research topics.
 
 Phase 5.2: Extracted from research_pipeline.py.
+Phase 7.1: Added discovery statistics support and integrated filtering.
 """
 
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from src.models.config import ResearchTopic
+from src.models.config import (
+    ResearchTopic,
+    TimeframeDateRange,
+    TimeframeType,
+)
+from src.models.discovery import DiscoveryStats
 from src.models.paper import PaperMetadata
 from src.orchestration.phases.base import PipelinePhase
 from src.services.providers.base import APIError
+from src.utils.timeframe_resolver import TimeframeResolver
+from src.services.discovery_filter import DiscoveryFilter
 
 
 @dataclass
 class TopicDiscoveryResult:
-    """Result of processing a single topic in discovery phase."""
+    """Result of processing a single topic in discovery phase.
+
+    Phase 7.1: Added discovery_stats field for observability.
+    """
 
     topic: ResearchTopic
     topic_slug: str
@@ -23,6 +35,7 @@ class TopicDiscoveryResult:
     success: bool = False
     error: Optional[str] = None
     duration_seconds: float = 0.0
+    discovery_stats: Optional[DiscoveryStats] = None
 
 
 @dataclass
@@ -93,17 +106,20 @@ class DiscoveryPhase(PipelinePhase[DiscoveryResult]):
     async def _discover_topic(self, topic: ResearchTopic) -> TopicDiscoveryResult:
         """Discover papers for a single topic.
 
+        Phase 7.1: Integrated incremental discovery, filtering, and statistics.
+
         Args:
             topic: Research topic to process
 
         Returns:
-            TopicDiscoveryResult with discovered papers
+            TopicDiscoveryResult with discovered papers and stats
         """
         start_time = time.time()
 
         # Type assertions
         assert self.context.catalog_service is not None
         assert self.context.discovery_service is not None
+        assert self.context.config is not None
 
         # Get/Create topic in catalog
         catalog_topic = self.context.catalog_service.get_or_create_topic(topic.query)
@@ -115,24 +131,149 @@ class DiscoveryPhase(PipelinePhase[DiscoveryResult]):
         )
 
         try:
+            # Phase 7.1: Resolve timeframe (incremental if enabled)
+            incremental_enabled = (
+                self.context.config.settings.incremental_discovery_settings.enabled
+            )
+            if incremental_enabled and not topic.force_full_timeframe:
+                resolver = TimeframeResolver(self.context.catalog_service)
+                resolved_timeframe = resolver.resolve(topic, topic_slug)
+
+                self.logger.info(
+                    "using_resolved_timeframe",
+                    topic=topic.query,
+                    is_incremental=resolved_timeframe.is_incremental,
+                    start_date=resolved_timeframe.start_date.isoformat(),
+                    end_date=resolved_timeframe.end_date.isoformat(),
+                )
+            else:
+                resolved_timeframe = None
+                self.logger.info(
+                    "incremental_discovery_disabled",
+                    topic=topic.query,
+                    reason=(
+                        "force_full_timeframe=True"
+                        if topic.force_full_timeframe
+                        else "incremental_disabled_in_config"
+                    ),
+                )
+
             self.logger.info(
                 "discovering_topic",
                 topic=topic.query,
                 topic_slug=topic_slug,
             )
 
-            # Execute discovery
-            papers = await self.context.discovery_service.search(topic)
-            result.papers = papers
+            # Execute discovery with resolved timeframe if available
+            # Phase 7.1: Create modified topic with incremental timeframe
+            if resolved_timeframe is not None and resolved_timeframe.is_incremental:
+                # Convert ResolvedTimeframe to TimeframeDateRange for provider
+                incremental_timeframe = TimeframeDateRange(
+                    type=TimeframeType.DATE_RANGE,
+                    start_date=resolved_timeframe.start_date.date(),
+                    end_date=resolved_timeframe.end_date.date(),
+                )
+                search_topic = topic.model_copy(
+                    update={"timeframe": incremental_timeframe}
+                )
+                self.logger.info(
+                    "using_incremental_search",
+                    topic=topic.query,
+                    start_date=incremental_timeframe.start_date.isoformat(),
+                    end_date=incremental_timeframe.end_date.isoformat(),
+                )
+            else:
+                search_topic = topic
+
+            papers = await self.context.discovery_service.search(search_topic)
+
+            # Phase 7.1: Apply discovery filtering
+            filter_enabled = (
+                self.context.config.settings.discovery_filter_settings.enabled
+            )
+            filter_settings = self.context.config.settings.discovery_filter_settings
+            register_at_discovery = filter_settings.register_at_discovery
+
+            if filter_enabled and self.context.registry_service is not None:
+                # Initialize discovery filter
+                discovery_filter = DiscoveryFilter(
+                    registry_service=self.context.registry_service,
+                    skip_filter=False,
+                )
+
+                # Filter papers
+                filter_result = await discovery_filter.filter_papers(
+                    papers=papers,
+                    topic_slug=topic_slug,
+                    register_new=register_at_discovery,
+                )
+
+                # Update result with filtered papers
+                result.papers = filter_result.new_papers
+
+                # Update statistics
+                filter_result.stats.incremental_query = (
+                    resolved_timeframe.is_incremental if resolved_timeframe else False
+                )
+                if resolved_timeframe and resolved_timeframe.is_incremental:
+                    filter_result.stats.query_start_date = resolved_timeframe.start_date
+
+                result.discovery_stats = filter_result.stats
+
+                self.logger.info(
+                    "discovery_filtering_applied",
+                    topic=topic.query,
+                    total_discovered=filter_result.stats.total_discovered,
+                    new_count=filter_result.stats.new_count,
+                    filtered_count=filter_result.stats.filtered_count,
+                )
+            else:
+                # No filtering - use all papers
+                result.papers = papers
+
+                # Create basic stats
+                result.discovery_stats = DiscoveryStats(
+                    total_discovered=len(papers),
+                    new_count=len(papers),
+                    filtered_count=0,
+                    filter_breakdown={},
+                    incremental_query=(
+                        resolved_timeframe.is_incremental
+                        if resolved_timeframe
+                        else False
+                    ),
+                    query_start_date=(
+                        resolved_timeframe.start_date if resolved_timeframe else None
+                    ),
+                )
+
+                self.logger.info(
+                    "discovery_filtering_skipped",
+                    topic=topic.query,
+                    reason="filtering_disabled_or_no_registry",
+                )
+
             result.success = True
 
-            if not papers:
+            # Phase 7.1: Update last successful discovery timestamp
+            if incremental_enabled and not topic.force_full_timeframe:
+                discovery_timestamp = datetime.now(timezone.utc)
+                self.context.catalog_service.set_last_discovery_at(
+                    topic_slug, discovery_timestamp
+                )
+                self.logger.info(
+                    "updated_last_discovery_timestamp",
+                    topic_slug=topic_slug,
+                    timestamp=discovery_timestamp.isoformat(),
+                )
+
+            if not result.papers:
                 self.logger.warning("no_papers_found", topic=topic.query)
             else:
                 self.logger.info(
                     "topic_discovered",
                     topic=topic.query,
-                    papers_count=len(papers),
+                    papers_count=len(result.papers),
                 )
 
         except APIError as e:

@@ -47,3 +47,8 @@ async
 metadata
 precommit
 prepend
+
+# Cloud/Technical terms (false positives)
+aks
+als
+sie

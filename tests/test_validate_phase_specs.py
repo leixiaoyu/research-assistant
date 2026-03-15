@@ -117,9 +117,7 @@ class TestValidateSpecFile:
 ## 9. File Size Results
 | File | Size |
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(content)
             f.flush()
             issues = validate_spec_file(Path(f.name))
@@ -136,9 +134,7 @@ class TestValidateSpecFile:
 ## 9. File Size Results
 | File | Size |
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(content)
             f.flush()
             issues = validate_spec_file(Path(f.name))
@@ -151,9 +147,7 @@ class TestValidateSpecFile:
 
 This phase is not yet started.
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(content)
             f.flush()
             issues = validate_spec_file(Path(f.name))
@@ -165,9 +159,7 @@ This phase is not yet started.
 
 Some content without a status line.
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(content)
             f.flush()
             issues = validate_spec_file(Path(f.name))
@@ -207,18 +199,14 @@ class TestValidateAllSpecs:
                 "# Phase 1\n**Status:** ✅ Complete\n\n## 9. File Size Results\n"
             )
 
-            with patch(
-                "validate_phase_specs.SPECS_DIR", specs_dir
-            ):
+            with patch("validate_phase_specs.SPECS_DIR", specs_dir):
                 issues, count = validate_all_specs()
 
             assert count == 1
             assert len(issues) == 0
 
     def test_handles_missing_directory(self) -> None:
-        with patch(
-            "validate_phase_specs.SPECS_DIR", Path("/nonexistent/path")
-        ):
+        with patch("validate_phase_specs.SPECS_DIR", Path("/nonexistent/path")):
             issues, count = validate_all_specs()
 
         assert count == 0

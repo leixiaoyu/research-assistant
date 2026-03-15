@@ -1,0 +1,20 @@
+# Markdownlint ignore file
+# Exclude directories with pre-existing issues for gradual adoption
+
+# Third-party and generated content
+node_modules/
+venv/
+.venv/
+__pycache__/
+
+# Spec workflow (separate tooling)
+.spec-workflow/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Data directories
+data/
+output/

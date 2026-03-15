@@ -1,0 +1,116 @@
+# Documentation Validation Workflow
+# Ensures documentation stays synchronized with code changes
+# See docs/specs/DOC_AUTOMATION_SPEC.md for specification
+
+name: Documentation Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.md'
+      - 'src/**'
+      - 'docs/**'
+      - 'scripts/validate_phase_specs.py'
+
+jobs:
+  lint-markdown:
+    name: Lint Markdown
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run markdownlint
+        uses: DavidAnson/markdownlint-cli2-action@v16
+        with:
+          globs: "docs/specs/**/*.md"
+          config: ".markdownlint.json"
+
+  check-spelling:
+    name: Check Spelling
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run codespell
+        uses: codespell-project/actions-codespell@v2
+        with:
+          skip: "*.json,*.lock,*.csv,venv/*,__pycache__/*"
+          ignore_words_file: .codespell-ignore
+
+  check-doc-drift:
+    name: Documentation Drift Check
+    runs-on: ubuntu-latest
+    # Skip if docs-not-required label is present
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'docs-not-required') }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for documentation drift
+        run: |
+          set -e
+
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+
+          echo "Comparing ${BASE_SHA}...${HEAD_SHA}"
+
+          # Get changed files
+          CHANGED_SRC=$(git diff --name-only "${BASE_SHA}"..."${HEAD_SHA}" -- 'src/' | grep -v '__pycache__' | grep -v '\.pyc$' || true)
+          CHANGED_DOCS=$(git diff --name-only "${BASE_SHA}"..."${HEAD_SHA}" -- 'docs/' 'CLAUDE.md' 'README.md' '*.md' || true)
+          CHANGED_TESTS=$(git diff --name-only "${BASE_SHA}"..."${HEAD_SHA}" -- 'tests/' || true)
+
+          echo "Changed source files:"
+          echo "${CHANGED_SRC}"
+          echo ""
+          echo "Changed documentation files:"
+          echo "${CHANGED_DOCS}"
+          echo ""
+
+          # If source changed but no docs changed (and not just tests)
+          if [ -n "${CHANGED_SRC}" ] && [ -z "${CHANGED_DOCS}" ]; then
+            # Allow if only test files changed alongside source
+            if [ -n "${CHANGED_TESTS}" ]; then
+              echo "::notice::Source code changed with tests but no documentation. Consider updating docs if API changed."
+              exit 0
+            fi
+
+            echo "::warning::Source code changed but no documentation updated."
+            echo ""
+            echo "If documentation updates are not needed, add the 'docs-not-required' label to this PR."
+            echo ""
+            echo "Documentation checklist:"
+            echo "  - [ ] CLAUDE.md updated if workflow changes"
+            echo "  - [ ] Phase spec status updated if phase completed"
+            echo "  - [ ] PHASED_DELIVERY_PLAN.md timeline updated"
+            echo ""
+            # Phase A: Warning only, not blocking
+            exit 0
+          fi
+
+          echo "✅ Documentation check passed"
+
+  validate-phase-specs:
+    name: Validate Phase Specs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Validate phase specifications
+        run: |
+          if [ -f "scripts/validate_phase_specs.py" ]; then
+            python scripts/validate_phase_specs.py
+          else
+            echo "Phase spec validation script not found, skipping"
+          fi

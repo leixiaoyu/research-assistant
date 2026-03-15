@@ -1,0 +1,54 @@
+# Codespell custom dictionary - words to ignore
+# Add project-specific technical terms here to prevent false positives
+
+# Project-specific terms
+arisp
+pydantic
+typer
+pytest
+structlog
+asyncio
+aiohttp
+
+# Technical abbreviations
+llm
+llms
+api
+apis
+etl
+dto
+ci
+cd
+
+# Common code patterns
+init
+str
+int
+bool
+dict
+func
+args
+kwargs
+
+# Library names
+gemini
+anthropic
+arxiv
+matplotlib
+numpy
+pandas
+
+# Domain terms
+dedup
+dedupe
+backoff
+failover
+async
+metadata
+precommit
+prepend
+
+# Cloud/Technical terms (false positives)
+aks
+als
+sie

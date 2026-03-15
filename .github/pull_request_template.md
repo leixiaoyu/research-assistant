@@ -32,3 +32,18 @@
 - [ ] Observability (Logging)
 - [ ] Resilience (Error Handling)
 - [ ] Performance
+
+## Documentation Checklist
+<!-- Required for code changes. Check all that apply or mark N/A -->
+
+**Required updates:**
+- [ ] CLAUDE.md updated if workflow/process changes
+- [ ] Phase spec status updated if phase completed
+- [ ] PHASED_DELIVERY_PLAN.md timeline updated if milestone reached
+- [ ] Test stats updated in docs if coverage changes significantly
+
+**Documentation not needed because:**
+- [ ] Test-only changes (no API or behavior changes)
+- [ ] Internal refactoring with no public API changes
+- [ ] Documentation-only PR (already updating docs)
+- [ ] Other: <!-- explain briefly -->

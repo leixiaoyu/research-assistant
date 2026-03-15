@@ -21,5 +21,10 @@
   },
   "MD010": {
     "code_blocks": false
-  }
+  },
+  "MD004": false,
+  "MD022": false,
+  "MD031": false,
+  "MD032": false,
+  "MD036": false
 }

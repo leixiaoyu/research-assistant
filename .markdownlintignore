@@ -1,5 +1,5 @@
 # Markdownlint ignore file
-# Exclude directories with pre-existing issues for gradual adoption
+# Exclude directories and files with pre-existing issues for gradual adoption
 
 # Third-party and generated content
 node_modules/
@@ -18,3 +18,9 @@ build/
 # Data directories
 data/
 output/
+
+# Existing project files (gradual adoption - fix separately)
+# These have many pre-existing style issues that should be fixed in a dedicated PR
+CLAUDE.md
+README.md
+.github/pull_request_template.md

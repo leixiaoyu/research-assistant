@@ -29,7 +29,12 @@ if ! command -v claude &> /dev/null; then
     exit 1
 fi
 
-claude "/oh-my-claudecode:security-review src/" > "$REPORT_FILE" 2>&1
+if ! claude "/oh-my-claudecode:security-review src/" > "$REPORT_FILE" 2>&1; then
+    echo "❌ Security review command failed"
+    echo "Output:"
+    cat "$REPORT_FILE" 2>/dev/null || echo "(no output)"
+    exit 1
+fi
 
 # CRITICAL FIX: Check if report exists AND is non-empty
 if [ ! -f "$REPORT_FILE" ]; then

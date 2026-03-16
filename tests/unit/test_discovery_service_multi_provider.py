@@ -69,8 +69,8 @@ class TestDiscoveryServiceInitialization:
         ds = DiscoveryService(api_key="test_key_1234567890")
         providers = ds.available_providers
         assert isinstance(providers, list)
-        # ArXiv, Semantic Scholar, and HuggingFace
-        assert len(providers) == 3
+        # ArXiv, Semantic Scholar, HuggingFace, and OpenAlex (Phase 7.2)
+        assert len(providers) == 4
 
 
 class TestAutoSelection:
@@ -295,10 +295,17 @@ class TestBenchmarkMode:
                 ) as mock_hf:
                     mock_hf.return_value = []
 
-                    result = await ds.search(topic)
-                    assert len(result) == 2
-                    mock_arxiv.assert_called_once()
-                    mock_ss.assert_called_once()
+                    oa_path = "src.services.providers.openalex"
+                    with patch(
+                        f"{oa_path}.OpenAlexProvider.search",
+                        new_callable=AsyncMock,
+                    ) as mock_oa:
+                        mock_oa.return_value = []
+
+                        result = await ds.search(topic)
+                        assert len(result) == 2
+                        mock_arxiv.assert_called_once()
+                        mock_ss.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_benchmark_mode_deduplicates(self, mock_paper):
@@ -332,8 +339,15 @@ class TestBenchmarkMode:
                 ) as mock_hf:
                     mock_hf.return_value = []
 
-                    result = await ds.search(topic)
-                    assert len(result) == 1
+                    oa_path = "src.services.providers.openalex"
+                    with patch(
+                        f"{oa_path}.OpenAlexProvider.search",
+                        new_callable=AsyncMock,
+                    ) as mock_oa:
+                        mock_oa.return_value = []
+
+                        result = await ds.search(topic)
+                        assert len(result) == 1
 
     @pytest.mark.asyncio
     async def test_benchmark_topic_flag(self, mock_paper):
@@ -396,8 +410,15 @@ class TestBenchmarkMode:
                 ) as mock_hf:
                     mock_hf.return_value = []
 
-                    result = await ds.search(topic)
-                    assert len(result) == 1
+                    oa_path = "src.services.providers.openalex"
+                    with patch(
+                        f"{oa_path}.OpenAlexProvider.search",
+                        new_callable=AsyncMock,
+                    ) as mock_oa:
+                        mock_oa.return_value = []
+
+                        result = await ds.search(topic)
+                        assert len(result) == 1
 
 
 class TestSearchWithMetrics:
@@ -501,15 +522,22 @@ class TestCompareProviders:
                     )
                     mock_hf.return_value = [paper3]
 
-                    comparison = await ds.compare_providers(topic)
+                    oa_path = "src.services.providers.openalex"
+                    with patch(
+                        f"{oa_path}.OpenAlexProvider.search",
+                        new_callable=AsyncMock,
+                    ) as mock_oa:
+                        mock_oa.return_value = []
 
-                    assert isinstance(comparison, ProviderComparison)
-                    # Now includes ArXiv, Semantic Scholar, and HuggingFace
-                    assert len(comparison.providers_queried) == 3
-                    assert len(comparison.metrics) == 3
-                    assert comparison.total_unique_papers == 3
-                    assert comparison.fastest_provider is not None
-                    assert comparison.most_results_provider is not None
+                        comparison = await ds.compare_providers(topic)
+
+                        assert isinstance(comparison, ProviderComparison)
+                        # Now includes ArXiv, SS, HuggingFace, OpenAlex (Phase 7.2)
+                        assert len(comparison.providers_queried) == 4
+                        assert len(comparison.metrics) == 4
+                        assert comparison.total_unique_papers == 3
+                        assert comparison.fastest_provider is not None
+                        assert comparison.most_results_provider is not None
 
     @pytest.mark.asyncio
     async def test_compare_providers_with_overlap(self, mock_paper):
@@ -542,10 +570,17 @@ class TestCompareProviders:
                 ) as mock_hf:
                     mock_hf.return_value = []
 
-                    comparison = await ds.compare_providers(topic)
+                    oa_path = "src.services.providers.openalex"
+                    with patch(
+                        f"{oa_path}.OpenAlexProvider.search",
+                        new_callable=AsyncMock,
+                    ) as mock_oa:
+                        mock_oa.return_value = []
 
-                    assert comparison.overlap_count == 1
-                    assert comparison.total_unique_papers == 1
+                        comparison = await ds.compare_providers(topic)
+
+                        assert comparison.overlap_count == 1
+                        assert comparison.total_unique_papers == 1
 
     @pytest.mark.asyncio
     async def test_compare_providers_with_failure(self, mock_paper):
@@ -578,17 +613,24 @@ class TestCompareProviders:
                 ) as mock_hf:
                     mock_hf.return_value = []
 
-                    comparison = await ds.compare_providers(topic)
+                    oa_path = "src.services.providers.openalex"
+                    with patch(
+                        f"{oa_path}.OpenAlexProvider.search",
+                        new_callable=AsyncMock,
+                    ) as mock_oa:
+                        mock_oa.return_value = []
 
-                    # Now includes 3 providers
-                    assert len(comparison.metrics) == 3
-                    ss_metric = next(
-                        m
-                        for m in comparison.metrics
-                        if m.provider == ProviderType.SEMANTIC_SCHOLAR
-                    )
-                    assert ss_metric.success is False
-                    assert ss_metric.error is not None
+                        comparison = await ds.compare_providers(topic)
+
+                        # Now includes 4 providers (Phase 7.2: added OpenAlex)
+                        assert len(comparison.metrics) == 4
+                        ss_metric = next(
+                            m
+                            for m in comparison.metrics
+                            if m.provider == ProviderType.SEMANTIC_SCHOLAR
+                        )
+                        assert ss_metric.success is False
+                        assert ss_metric.error is not None
 
 
 class TestProviderUnavailable:
@@ -673,8 +715,15 @@ class TestAdditionalCoverage:
                 ) as mock_hf:
                     mock_hf.return_value = []
 
-                    result = await ds.search(topic)
-                    assert len(result) == 1
+                    oa_path = "src.services.providers.openalex"
+                    with patch(
+                        f"{oa_path}.OpenAlexProvider.search",
+                        new_callable=AsyncMock,
+                    ) as mock_oa:
+                        mock_oa.return_value = []
+
+                        result = await ds.search(topic)
+                        assert len(result) == 1
 
     @pytest.mark.asyncio
     async def test_search_with_metrics_auto_select(self):

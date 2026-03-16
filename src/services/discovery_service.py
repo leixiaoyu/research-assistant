@@ -9,12 +9,16 @@ from src.services.providers.base import DiscoveryProvider, APIError
 from src.services.providers.semantic_scholar import SemanticScholarProvider
 from src.services.providers.arxiv import ArxivProvider
 from src.services.providers.huggingface import HuggingFaceProvider
+from src.services.providers.openalex import OpenAlexProvider
 from src.models.config import (
     ResearchTopic,
     ProviderType,
     ProviderSelectionConfig,
     PDFStrategy,
     EnhancedDiscoveryConfig,
+    CitationExplorationConfig,
+    QueryExpansionConfig,
+    AggregationConfig,
 )
 from src.models.paper import PaperMetadata
 from src.models.provider import ProviderMetrics, ProviderComparison
@@ -82,6 +86,9 @@ class DiscoveryService:
 
         # Initialize HuggingFace (Always available - no API key required)
         self.providers[ProviderType.HUGGINGFACE] = HuggingFaceProvider()
+
+        # Phase 7.2: Initialize OpenAlex (Always available - no API key required)
+        self.providers[ProviderType.OPENALEX] = OpenAlexProvider()
 
         # Initialize provider selector
         self._selector = ProviderSelector(
@@ -671,3 +678,154 @@ class DiscoveryService:
         )
 
         return result
+
+    # =========================================================================
+    # Phase 7.2: Multi-Source Discovery with Citation Exploration
+    # =========================================================================
+
+    async def multi_source_search(
+        self,
+        topic: ResearchTopic,
+        llm_service: Optional["LLMService"] = None,
+        registry_service: Optional[object] = None,
+        query_expansion_config: Optional[QueryExpansionConfig] = None,
+        citation_config: Optional[CitationExplorationConfig] = None,
+        aggregation_config: Optional[AggregationConfig] = None,
+    ) -> List[PaperMetadata]:
+        """Search using Phase 7.2 multi-source discovery with citation exploration.
+
+        This method implements comprehensive discovery:
+        1. Query Expansion: LLM-generated query variants
+        2. Multi-Source Search: Query all configured providers concurrently
+        3. Citation Exploration: Forward/backward citation discovery
+        4. Result Aggregation: Deduplication and ranking
+
+        Args:
+            topic: Research topic with query and settings.
+            llm_service: Optional LLM service for query expansion.
+            registry_service: Optional registry for deduplication.
+            query_expansion_config: Query expansion configuration.
+            citation_config: Citation exploration configuration.
+            aggregation_config: Result aggregation configuration.
+
+        Returns:
+            List of deduplicated, ranked papers from all sources.
+        """
+        from src.utils.query_expander import QueryExpander
+        from src.services.citation_explorer import CitationExplorer
+        from src.services.result_aggregator import ResultAggregator
+
+        # Initialize configurations with defaults
+        qe_config = query_expansion_config or QueryExpansionConfig()
+        cite_config = citation_config or CitationExplorationConfig()
+        agg_config = aggregation_config or AggregationConfig()
+
+        # Step 1: Query Expansion (if enabled and LLM available)
+        queries = [topic.query]
+        if qe_config.enabled and llm_service is not None:
+            expander = QueryExpander(llm_service=llm_service, config=qe_config)
+            queries = await expander.expand(topic.query)
+            logger.info(
+                "phase72_query_expansion",
+                original=topic.query[:50],
+                expanded_count=len(queries),
+            )
+
+        # Step 2: Multi-Source Concurrent Search
+        source_results: Dict[str, List[PaperMetadata]] = {}
+
+        for query in queries:
+            # Create topic with current query
+            search_topic = topic.model_copy(update={"query": query})
+
+            # Query all providers concurrently
+            tasks = []
+            provider_names = []
+            for provider_type, provider in self.providers.items():
+                tasks.append(provider.search(search_topic))
+                provider_names.append(provider_type.value)
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for provider_name, result in zip(provider_names, results):
+                if isinstance(result, BaseException):
+                    logger.warning(
+                        "phase72_provider_error",
+                        provider=provider_name,
+                        error=str(result),
+                    )
+                    continue
+
+                # Add discovery_source to papers
+                for paper in result:
+                    if not paper.discovery_source:
+                        paper = paper.model_copy(
+                            update={
+                                "discovery_source": provider_name,
+                                "discovery_method": "keyword",
+                            }
+                        )
+
+                if provider_name not in source_results:
+                    source_results[provider_name] = []
+                source_results[provider_name].extend(result)
+
+        logger.info(
+            "phase72_multi_source_search",
+            providers_queried=len(self.providers),
+            total_papers=sum(len(p) for p in source_results.values()),
+        )
+
+        # Step 3: Citation Exploration (if enabled and SS available)
+        if cite_config.enabled and self._api_key:
+            explorer = CitationExplorer(
+                api_key=self._api_key,
+                registry_service=registry_service,  # type: ignore[arg-type]
+                config=cite_config,
+            )
+
+            # Get seed papers from initial results
+            all_initial = []
+            for papers in source_results.values():
+                all_initial.extend(papers)
+
+            # Limit seed papers to avoid excessive API calls
+            seed_papers = all_initial[:20]
+
+            if seed_papers:
+                citation_result = await explorer.explore(
+                    seed_papers=seed_papers,
+                    topic_slug=topic.slug,
+                )
+
+                # Add citation papers to results
+                if citation_result.forward_papers:
+                    source_results["forward_citations"] = citation_result.forward_papers
+                if citation_result.backward_papers:
+                    source_results["backward_citations"] = (
+                        citation_result.backward_papers
+                    )
+
+                logger.info(
+                    "phase72_citation_exploration",
+                    forward=citation_result.stats.forward_discovered,
+                    backward=citation_result.stats.backward_discovered,
+                )
+
+        # Step 4: Aggregation (deduplication + ranking)
+        aggregator = ResultAggregator(
+            registry_service=registry_service,  # type: ignore[arg-type]
+            config=agg_config,
+        )
+
+        aggregation_result = await aggregator.aggregate(source_results)
+
+        logger.info(
+            "phase72_aggregation_complete",
+            total_raw=aggregation_result.total_raw,
+            after_dedup=aggregation_result.total_after_dedup,
+            final_count=len(aggregation_result.papers),
+            source_breakdown=aggregation_result.source_breakdown,
+        )
+
+        return aggregation_result.papers

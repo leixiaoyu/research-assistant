@@ -470,6 +470,8 @@ class TestDiscoveryServiceBenchmarkDeduplication:
         )
         # Mock HuggingFace provider to return empty list (not relevant to this test)
         service.providers[ProviderType.HUGGINGFACE].search = AsyncMock(return_value=[])
+        # Mock OpenAlex provider to return empty list (Phase 7.2 addition)
+        service.providers[ProviderType.OPENALEX].search = AsyncMock(return_value=[])
 
         topic = ResearchTopic(
             query="test",

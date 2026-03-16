@@ -51,6 +51,31 @@ class PaperMetadata(BaseModel):
         None, description="Source of PDF (open_access, arxiv, etc.)"
     )
 
+    # Phase 7.2: Multi-source tracking fields
+    discovery_source: Optional[str] = Field(
+        None,
+        description=(
+            "Provider that discovered this paper "
+            "(arxiv, semantic_scholar, openalex, etc.)"
+        ),
+    )
+    discovery_method: Optional[str] = Field(
+        None,
+        description=(
+            "How paper was discovered "
+            "(keyword, forward_citation, backward_citation, expanded_query)"
+        ),
+    )
+    source_count: int = Field(
+        1, ge=1, description="Number of sources that found this paper"
+    )
+    ranking_score: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Aggregation ranking score for multi-source results",
+    )
+
     model_config = ConfigDict(populate_by_name=True)
 
 

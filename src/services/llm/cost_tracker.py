@@ -10,7 +10,7 @@ This module handles:
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Optional, Dict
 import structlog
 
@@ -79,7 +79,7 @@ class CostTracker:
     total_tokens: int = 0
     total_cost_usd: float = 0.0
     papers_processed: int = 0
-    last_reset: datetime = field(default_factory=datetime.utcnow)
+    last_reset: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     by_provider: Dict[str, ProviderUsage] = field(default_factory=dict)
 
     # Retry/fallback tracking
@@ -176,7 +176,7 @@ class CostTracker:
 
     def _check_daily_reset(self) -> None:
         """Check if daily stats should be reset."""
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
         if self._last_reset_date != today:
             logger.info(
                 "daily_stats_reset",
@@ -191,7 +191,7 @@ class CostTracker:
         """Reset daily statistics."""
         # Note: We only reset if tracking daily vs total separately
         # Current implementation tracks total, so daily reset updates timestamp
-        self.last_reset = datetime.utcnow()
+        self.last_reset = datetime.now(timezone.utc)
 
     def get_summary(self) -> dict:
         """Get current usage summary.
@@ -230,4 +230,4 @@ class CostTracker:
         Returns:
             True if reset is needed
         """
-        return self._last_reset_date != datetime.utcnow().date()
+        return self._last_reset_date != datetime.now(timezone.utc).date()

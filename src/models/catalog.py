@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class CatalogRun(BaseModel):
@@ -35,7 +35,7 @@ class TopicCatalogEntry(BaseModel):
     query: str
     folder: str
     created_at: datetime
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     runs: List[CatalogRun] = Field(default_factory=list)
     processed_papers: List[ProcessedPaper] = Field(default_factory=list)
     # Phase 7.1: Discovery timestamp tracking
@@ -45,7 +45,7 @@ class TopicCatalogEntry(BaseModel):
     def add_run(self, run: CatalogRun):
         """Add a run and update timestamp"""
         self.runs.append(run)
-        self.last_updated = datetime.utcnow()
+        self.last_updated = datetime.now(timezone.utc)
 
     def has_paper(self, paper_id: str, doi: Optional[str] = None) -> bool:
         """Check if paper already processed"""
@@ -62,8 +62,8 @@ class Catalog(BaseModel):
 
     version: str = "1.0"
     topics: Dict[str, TopicCatalogEntry] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def get_or_create_topic(self, topic_slug: str, query: str) -> TopicCatalogEntry:
         """Get existing topic or create new entry"""
@@ -72,7 +72,7 @@ class Catalog(BaseModel):
                 topic_slug=topic_slug,
                 query=query,
                 folder=topic_slug,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
-        self.last_updated = datetime.utcnow()
+        self.last_updated = datetime.now(timezone.utc)
         return self.topics[topic_slug]

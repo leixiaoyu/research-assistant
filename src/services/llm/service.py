@@ -16,7 +16,7 @@ The service maintains backward compatibility with the original API.
 import os
 import time
 from typing import List, Any, Optional, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 import structlog
 
 from src.models.llm import LLMConfig, CostLimits, EnhancedUsageStats, ProviderUsageStats
@@ -244,7 +244,7 @@ class LLMService:
         if not should_reset:
             from datetime import timedelta
 
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             if (now - self.usage_stats.last_reset) > timedelta(hours=24):
                 should_reset = True
         if should_reset:
@@ -608,7 +608,7 @@ class LLMService:
                 extraction_results=results,
                 tokens_used=response.total_tokens,
                 cost_usd=cost,
-                extraction_timestamp=datetime.utcnow(),
+                extraction_timestamp=datetime.now(timezone.utc),
             )
 
         except JSONParseError:

@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 from src.services.catalog_service import CatalogService
 from src.models.catalog import Catalog, TopicCatalogEntry
@@ -30,7 +30,7 @@ def test_get_or_create_topic_duplicate(mock_config):
         topic_slug="existing-topic",
         query="Machine Learning",
         folder="existing-topic",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
     )
     catalog = Catalog(topics={"existing-topic": existing})
 
@@ -53,7 +53,7 @@ def test_get_or_create_topic_slug_collision(mock_config):
         topic_slug="machine-learning",
         query="Machine Learning",
         folder="machine-learning",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
     )
     catalog = Catalog(topics={"machine-learning": existing})
 
@@ -74,13 +74,17 @@ def test_is_paper_processed(mock_config):
     from src.models.catalog import ProcessedPaper
 
     paper = ProcessedPaper(
-        paper_id="p1", doi="d1", title="T", processed_at=datetime.utcnow(), run_id="r1"
+        paper_id="p1",
+        doi="d1",
+        title="T",
+        processed_at=datetime.now(timezone.utc),
+        run_id="r1",
     )
     topic = TopicCatalogEntry(
         topic_slug="t1",
         query="Q",
         folder="t1",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
         processed_papers=[paper],
     )
     catalog = Catalog(topics={"t1": topic})
@@ -137,7 +141,7 @@ def test_get_last_discovery_at_existing(mock_config):
         topic_slug="test-topic",
         query="Test Query",
         folder="test-topic",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
         last_successful_discovery_at=timestamp,
     )
     catalog = Catalog(topics={"test-topic": topic})
@@ -155,7 +159,7 @@ def test_get_last_discovery_at_not_set(mock_config):
         topic_slug="test-topic",
         query="Test Query",
         folder="test-topic",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
         last_successful_discovery_at=None,
     )
     catalog = Catalog(topics={"test-topic": topic})
@@ -183,7 +187,7 @@ def test_set_last_discovery_at_existing_topic(mock_config):
         topic_slug="test-topic",
         query="Test Query",
         folder="test-topic",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
     )
     catalog = Catalog(topics={"test-topic": topic})
     mock_config.load_catalog.return_value = catalog
@@ -218,7 +222,7 @@ def test_detect_query_change_no_previous_hash(mock_config):
         topic_slug="test-topic",
         query="Original Query",
         folder="test-topic",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
         query_hash=None,
     )
     catalog = Catalog(topics={"test-topic": topic_entry})
@@ -247,7 +251,7 @@ def test_detect_query_change_query_unchanged(mock_config):
         topic_slug="test-topic",
         query=query,
         folder="test-topic",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
         query_hash=query_hash,
     )
     catalog = Catalog(topics={"test-topic": topic_entry})
@@ -273,7 +277,7 @@ def test_detect_query_change_query_changed(mock_config):
         topic_slug="test-topic",
         query=old_query,
         folder="test-topic",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
         query_hash=old_hash,
     )
     catalog = Catalog(topics={"test-topic": topic_entry})
@@ -318,7 +322,7 @@ def test_backward_compatibility_existing_catalog(mock_config):
         topic_slug="old-topic",
         query="Old Query",
         folder="old-topic",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
     )
     # Explicitly verify new fields have default values
     assert topic.last_successful_discovery_at is None

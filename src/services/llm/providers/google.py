@@ -5,7 +5,7 @@ Phase 5.1: Provider implementation for Google Gemini models.
 
 import time
 from typing import Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import structlog
 
 from src.services.llm.providers.base import LLMProvider, LLMResponse, ProviderHealth
@@ -159,7 +159,7 @@ class GoogleProvider(LLMProvider):
                 provider=self.name,
                 latency_ms=latency_ms,
                 finish_reason=self._get_finish_reason(response),
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
             )
 
             # Record success

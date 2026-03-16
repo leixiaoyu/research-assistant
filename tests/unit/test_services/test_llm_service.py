@@ -11,7 +11,7 @@ Tests for:
 
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 
 from src.services.llm import LLMService
@@ -350,7 +350,7 @@ async def test_extract_success(llm_service, paper_metadata, extraction_targets):
 async def test_extract_daily_reset(llm_service, paper_metadata, extraction_targets):
     """Test extraction resets daily stats when needed"""
     # Set last_reset to yesterday
-    yesterday = datetime.utcnow() - timedelta(days=1)
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
     llm_service.usage_stats.last_reset = yesterday
     llm_service.usage_stats.total_tokens = 100000
     llm_service.usage_stats.total_cost_usd = 10.0

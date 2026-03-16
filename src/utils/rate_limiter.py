@@ -1,6 +1,6 @@
 import asyncio
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List
 import structlog
 
@@ -34,7 +34,7 @@ class RateLimiter:
             self.tokens -= 1
 
         # 3. Abuse detection (track last minute)
-        now_dt = datetime.utcnow()
+        now_dt = datetime.now(timezone.utc)
         self.request_times.append(now_dt)
         minute_ago = now_dt - timedelta(minutes=1)
         self.request_times = [t for t in self.request_times if t > minute_ago]

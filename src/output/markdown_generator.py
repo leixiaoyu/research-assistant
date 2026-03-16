@@ -5,7 +5,7 @@ Phase 2's EnhancedMarkdownGenerator extends this to include extraction results.
 """
 
 from typing import List
-from datetime import datetime
+from datetime import datetime, timezone
 import yaml
 
 from src.models.config import ResearchTopic
@@ -32,7 +32,7 @@ class MarkdownGenerator:
         # 1. Frontmatter
         frontmatter = {
             "topic": topic.query,
-            "date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             "papers_processed": len(papers),
             "timeframe": timeframe_str,
             "run_id": run_id,
@@ -47,7 +47,7 @@ class MarkdownGenerator:
         # 2. Header
         md_lines.append(f"# Research Brief: {topic.query}\n")
         md_lines.append(
-            f"**Generated:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
+            f"**Generated:** {datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC"
         )
         md_lines.append(f"**Papers Found:** {len(papers)}\n")
 

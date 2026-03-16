@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from src.services.discovery_service import DiscoveryService
@@ -107,7 +107,10 @@ def test_collision_logic():
     cm.generate_topic_slug.return_value = "slug"
 
     existing_topic = TopicCatalogEntry(
-        topic_slug="slug", query="Other", folder="slug", created_at=datetime.utcnow()
+        topic_slug="slug",
+        query="Other",
+        folder="slug",
+        created_at=datetime.now(timezone.utc),
     )
     catalog = Catalog(topics={"slug": existing_topic})
 

@@ -5,7 +5,7 @@ Phase 5.2: Extracted from research_pipeline.py.
 
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -159,7 +159,7 @@ class ExtractionPhase(PipelinePhase[ExtractionResult]):
             TopicExtractionResult with extraction results
         """
         start_time = time.time()
-        run_id = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
         result = TopicExtractionResult(
             topic=topic,
@@ -325,7 +325,7 @@ class ExtractionPhase(PipelinePhase[ExtractionResult]):
         output_dir = self.context.config_manager.get_output_path(
             catalog_topic.topic_slug
         )
-        filename = f"{datetime.utcnow().strftime('%Y-%m-%d')}_Research.md"
+        filename = f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}_Research.md"
         output_file = output_dir / filename
 
         # Generate markdown
@@ -379,7 +379,7 @@ class ExtractionPhase(PipelinePhase[ExtractionResult]):
 
         run = CatalogRun(
             run_id=run_id,
-            date=datetime.utcnow(),
+            date=datetime.now(timezone.utc),
             papers_found=len(papers),
             papers_processed=papers_processed,
             papers_failed=papers_failed,

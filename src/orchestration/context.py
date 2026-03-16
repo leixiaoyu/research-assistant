@@ -4,7 +4,7 @@ Phase 5.2: Shared context for pipeline phases.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -46,9 +46,9 @@ class PipelineContext:
     config: ResearchConfig
     config_path: Path
     run_id: str = field(
-        default_factory=lambda: datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        default_factory=lambda: datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     )
-    started_at: datetime = field(default_factory=datetime.utcnow)
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Feature flags
     enable_phase2: bool = True

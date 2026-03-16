@@ -13,7 +13,7 @@ Usage:
 """
 
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import structlog
@@ -51,7 +51,7 @@ class BaseJob(ABC):
 
         start = time.time()
         corr_id = set_correlation_id(
-            f"{self.name}-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+            f"{self.name}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
         )
 
         logger.info(
@@ -63,8 +63,8 @@ class BaseJob(ABC):
         try:
             result = await self.run()
 
-            self.last_run = datetime.utcnow()
-            self.last_success = datetime.utcnow()
+            self.last_run = datetime.now(timezone.utc)
+            self.last_success = datetime.now(timezone.utc)
             self.run_count += 1
 
             duration = time.time() - start
@@ -79,7 +79,7 @@ class BaseJob(ABC):
             return result
 
         except Exception as e:
-            self.last_run = datetime.utcnow()
+            self.last_run = datetime.now(timezone.utc)
             self.error_count += 1
 
             logger.error(
@@ -410,7 +410,7 @@ class CostReportJob(BaseJob):
         # For now, this is a placeholder that shows the report structure
 
         report: Dict[str, Any] = {
-            "report_date": datetime.utcnow().isoformat(),
+            "report_date": datetime.now(timezone.utc).isoformat(),
             "period": "daily",
             "costs": {
                 "anthropic": 0.0,

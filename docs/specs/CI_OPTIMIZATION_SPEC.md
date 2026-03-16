@@ -35,7 +35,7 @@ This specification defines optimizations to the CI/CD pipeline to reduce build t
 **Execution Environment Matrix:**
 
 | Check | Local (Pre-push) | GitHub Actions | Release Gate |
-|-------|-----------------|----------------|--------------|
+| ----- | ---------------- | -------------- | ------------ |
 | Pre-commit hooks | ✅ Gitleaks, Black | ❌ | ❌ |
 | Format/Lint/Type | ✅ `./verify.sh` | ✅ Automatic | ❌ |
 | Tests + Coverage | ✅ `./verify.sh` | ✅ Automatic | ❌ |
@@ -109,7 +109,7 @@ jobs:
 ### 2.3 Identified Bottlenecks
 
 | Bottleneck | Impact | Root Cause |
-|------------|--------|------------|
+| ---------- | ------ | ---------- |
 | Pip install | ~90 seconds | Sequential download/install |
 | Sequential jobs | ~5 min total | All checks in one job |
 | No fail-fast | Slow feedback | Format errors wait for tests |
@@ -637,15 +637,15 @@ This script will:
 
 ### Manual Setup (Alternative)
 
-If you prefer manual setup, see [Development Setup](#development-setup) below.
+If you prefer manual setup, see the Development Setup section in CLAUDE.md.
 ```
 
 **Expected Developer Experience:**
-```
-$ git clone <repo> && cd research-assist && ./scripts/init.sh
+```text
+$ git clone https://github.com/org/research-assist && cd research-assist && ./scripts/init.sh
 
-🚀 ARISP Development Environment Setup
-=======================================
+ARISP Development Environment Setup
+====================================
 
 📍 Detected OS: Darwin
 🐍 Checking Python version...
@@ -784,7 +784,7 @@ echo "✅ All checks passed!"
 **Security Check Behavior:**
 
 | Check | Blocking? | Rationale |
-|-------|-----------|-----------|
+| ----- | --------- | --------- |
 | Gitleaks (secrets) | ✅ BLOCKING | Secrets must never be committed |
 | Bandit (SAST) | ⚠️ Warning | Review findings, may have false positives |
 | pip-audit (deps) | ⚠️ Warning | CVEs appear daily, avoid flaky local checks |
@@ -873,7 +873,7 @@ check_required_tools() {
 **Current verify.sh (~2.5 minutes):**
 
 | Check | Time | Notes |
-|-------|------|-------|
+| ----- | ---- | ----- |
 | Python version check | ~0s | Instant |
 | Black formatting | ~5s | Fast check mode |
 | Flake8 linting | ~8s | Full codebase |
@@ -886,7 +886,7 @@ check_required_tools() {
 **Updated verify.sh with Security (~3 minutes):**
 
 | Check | Time | Notes |
-|-------|------|-------|
+| ----- | ---- | ----- |
 | Python version check | ~0s | Instant |
 | Black formatting | ~5s | Fast check mode |
 | Flake8 linting | ~8s | Full codebase |
@@ -948,8 +948,9 @@ repos:
 ```
 
 **Blocking vs Non-Blocking:**
+
 | Check | Behavior | Rationale |
-|-------|----------|-----------|
+| ----- | -------- | --------- |
 | Secret detection | **BLOCKING** | Leaked secrets are critical |
 | SAST (Bandit) | Warning | Review findings, not auto-block |
 | Dependency CVEs | Warning | CVEs appear daily, avoid CI flakiness |
@@ -987,7 +988,7 @@ The CI pipeline incorporates documentation drift detection from the existing wor
 **Execution Environment:**
 
 | Check | Runs In | Enforcement |
-|-------|---------|-------------|
+| ----- | ------- | ----------- |
 | Format, Lint, Type, Test | GitHub Actions | Automatic on PR |
 | Secret Detection (TruffleHog) | GitHub Actions | Blocks PR merge |
 | SAST (Bandit), Dep-scan | GitHub Actions | Warning (non-blocking) |
@@ -996,7 +997,7 @@ The CI pipeline incorporates documentation drift detection from the existing wor
 **Security Severity Policy (Non-Negotiable):**
 
 | Severity | Action Required | Can Release? |
-|----------|-----------------|--------------|
+| -------- | --------------- | ------------ |
 | **CRITICAL** | Must fix immediately | ❌ BLOCKED |
 | **HIGH** | Must fix immediately | ❌ BLOCKED |
 | **MEDIUM** | Must fix before release | ❌ BLOCKED |
@@ -1172,7 +1173,7 @@ done
 ### 5.1 Time Improvements
 
 | Scenario | Current | Optimized | Improvement |
-|----------|---------|-----------|-------------|
+| -------- | ------- | --------- | ----------- |
 | Format fails | ~5 min | ~15 sec | **95% faster** |
 | Lint fails | ~5 min | ~35 sec | **88% faster** |
 | Type check fails | ~5 min | ~60 sec | **80% faster** |
@@ -1181,7 +1182,7 @@ done
 ### 5.2 Feedback Loop Improvements
 
 | Error Type | Current Feedback | Optimized Feedback |
-|------------|------------------|-------------------|
+| ---------- | ---------------- | ------------------ |
 | Formatting | Wait ~5 min | ~15 seconds |
 | Linting | Wait ~5 min | ~35 seconds |
 | Type errors | Wait ~5 min | ~60 seconds |
@@ -1190,7 +1191,7 @@ done
 ### 5.3 Resource Utilization
 
 | Metric | Current | Optimized |
-|--------|---------|-----------|
+| ------ | ------- | --------- |
 | Runner minutes/PR | ~5 min | ~3-4 min |
 | Parallel jobs | 1 | 4 (format → lint+type → test) |
 | Cache hit rate | ~60% | ~90%+ |
@@ -1328,7 +1329,7 @@ The previous workflow is fully functional and tested.
 ## 10. File Changes Summary
 
 | File | Change Type | Description |
-|------|-------------|-------------|
+| ---- | ----------- | ----------- |
 | `.github/workflows/ci.yml` | Major | Restructure into parallel jobs with security |
 | `.github/workflows/release-validation.yml` | New | Release gate validation workflow |
 | `.pre-commit-config.yaml` | Minor | Add Gitleaks secret scanning hook |
@@ -1381,7 +1382,7 @@ The previous workflow is fully functional and tested.
 ### 12.2 Sign-off
 
 | Role | Name | Date | Signature |
-|------|------|------|-----------|
+| ---- | ---- | ---- | --------- |
 | Author | Claude Code Research Team | 2026-03-15 | ✅ |
 | Reviewer | | | |
 | Approver | | | |
@@ -1391,9 +1392,9 @@ The previous workflow is fully functional and tested.
 ## 13. Document Control
 
 | Version | Date | Author | Changes |
-|---------|------|--------|---------|
+| ------- | ---- | ------ | ------- |
 | 1.0 | 2026-03-15 | Claude Code Research Team | Initial specification |
-| 1.1 | 2026-03-15 | Claude Code Research Team | Added security scanning (TruffleHog, Bandit, pip-audit), documentation validation integration, security review agent reference |
+| 1.1 | 2026-03-15 | Claude Code Research Team | Added security scanning, documentation validation, security review agent reference |
 
 ---
 
@@ -1421,7 +1422,7 @@ Fast fail: 15 sec (format error)
 ## Appendix B: uv vs pip Benchmark Data
 
 | Operation | pip | uv | Speedup |
-|-----------|-----|-----|---------|
+| --------- | --- | -- | ------- |
 | Cold install (30 deps) | 45s | 3s | 15x |
 | Warm cache | 15s | 2s | 7.5x |
 | requirements.txt | 90s | 20s | 4.5x |

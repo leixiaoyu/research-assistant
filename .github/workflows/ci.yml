@@ -24,7 +24,15 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
-    
+
+    - name: Cache uv
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/uv
+        key: ${{ runner.os }}-uv-py${{ matrix.python-version }}-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-uv-py${{ matrix.python-version }}-
+
     - name: Install system dependencies
       run: |
         # Required for building Pillow from source (no pre-built wheels for Python 3.14 yet)

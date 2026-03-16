@@ -497,7 +497,7 @@ git fetch origin pull/15/head:phase-3.1-concurrent-orchestration
 git checkout phase-3.1-concurrent-orchestration
 
 # Install dependencies
-python3.10 -m venv venv
+python3.14 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 

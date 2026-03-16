@@ -64,7 +64,7 @@ This specification defines the implementation of automated daily execution of th
 **Acceptance Criteria:**
 - Activates project's virtual environment
 - Loads environment variables from `.env`
-- Uses Python 3.10+ as required
+- Uses Python 3.14+ as required
 
 #### US-4: Execution Logging
 

@@ -229,7 +229,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.14'
       - name: Validate phase specifications
         run: python scripts/validate_phase_specs.py
 ```

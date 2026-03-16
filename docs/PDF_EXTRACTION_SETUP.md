@@ -6,19 +6,19 @@ ARISP uses [marker-pdf](https://github.com/VikParuchuri/marker) to convert resea
 
 ## Requirements
 
-- **Python 3.10+** (marker-pdf uses modern type hints)
+- **Python 3.14+** (marker-pdf uses modern type hints)
 - ~2GB disk space for ML models (one-time download)
 - 8GB+ RAM recommended for processing large PDFs
 
 ## Installation
 
-### 1. Upgrade to Python 3.10+ (if needed)
+### 1. Upgrade to Python 3.14+ (if needed)
 
 ```bash
 # Check current Python version
 python --version
 
-# If < 3.10, run the migration script
+# If < 3.14, run the migration script
 ./scripts/migrate_to_python310.sh
 ```
 

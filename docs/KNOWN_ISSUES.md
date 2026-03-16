@@ -9,11 +9,11 @@
 
 ### ✅ PDF Conversion Python Version (Resolved)
 
-**Issue:** `marker-pdf` package required Python 3.10 or later due to modern type hint syntax (`Type | None`).
+**Issue:** `marker-pdf` package required Python 3.14 or later due to modern type hint syntax (`Type | None`).
 
-**Resolution:** Project upgraded to Python 3.10.19 (enforced in CI/CD).
+**Resolution:** Project upgraded to Python 3.14.19 (enforced in CI/CD).
 
-**Status:** ✅ **RESOLVED** - Python 3.10+ is now the project standard.
+**Status:** ✅ **RESOLVED** - Python 3.14+ is now the project standard.
 
 ---
 

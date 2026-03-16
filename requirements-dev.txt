@@ -1,0 +1,12 @@
+# Development dependencies with exact version pinning
+# These complement requirements.txt (do not duplicate)
+
+# Parallel test execution
+pytest-xdist==3.5.0
+
+# Security scanning
+bandit==1.7.8
+pip-audit==2.7.3
+
+# Note: gitleaks is installed via brew/binary, not pip
+# Note: pytest, black, mypy, flake8 are in requirements.txt

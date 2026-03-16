@@ -24,7 +24,7 @@ This guide covers setup, management, and troubleshooting for the ARISP daily res
 Before setting up daily automation, ensure:
 
 - [x] ARISP is installed and working (`python -m src.cli --help`)
-- [x] Python 3.10+ virtual environment exists (`venv/`)
+- [x] Python 3.14+ virtual environment exists (`venv/`)
 - [x] `.env` file configured with API keys
 - [x] macOS 10.15+ (for launchd support)
 
@@ -33,7 +33,7 @@ Before setting up daily automation, ensure:
 ```bash
 # Check Python version
 source venv/bin/activate
-python --version  # Should be 3.10+
+python --version  # Should be 3.14+
 
 # Verify CLI works
 python -m src.cli --help

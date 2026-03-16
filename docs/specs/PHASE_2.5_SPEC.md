@@ -3475,7 +3475,7 @@ Phase 2.5 multi-backend PDF extraction system was validated on 100 diverse arXiv
 
 ### Test Environment
 - **Platform:** macOS 14.6.0 (Darwin)
-- **Python:** 3.10.19
+- **Python:** 3.14.19
 - **Backends Tested:** PyMuPDF, pdfplumber, pandoc, marker-pdf
 - **Test Duration:** 1.5 hours
 

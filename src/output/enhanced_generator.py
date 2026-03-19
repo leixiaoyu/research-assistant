@@ -124,9 +124,8 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
 
         # 2. Header
         md_lines.append(f"# Research Brief: {topic.query}\n")
-        md_lines.append(
-            f"**Generated:** {datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC"
-        )
+        now = datetime.now(timezone.utc)
+        md_lines.append(f"**Generated:** {now.strftime('%Y-%m-%d %H:%M:%S UTC')}")
         md_lines.append(f"**Papers Found:** {total_papers}\n")
 
         # 3. Pipeline Summary

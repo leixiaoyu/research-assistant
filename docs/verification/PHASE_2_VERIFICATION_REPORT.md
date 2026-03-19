@@ -217,9 +217,9 @@ settings:
 
 #### PDF Processing Phase
 - ✅ PDF downloads: Successful (12.8MB + 3.0MB)
-- ⚠️ PDF conversion: Failed (marker_single requires Python 3.10+, system has 3.9.6)
+- ⚠️ PDF conversion: Failed (marker_single requires Python 3.14, system has 3.9.6)
 - ✅ Graceful fallback: Used abstracts instead
-- ℹ️ **Note:** marker-pdf will work in CI/CD (Python 3.10) and when users upgrade locally
+- ℹ️ **Note:** marker-pdf will work in CI/CD (Python 3.14) and when users upgrade locally
 
 #### LLM Extraction Phase
 - ✅ LLM extraction: 100% success rate (2/2 papers)
@@ -441,9 +441,9 @@ settings:
 
 ### 7.1 Known Issues
 
-#### marker-pdf Requires Python 3.10+
+#### marker-pdf Requires Python 3.14
 
-**Issue:** `marker-pdf` package requires Python 3.10 or later due to modern type hint syntax (`Type | None`).
+**Issue:** `marker-pdf` package requires Python 3.14 or later due to modern type hint syntax (`Type | None`).
 
 **Current System:** Local development may have Python 3.9.6
 
@@ -459,8 +459,8 @@ settings:
 - Cost per paper: $0.005 (very economical)
 
 **Solution:**
-- ✅ CI/CD pipeline uses Python 3.10 (marker-pdf works)
-- ✅ Users can upgrade to Python 3.10+ for full PDF support
+- ✅ CI/CD pipeline uses Python 3.14 (marker-pdf works)
+- ✅ Users can upgrade to Python 3.14 for full PDF support
 - ✅ Abstract-only mode is production-ready alternative
 
 **E2E Test Results (Abstract-Only Mode):**
@@ -480,8 +480,8 @@ settings:
 
 **Python 3.9 Compatibility**
 - Phase 2 works fully on Python 3.9 (abstract-only mode)
-- Python 3.10+ required for full PDF conversion
-- CI/CD enforces Python 3.10+
+- Python 3.14 required for full PDF conversion
+- CI/CD enforces Python 3.14
 
 **Google Gemini API Deprecation Warning**
 - `google.generativeai` package deprecated

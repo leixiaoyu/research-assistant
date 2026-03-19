@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, HttpUrl, ConfigDict
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class Author(BaseModel):
@@ -86,4 +86,6 @@ class SearchResult(BaseModel):
     timeframe: str
     total_found: int
     papers: List[PaperMetadata]
-    search_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    search_timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )

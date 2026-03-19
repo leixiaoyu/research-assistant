@@ -10,25 +10,20 @@ from src.utils.logging import configure_logging
 async def test_rate_limiter_abuse_detection():
     limiter = RateLimiter()
 
-    # Mock datetime.now to return a fixed time
-    fixed_now = datetime(2023, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
+    # Use current time (timezone-aware) so timestamps aren't filtered out
+    current_time = datetime.now(timezone.utc)
 
-    # Add 501 timestamps within the last minute (so they won't be filtered out)
-    for i in range(501):
-        # Timestamps from 0-50 seconds ago (all within 1 minute)
-        ts = datetime(2023, 1, 1, 12, 0, i % 30, tzinfo=timezone.utc)
-        limiter.request_times.append(ts)
+    # Add 501 timestamps (all within the last minute)
+    for _ in range(501):
+        limiter.request_times.append(current_time)
 
-    with patch("src.utils.rate_limiter.datetime") as mock_dt:
-        mock_dt.now.return_value = fixed_now
-        mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
-        with patch("src.utils.rate_limiter.logger") as mock_logger:
-            await limiter.acquire()
-            mock_logger.warning.assert_called_with(
-                "rate_limit_abuse_detected",
-                requester_id="system",
-                requests_per_minute=502,
-            )
+    with patch("src.utils.rate_limiter.logger") as mock_logger:
+        await limiter.acquire()
+        mock_logger.warning.assert_called_with(
+            "rate_limit_abuse_detected",
+            requester_id="system",
+            requests_per_minute=502,
+        )
 
 
 @pytest.mark.asyncio

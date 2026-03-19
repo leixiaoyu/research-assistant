@@ -360,7 +360,7 @@ Phase 2 implementation is **98% complete** and E2E tested successfully! The next
 - ✅ Pulled and merged latest changes from main (Phase 1.5 updates)
 - ✅ Resolved merge conflicts in 3 files (cli.py, config.py, markdown_generator.py)
 - ✅ Integrated Phase 1.5 improvements:
-  - Updated CI/CD to Python 3.10 (fixes marker-pdf compatibility)
+  - Updated CI/CD to Python 3.14 (fixes marker-pdf compatibility)
   - New PR review protocol and templates
   - Enhanced testing standards (95% coverage requirement)
   - Improved code quality checks (Black, Flake8, Mypy)

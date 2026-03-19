@@ -311,9 +311,7 @@ class TestQualityScorerRecencyScore:
 
     def test_timezone_naive_date(self, scorer):
         """Test handling of timezone-naive dates."""
-        pub_date = datetime.now(timezone.utc) - timedelta(
-            days=100
-        )  # Timezone-aware UTC datetime
+        pub_date = datetime.now(timezone.utc) - timedelta(days=100)  # Naive
         paper = self._make_paper(publication_date=pub_date)
         score = scorer._recency_score(paper)
         assert score == 1.0  # Should handle gracefully

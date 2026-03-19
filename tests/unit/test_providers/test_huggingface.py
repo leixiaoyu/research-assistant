@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from datetime import datetime, timezone, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 import aiohttp
 
 from src.services.providers.huggingface import HuggingFaceProvider

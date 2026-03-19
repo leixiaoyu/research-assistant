@@ -105,8 +105,9 @@ def synthesize_command(
                 # Create report with single result
                 from src.models.cross_synthesis import CrossTopicSynthesisReport
 
+                now = datetime.now(timezone.utc)
                 report = CrossTopicSynthesisReport(
-                    report_id=f"syn-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}",
+                    report_id=f"syn-{now.strftime('%Y%m%d-%H%M%S')}",
                     total_papers_in_registry=len(synthesis_service.get_all_entries()),
                     results=[result],
                     total_tokens_used=result.tokens_used,

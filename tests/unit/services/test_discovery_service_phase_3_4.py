@@ -494,7 +494,8 @@ class TestDiscoveryServiceQualityStats:
             service = DiscoveryService()
             service.providers[ProviderType.ARXIV] = mock_arxiv_instance
 
-            with patch("src.services.discovery_service.logger") as mock_logger:
+            # Patch logger in the discovery.metrics module (where log_quality_stats is)
+            with patch("src.services.discovery.metrics.logger") as mock_logger:
                 await service.search(topic_quality_first)
 
                 # Check that quality stats were logged
@@ -518,7 +519,8 @@ class TestDiscoveryServiceQualityStats:
             service = DiscoveryService()
             service.providers[ProviderType.ARXIV] = mock_arxiv_instance
 
-            with patch("src.services.discovery_service.logger") as mock_logger:
+            # Patch logger in the discovery.metrics module
+            with patch("src.services.discovery.metrics.logger") as mock_logger:
                 await service.search(topic_quality_first)
 
                 # Should not log quality stats for empty results

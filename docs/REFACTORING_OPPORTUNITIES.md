@@ -1,134 +1,234 @@
 # Codebase Refactoring Opportunities
 
 **Generated:** 2026-02-22
-**Last Updated:** 2026-03-11
-**Codebase Size:** ~18,500+ lines of Python code
-**Classes:** 150+ classes across 90+ source files
-**Test Coverage:** 99.25% (2181 tests)
+**Last Updated:** 2026-03-20
+**Codebase Size:** ~19,000+ lines of Python code
+**Classes:** 160+ classes across 95+ source files
+**Test Coverage:** 99.03% (2,470 tests)
 
 ---
 
 ## Executive Summary
 
-The codebase has grown significantly with the addition of Phase 2 (PDF/LLM extraction), Phase 3 (concurrent processing, synthesis), and Phase 4 (observability). Test coverage remains excellent (99.25%), and Phase 5 architectural refactoring is complete. Phase 6 cleanup has removed all deprecated modules.
+The codebase has grown significantly with the addition of Phase 2 (PDF/LLM extraction), Phase 3 (concurrent processing, synthesis), Phase 4 (observability), and Phase 5 (architectural refactoring). Test coverage remains excellent (99.03%), and multiple refactoring phases have been completed.
 
-**Priority Areas:**
-1. ~~**High Priority**: LLMService decomposition (838 lines)~~ ✅ **COMPLETED** (Phase 5.1)
-2. ~~**High Priority**: ResearchPipeline simplification (824 lines)~~ ✅ **COMPLETED** (Phase 5.2)
-3. **Medium Priority**: CLI command splitting (716 lines) - *Next: Phase 5.3*
-4. **Medium Priority**: Duplicate pattern extraction - *Planned: Phase 5.4*
-5. **Lower Priority**: Model consolidation - *Planned: Phase 5.5*
+**Completed Phases:**
+- ✅ **Phase R1**: Config model decomposition (`config.py` → 6 modules)
+- ✅ **Phase R2**: LLM Service decomposition (`error_classifier.py`, `provider_manager.py`)
+- ✅ **Phase R3**: Pipeline decomposition (`paper_processor.py`)
+- ✅ **Phase R4.1**: Cross-synthesis service decomposition (`synthesis/` package)
+- ✅ **Phase 5.1**: LLMService decomposition to `llm/` package
+- ✅ **Phase 5.2**: ResearchPipeline phase-based architecture
+
+**Remaining Priority Areas:**
+1. **High Priority**: Discovery service decomposition (831 lines) - *Phase R4.2*
+2. **High Priority**: Notification service refactor (627 lines) - *Phase R4.4*
+3. **Medium Priority**: Registry service split (622 lines) - *Phase R4.3*
+4. **Medium Priority**: CLI package split (474+ lines) - *Phase R5.1*
+5. **Medium Priority**: Output generator consolidation - *Phase R5.2*
+6. **Lower Priority**: Provider pattern improvements - *Phase R5.3*
+7. **Lower Priority**: Dependency injection adoption - *Phase R6*
 
 ---
 
-## 1. LLMService Decomposition ✅ COMPLETED (Phase 5.1)
+## Completed Refactoring
 
-**Original File:** `src/services/llm_service.py` (838 lines, 26 functions)
-**Status:** Decomposed to `src/services/llm/` package (Feb 24, 2026)
+### Phase R1: Config Model Decomposition ✅
 
-### Original State (Before Phase 5.1)
-The `LLMService` class violated Single Responsibility Principle by handling:
-- Provider abstraction (Anthropic/Google)
-- Retry logic with exponential backoff
-- Circuit breaker integration
-- Cost tracking and budget enforcement
-- Prompt building
-- Response parsing
-- Health monitoring
-- Metrics export
+**Original File:** `src/models/config.py` (570 lines, 22 classes)
+**Status:** Decomposed to `src/models/config/` package (Mar 2026)
 
-### Proposed Refactoring
+**Result:**
+```
+src/models/config/
+├── __init__.py      # Re-exports all 22 classes
+├── core.py          # ~100 lines - Core research config
+├── discovery.py     # ~100 lines - Discovery settings
+├── extraction.py    # ~100 lines - Extraction settings
+├── phase7.py        # ~100 lines - Phase 7 settings
+└── settings.py      # ~100 lines - Global settings
+```
 
+**Benefits Achieved:**
+- Each module ~100 lines (down from 570)
+- Single Responsibility per module
+- Full backward compatibility maintained
+
+---
+
+### Phase R2: LLM Service Decomposition ✅
+
+**Original File:** `src/services/llm/service.py` (1,022 lines)
+**Status:** Partially decomposed (Mar 2026)
+
+**Result:**
 ```
 src/services/llm/
-├── __init__.py           # Re-export public API
-├── base.py               # Abstract LLMProvider interface
-├── providers/
-│   ├── anthropic.py      # Claude-specific implementation
-│   └── google.py         # Gemini-specific implementation
-├── cost_tracker.py       # Cost tracking & budget enforcement
-├── prompt_builder.py     # Extraction prompt construction
-├── response_parser.py    # JSON response parsing
-└── service.py            # Orchestration (thin wrapper)
+├── service.py           # 906 lines (reduced from 1,022)
+├── error_classifier.py  # 180 lines - Error classification
+└── provider_manager.py  # 227 lines - Provider lifecycle
 ```
 
-### Benefits
-- Each module <150 lines
-- Easier to test individual components
-- Simpler provider addition (OpenAI, etc.)
-- Clearer cost tracking logic
-
-### Migration Strategy
-1. Extract `CostTracker` class (lines 778-808)
-2. Extract `PromptBuilder` class (lines 626-684)
-3. Extract `ResponseParser` class (lines 685-760)
-4. Create provider-specific classes
-5. Slim down `LLMService` to orchestrator role
+**Benefits Achieved:**
+- Error classification logic isolated and testable
+- Provider management separated with circuit breaker support
+- Clear responsibility boundaries
 
 ---
 
-## 2. ResearchPipeline Simplification ✅ COMPLETED (Phase 5.2)
+### Phase R3: Pipeline Decomposition ✅
 
-**Original File:** `src/orchestration/research_pipeline.py` (824 lines, 14 functions)
-**Status:** Decomposed to phase-based architecture (Feb 25, 2026)
+**Original File:** `src/orchestration/concurrent_pipeline.py` (745 lines)
+**Status:** Decomposed (Mar 2026)
 
-### Original State (Before Phase 5.2)
-The `ResearchPipeline` class managed:
-- Service initialization (12+ services)
-- Topic processing workflow
-- Phase 2 extraction integration
-- Phase 3.6 synthesis orchestration
-- Phase 3.7 cross-topic synthesis
-- Error handling and aggregation
-
-### Proposed Refactoring
-
+**Result:**
 ```
 src/orchestration/
-├── __init__.py
-├── pipeline.py           # Main orchestrator (<200 lines)
-├── phases/
-│   ├── discovery.py      # Phase 1: Paper discovery
-│   ├── extraction.py     # Phase 2: PDF/LLM extraction
-│   ├── synthesis.py      # Phase 3.6: Per-topic synthesis
-│   └── cross_synthesis.py # Phase 3.7: Cross-topic synthesis
-├── context.py            # Shared pipeline context/state
-└── result.py             # PipelineResult class
+├── concurrent_pipeline.py  # 632 lines (reduced from 745)
+└── paper_processor.py      # 248 lines - Single paper processing
 ```
 
-### Benefits
-- Clear phase separation
-- Independent phase testing
-- Easier to add new phases
-- Simplified main orchestrator
-
-### Migration Strategy
-1. Extract `PipelineResult` to separate file
-2. Create `PipelineContext` for shared state
-3. Extract each phase to dedicated module
-4. Slim down `ResearchPipeline` to coordinator
+**Benefits Achieved:**
+- Paper processing logic isolated
+- Cache checking, PDF extraction, LLM extraction separated
+- Easier to test individual processing steps
 
 ---
 
-## 3. CLI Command Splitting (MEDIUM PRIORITY)
+### Phase R4.1: Cross-Synthesis Service Decomposition ✅
 
-**File:** `src/cli.py` (716 lines)
+**Original File:** `src/services/cross_synthesis_service.py` (731 lines)
+**Status:** Fully decomposed to `synthesis/` package (Mar 2026)
 
-### Current State
-Single file contains all CLI commands:
-- `run` command (full pipeline)
-- `validate` command
-- `catalog` command
-- `schedule` command
-- `health` command
-- `synthesize` command
-- `_send_notifications` helper
+**Result:**
+```
+src/services/synthesis/
+├── __init__.py            # 39 lines - Package exports
+├── cross_synthesis.py     # 367 lines - Main orchestration
+├── paper_selector.py      # 237 lines - Quality-weighted selection
+├── answer_synthesizer.py  # 235 lines - LLM synthesis
+├── state_manager.py       # 160 lines - Config & state
+└── prompt_builder.py      # 110 lines - Template prompts
 
-### Proposed Refactoring
+src/services/cross_synthesis_service.py  # 35 lines - Backward compat wrapper
+```
 
+**Benefits Achieved:**
+- 731 lines → 35 line wrapper + 5 focused modules
+- Each module <250 lines with single responsibility
+- 100% test coverage on all new modules
+- Full backward compatibility via re-exports
+
+---
+
+## Remaining Refactoring Opportunities
+
+### Phase R4.2: Discovery Service Decomposition (HIGH PRIORITY)
+
+**File:** `src/services/discovery_service.py` (831 lines)
+
+**Current Responsibilities:**
+- Semantic Scholar API integration
+- arXiv API integration
+- Query building with timeframes
+- Rate limiting and retry logic
+- Result normalization
+- Provider health tracking
+
+**Proposed Decomposition:**
+```
+src/services/discovery/
+├── __init__.py           # Re-export public API
+├── discovery_service.py  # ~200 lines - Orchestrator
+├── semantic_scholar.py   # ~200 lines - SS provider
+├── arxiv_provider.py     # ~200 lines - arXiv provider
+├── query_builder.py      # ~100 lines - Query construction
+├── result_normalizer.py  # ~100 lines - Result normalization
+└── rate_limiter.py       # ~100 lines - Shared rate limiting
+```
+
+**Benefits:**
+- Clear provider separation
+- Independent provider testing
+- Easy to add new discovery sources (OpenAlex, etc.)
+- Reusable rate limiting
+
+---
+
+### Phase R4.3: Registry Service Split (MEDIUM PRIORITY)
+
+**File:** `src/services/registry_service.py` (622 lines)
+
+**Current Responsibilities:**
+- Paper registration
+- Metadata snapshots
+- Deduplication logic
+- State persistence (JSON I/O)
+- Query operations
+
+**Proposed Decomposition:**
+```
+src/services/registry/
+├── __init__.py           # Re-export public API
+├── registry_service.py   # ~200 lines - Orchestrator
+├── paper_registry.py     # ~150 lines - Core registration
+├── persistence.py        # ~150 lines - JSON file I/O
+└── queries.py            # ~100 lines - Search/filter operations
+```
+
+**Benefits:**
+- Separated persistence logic
+- Independent query testing
+- Cleaner deduplication implementation
+
+---
+
+### Phase R4.4: Notification Service Refactor (HIGH PRIORITY)
+
+**File:** `src/services/notification_service.py` (627 lines)
+
+**Current Responsibilities:**
+- Email notifications
+- Slack notifications
+- Discord notifications
+- Template rendering
+- Message formatting
+- Delivery tracking
+
+**Proposed Decomposition:**
+```
+src/services/notifications/
+├── __init__.py           # Re-export public API
+├── service.py            # ~150 lines - Orchestrator
+├── providers/
+│   ├── email.py          # ~100 lines - Email provider
+│   ├── slack.py          # ~100 lines - Slack provider
+│   └── discord.py        # ~100 lines - Discord provider
+├── templates.py          # ~100 lines - Template rendering
+└── tracking.py           # ~80 lines - Delivery tracking
+```
+
+**Benefits:**
+- Provider pattern consistency
+- Easy to add new notification channels
+- Independent template testing
+- Separated delivery tracking
+
+---
+
+### Phase R5.1: CLI Package Split (MEDIUM PRIORITY)
+
+**File:** `src/orchestration/pipeline.py` (474 lines) + CLI commands scattered
+
+**Current State:**
+- Main pipeline orchestration in single file
+- CLI commands mixed with business logic
+- Validation logic embedded in commands
+
+**Proposed Decomposition:**
 ```
 src/cli/
-├── __init__.py           # Main app, combines command groups
+├── __init__.py           # Main Typer app
 ├── run.py                # run command
 ├── schedule.py           # schedule command
 ├── catalog.py            # catalog commands
@@ -137,7 +237,7 @@ src/cli/
 └── utils.py              # Shared CLI utilities
 ```
 
-### Benefits
+**Benefits:**
 - Each command module <150 lines
 - Easier command-specific testing
 - Clearer command organization
@@ -145,84 +245,126 @@ src/cli/
 
 ---
 
-## 4. Duplicate Pattern Extraction (MEDIUM PRIORITY)
+### Phase R5.2: Output Generator Consolidation (MEDIUM PRIORITY)
 
-### 4.1 Author Normalization Pattern
-**Already addressed** in recent PR #38 with `src/utils/author_utils.py`.
+**Current State:**
+- `src/output/cross_synthesis_generator.py` (534 lines)
+- Similar markdown generation patterns across generators
+- YAML frontmatter duplication
 
-### 4.2 Retry Logic Duplication
-Multiple services implement similar retry patterns:
-- `LLMService._extract_with_provider` (lines 399-554)
-- `PDFService.download_pdf` (retry decorator)
-- `DiscoveryService._search_with_provider`
-
-**Recommendation:** Ensure all services use unified `RetryHandler` from `src/utils/retry.py`
-
-### 4.3 Cost Calculation Duplication
-Cost calculation appears in multiple places:
-- `LLMService._calculate_cost_anthropic` (lines 761-770)
-- `LLMService._calculate_cost_google` (lines 771-777)
-- `CostReportJob._calculate_cumulative_cost`
-
-**Recommendation:** Extract `CostCalculator` utility class
-
-### 4.4 Markdown Generation Patterns
-Similar YAML frontmatter generation in:
-- `MarkdownGenerator.generate`
-- `EnhancedMarkdownGenerator.generate_enhanced`
-- `SynthesisEngine._format_kb_entry_as_markdown`
-- `CrossSynthesisGenerator._build_synthesis_section`
-
-**Recommendation:** Create `MarkdownBuilder` utility with common patterns
-
----
-
-## 5. Model Consolidation (LOWER PRIORITY)
-
-### Current State
-16 model files with some overlap:
-- `models/llm.py` (378 lines) - LLM configuration
-- `models/config.py` (305 lines) - Research configuration
-- `models/cross_synthesis.py` (350 lines) - Synthesis models
-- `models/synthesis.py` (201 lines) - Knowledge base models
-
-### Recommendation
-Consider logical grouping:
-
+**Proposed Consolidation:**
 ```
-src/models/
+src/output/
 ├── __init__.py
-├── core/                 # Core domain models
-│   ├── paper.py
-│   ├── author.py
-│   └── topic.py
-├── config/               # All configuration models
-│   ├── research.py
-│   ├── llm.py
-│   └── pipeline.py
-├── processing/           # Processing-related models
-│   ├── extraction.py
-│   ├── synthesis.py
-│   └── registry.py
-└── observability/        # Metrics/health models
-    ├── notification.py
-    └── metrics.py
+├── base.py               # Abstract generator interface
+├── markdown_builder.py   # Shared markdown utilities
+├── frontmatter.py        # YAML frontmatter helper
+├── generators/
+│   ├── research.py       # Research output
+│   ├── synthesis.py      # Synthesis output
+│   └── cross_topic.py    # Cross-topic output
+└── formatters/
+    ├── paper.py          # Paper formatting
+    └── summary.py        # Summary formatting
 ```
+
+**Benefits:**
+- DRY markdown generation
+- Consistent output formatting
+- Easier template customization
 
 ---
 
-## 6. Service Layer Improvements
+### Phase R5.3: Provider Pattern Improvements (LOWER PRIORITY)
 
-### 6.1 Service Interface Abstraction
+**Current State:**
+Multiple services implement provider patterns differently:
+- `LLMService` - Anthropic/Google providers
+- `DiscoveryService` - Semantic Scholar/arXiv providers
+- `NotificationService` - Email/Slack/Discord providers
 
-Several services could benefit from abstract base classes:
-
+**Proposed Unification:**
 ```python
-# src/services/base.py
+# src/services/base/provider.py
 from abc import ABC, abstractmethod
+from typing import Generic, TypeVar
+
+T = TypeVar('T')
+
+class Provider(ABC, Generic[T]):
+    """Base provider interface."""
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Provider identifier."""
+        pass
+
+    @abstractmethod
+    async def is_healthy(self) -> bool:
+        """Check provider health."""
+        pass
+
+    @abstractmethod
+    async def execute(self, request: T) -> Any:
+        """Execute provider-specific operation."""
+        pass
+```
+
+**Benefits:**
+- Consistent provider implementation
+- Unified health checking
+- Standardized error handling
+- Easier provider addition
+
+---
+
+### Phase R6: Dependency Injection Adoption (LOWER PRIORITY)
+
+**Current Pattern:**
+Many services instantiate dependencies directly:
+```python
+# Current pattern (in extraction_service.py)
+self._pdf_service = PDFService(config)
+self._llm_service = LLMService(config)
+```
+
+**Recommended Pattern:**
+```python
+# Dependency injection pattern
+class ExtractionService:
+    def __init__(
+        self,
+        pdf_service: PDFService,
+        llm_service: LLMService,
+        config: ExtractionConfig,
+    ):
+        self._pdf_service = pdf_service
+        self._llm_service = llm_service
+```
+
+**Benefits:**
+- Easier testing with mock dependencies
+- Clearer service boundaries
+- Configuration flexibility
+- Simplified integration testing
+
+---
+
+### Phase R7: Service Base Class (LOWER PRIORITY)
+
+**Proposed Base Class:**
+```python
+# src/services/base/service.py
+from abc import ABC, abstractmethod
+import structlog
 
 class AsyncService(ABC):
     """Base for async services with lifecycle management."""
+
+    def __init__(self):
+        self._logger = structlog.get_logger(self.__class__.__name__)
+        self._initialized = False
 
     @abstractmethod
     async def initialize(self) -> None:
@@ -233,35 +375,44 @@ class AsyncService(ABC):
     async def shutdown(self) -> None:
         """Clean up service resources."""
         pass
+
+    @property
+    def is_initialized(self) -> bool:
+        return self._initialized
 ```
 
-Services to refactor:
+**Services to Refactor:**
 - `DiscoveryService`
 - `ExtractionService`
 - `SynthesisEngine`
 - `CrossTopicSynthesisService`
-
-### 6.2 Registry Service Complexity
-
-**File:** `src/services/registry_service.py` (602 lines)
-
-The `RegistryService` handles:
-- Paper registration
-- Metadata snapshots
-- Deduplication
-- State persistence
-- Query operations
-
-**Recommendation:** Split into:
-- `PaperRegistry` - Core registration logic
-- `RegistryPersistence` - JSON file I/O
-- `RegistryQueries` - Search/filter operations
+- `RegistryService`
+- `NotificationService`
 
 ---
 
-## 7. Testing Improvements
+## Implementation Priority Matrix
 
-### Current Coverage: 99.25% (2181 tests)
+| Refactoring | Impact | Effort | Priority | Status |
+|-------------|--------|--------|----------|--------|
+| Config model decomposition | High | Medium | P1 | ✅ Done |
+| LLM Service decomposition | High | Medium | P1 | ✅ Done |
+| Pipeline decomposition | High | Medium | P1 | ✅ Done |
+| Cross-synthesis decomposition | High | Medium | P1 | ✅ Done |
+| Discovery service decomposition | High | Medium | P1 | 🔜 Next |
+| Notification service refactor | High | Medium | P1 | Planned |
+| Registry service split | Medium | Low | P2 | Planned |
+| CLI package split | Medium | Low | P2 | Planned |
+| Output generator consolidation | Medium | Medium | P2 | Planned |
+| Provider pattern improvements | Medium | Medium | P3 | Planned |
+| Service base class | Medium | Medium | P3 | Planned |
+| DI pattern adoption | Medium | High | P3 | Planned |
+
+---
+
+## Testing Improvements
+
+### Current Coverage: 99.03% (2,470 tests)
 
 ### Recommendations
 
@@ -279,55 +430,7 @@ The `RegistryService` handles:
 
 ---
 
-## 8. Dependency Injection Pattern
-
-### Current State
-Many services instantiate dependencies directly:
-
-```python
-# Current pattern (in extraction_service.py)
-self._pdf_service = PDFService(config)
-self._llm_service = LLMService(config)
-```
-
-### Recommended Pattern
-
-```python
-# Dependency injection pattern
-class ExtractionService:
-    def __init__(
-        self,
-        pdf_service: PDFService,
-        llm_service: LLMService,
-        config: ExtractionConfig,
-    ):
-        self._pdf_service = pdf_service
-        self._llm_service = llm_service
-```
-
-### Benefits
-- Easier testing with mock dependencies
-- Clearer service boundaries
-- Configuration flexibility
-
----
-
-## 9. Implementation Priority Matrix
-
-| Refactoring | Impact | Effort | Priority | Phase |
-|-------------|--------|--------|----------|-------|
-| LLMService decomposition | High | Medium | P1 | 1 |
-| ResearchPipeline phases | High | Medium | P1 | 1 |
-| CLI command splitting | Medium | Low | P2 | 2 |
-| Cost calculator extraction | Medium | Low | P2 | 2 |
-| Markdown builder utility | Medium | Low | P2 | 2 |
-| Model consolidation | Low | High | P3 | 3 |
-| Service base class | Medium | Medium | P3 | 3 |
-| DI pattern adoption | Medium | High | P3 | 3 |
-
----
-
-## 10. Refactoring Guidelines
+## Refactoring Guidelines
 
 ### Before Starting
 1. Ensure all tests pass (`./verify.sh`)
@@ -348,21 +451,23 @@ class ExtractionService:
 
 ---
 
-## Appendix: File Size Reference
+## Appendix: Current File Size Reference
 
-| File | Lines | Functions | Classes |
-|------|-------|-----------|---------|
-| llm_service.py | 838 | 26 | 2 |
-| research_pipeline.py | 824 | 14 | 2 |
-| cross_synthesis_service.py | 731 | 17 | 1 |
-| cli.py | 716 | 8 | 0 |
-| concurrent_pipeline.py | 713 | 16 | 1 |
-| registry_service.py | 602 | 21 | 1 |
-| discovery_service.py | 551 | 14 | 1 |
-| synthesis_engine.py | 543 | 15 | 1 |
-| cross_synthesis_generator.py | 534 | 14 | 1 |
-| extraction_service.py | 504 | 13 | 1 |
+| File | Lines | Status |
+|------|-------|--------|
+| llm/service.py | 906 | Partially decomposed (R2) |
+| discovery_service.py | 831 | 🔜 Next (R4.2) |
+| concurrent_pipeline.py | 632 | ✅ Decomposed (R3) |
+| notification_service.py | 627 | Planned (R4.4) |
+| registry_service.py | 622 | Planned (R4.3) |
+| cross_synthesis_generator.py | 534 | Planned (R5.2) |
+| extraction_service.py | 504 | Monitor |
+| orchestration/pipeline.py | 474 | Planned (R5.1) |
+| synthesis/cross_synthesis.py | 367 | ✅ New (R4.1) |
+| paper_processor.py | 248 | ✅ New (R3) |
+| cross_synthesis_service.py | 35 | ✅ Wrapper (R4.1) |
 
 ---
 
-*This document should be reviewed and updated quarterly as the codebase evolves.*
+*This document should be reviewed and updated after each refactoring phase.*
+*Last verified: 2026-03-20 with PR #68 (Phases R1-R4.1)*

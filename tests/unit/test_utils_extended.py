@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch
-from datetime import datetime
+from datetime import datetime, timezone
 from src.utils.rate_limiter import RateLimiter
 from src.utils.security import PathSanitizer, SecurityError
 from src.utils.logging import configure_logging
@@ -10,21 +10,20 @@ from src.utils.logging import configure_logging
 async def test_rate_limiter_abuse_detection():
     limiter = RateLimiter()
 
-    # We patch datetime in the module where RateLimiter is defined
-    with patch("src.utils.rate_limiter.datetime") as mock_dt:
-        mock_dt.utcnow.return_value = datetime(2023, 1, 1, 12, 0, 0)
+    # Use current time (timezone-aware) so timestamps aren't filtered out
+    current_time = datetime.now(timezone.utc)
 
-        # Add 501 timestamps
-        for _ in range(501):
-            limiter.request_times.append(datetime(2023, 1, 1, 12, 0, 0))
+    # Add 501 timestamps (all within the last minute)
+    for _ in range(501):
+        limiter.request_times.append(current_time)
 
-        with patch("src.utils.rate_limiter.logger") as mock_logger:
-            await limiter.acquire()
-            mock_logger.warning.assert_called_with(
-                "rate_limit_abuse_detected",
-                requester_id="system",
-                requests_per_minute=502,
-            )
+    with patch("src.utils.rate_limiter.logger") as mock_logger:
+        await limiter.acquire()
+        mock_logger.warning.assert_called_with(
+            "rate_limit_abuse_detected",
+            requester_id="system",
+            requests_per_minute=502,
+        )
 
 
 @pytest.mark.asyncio

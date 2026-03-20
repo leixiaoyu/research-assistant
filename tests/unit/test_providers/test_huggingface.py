@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 import aiohttp
 
 from src.services.providers.huggingface import HuggingFaceProvider
@@ -37,7 +37,7 @@ def topic_hf():
 def mock_hf_response():
     """Create a mock HuggingFace API response with recent dates."""
     # Use recent timestamps to pass timeframe filtering
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     recent_time_1 = (now - timedelta(hours=12)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     recent_time_2 = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
@@ -316,7 +316,7 @@ class TestFilterByTimeframe:
 
     def test_filter_recent_hours(self, provider):
         """Test filtering by recent hours."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         papers = [
             PaperMetadata(
                 paper_id="1",
@@ -338,7 +338,7 @@ class TestFilterByTimeframe:
 
     def test_filter_recent_days(self, provider):
         """Test filtering by recent days."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         papers = [
             PaperMetadata(
                 paper_id="1",
@@ -826,7 +826,7 @@ class TestTimeframeFilterEdgeCases:
                 abstract="Abstract",
                 authors=[Author(name="Author")],
                 url="https://example.com/1",
-                publication_date=datetime.utcnow(),
+                publication_date=datetime.now(timezone.utc),
             ),
         ]
 
@@ -856,7 +856,7 @@ class TestTimeframeFilterEdgeCases:
                 abstract="Abstract",
                 authors=[Author(name="Author")],
                 url="https://example.com/1",
-                publication_date=datetime.utcnow(),
+                publication_date=datetime.now(timezone.utc),
             ),
         ]
 

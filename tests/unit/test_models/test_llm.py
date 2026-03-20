@@ -7,7 +7,7 @@ Tests for:
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pydantic import ValidationError
 
 from src.models.llm import LLMConfig, CostLimits, UsageStats
@@ -212,7 +212,7 @@ def test_usage_stats_defaults():
 
 def test_usage_stats_with_values():
     """Test UsageStats with custom values"""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     stats = UsageStats(
         total_tokens=50000, total_cost_usd=2.5, papers_processed=10, last_reset=now
     )
@@ -241,7 +241,7 @@ def test_usage_stats_reset_daily():
 def test_usage_stats_should_reset_daily():
     """Test should_reset_daily()"""
     # Same day - should not reset
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     stats = UsageStats(last_reset=now)
     assert not stats.should_reset_daily()
 

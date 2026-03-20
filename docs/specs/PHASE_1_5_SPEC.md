@@ -800,7 +800,7 @@ async def test_provider_default_to_arxiv():
    - ✅ `SemanticScholarProvider` refactored to provider pattern
 
 2. **Quality & Engineering Rigor**
-   - ✅ **Python 3.10.19 Upgrade**: Full compatibility and environment enforcement.
+   - ✅ **Python 3.14 Upgrade**: Full compatibility and environment enforcement.
    - ✅ **100% Core Coverage**: `arxiv.py`, `semantic_scholar.py`, `discovery_service.py` at 100%.
    - ✅ **Strict Tooling**: Integrated **Flake8**, **Black**, and **Mypy** into CI.
    - ✅ **Golden Path**: Added `verify.sh` for local verification before every push.
@@ -813,7 +813,7 @@ async def test_provider_default_to_arxiv():
 ### What Phase 1.5 Delivered
 
 ✅ **Stable Foundation:**
-- Python 3.10+ modern syntax and performance.
+- Python 3.14 modern syntax and performance.
 - Zero known linting or type errors.
 - Robust error handling for ArXiv API (including 301/400 handling).
 

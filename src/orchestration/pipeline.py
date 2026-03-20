@@ -100,8 +100,8 @@ class ResearchPipeline:
                 topics_count=len(self._context.config.research_topics),
             )
 
-            # Phase 1: Discovery
-            discovery_phase = DiscoveryPhase(self._context)
+            # Phase 1: Discovery (with Phase 7.2 multi-source if configured)
+            discovery_phase = self._create_discovery_phase()
             discovery_result = await discovery_phase.run()
             result.topics_processed += discovery_result.topics_processed
             result.topics_failed += discovery_result.topics_failed
@@ -313,6 +313,51 @@ class ResearchPipeline:
             context.cross_synthesis_service.llm_service = llm_service
 
         logger.info("phase2_services_initialized")
+
+    def _create_discovery_phase(self) -> DiscoveryPhase:
+        """Create discovery phase with Phase 7.2 configuration if available.
+
+        Returns:
+            DiscoveryPhase configured with multi-source settings if present
+        """
+        assert self._context is not None
+        assert self._context.config is not None
+
+        settings = self._context.config.settings
+
+        # Check for Phase 7.2 configuration
+        query_expansion = settings.query_expansion
+        citation_config = settings.citation_exploration
+        aggregation_config = settings.aggregation
+
+        # Enable multi-source if any Phase 7.2 feature is configured and enabled
+        multi_source_enabled = False
+        if query_expansion and query_expansion.enabled:
+            multi_source_enabled = True
+        if citation_config and citation_config.enabled:
+            multi_source_enabled = True
+
+        if multi_source_enabled:
+            logger.info(
+                "phase72_discovery_enabled",
+                query_expansion=query_expansion.enabled if query_expansion else False,
+                citation_exploration=(
+                    citation_config.enabled if citation_config else False
+                ),
+                aggregation_max_papers=(
+                    aggregation_config.max_papers_per_topic
+                    if aggregation_config
+                    else None
+                ),
+            )
+
+        return DiscoveryPhase(
+            context=self._context,
+            multi_source_enabled=multi_source_enabled,
+            query_expansion_config=query_expansion,
+            citation_config=citation_config,
+            aggregation_config=aggregation_config,
+        )
 
     # Backward compatibility properties
     @property

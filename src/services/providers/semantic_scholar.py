@@ -1,7 +1,7 @@
 import aiohttp
 import asyncio
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import structlog
 from tenacity import (
     retry,
@@ -152,7 +152,7 @@ class SemanticScholarProvider(DiscoveryProvider):
             elif tf.value.endswith("d"):
                 delta_hours = int(tf.value[:-1]) * 24
 
-            cutoff = datetime.utcnow() - timedelta(hours=delta_hours)
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=delta_hours)
             params["publicationDateOrYear"] = f"{cutoff.strftime('%Y-%m-%d')}:"
 
         elif isinstance(tf, TimeframeSinceYear):

@@ -9,7 +9,7 @@ This module defines the data structures for:
 
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Literal, Optional, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class RetryConfig(BaseModel):
@@ -287,7 +287,8 @@ class UsageStats(BaseModel):
     total_cost_usd: float = Field(default=0.0, ge=0.0, description="Total cost in USD")
     papers_processed: int = Field(default=0, ge=0, description="Total papers processed")
     last_reset: datetime = Field(
-        default_factory=datetime.utcnow, description="Last time daily stats were reset"
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Last time daily stats were reset",
     )
 
     def reset_daily_stats(self) -> None:
@@ -295,11 +296,11 @@ class UsageStats(BaseModel):
         self.total_tokens = 0
         self.total_cost_usd = 0.0
         self.papers_processed = 0
-        self.last_reset = datetime.utcnow()
+        self.last_reset = datetime.now(timezone.utc)
 
     def should_reset_daily(self) -> bool:
         """Check if daily stats should be reset (new day)"""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         return now.date() > self.last_reset.date()
 
     model_config = ConfigDict(

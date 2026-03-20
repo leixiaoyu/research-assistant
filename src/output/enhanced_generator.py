@@ -9,7 +9,7 @@ This generator extends the base markdown generator to include:
 """
 
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import yaml
 import json
 
@@ -106,7 +106,7 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
         # 1. Enhanced Frontmatter
         frontmatter = {
             "topic": topic.query,
-            "date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             "papers_processed": total_papers,
             "papers_with_pdfs": papers_with_pdf,
             "papers_with_extractions": papers_with_extraction,
@@ -124,9 +124,8 @@ class EnhancedMarkdownGenerator(MarkdownGenerator):
 
         # 2. Header
         md_lines.append(f"# Research Brief: {topic.query}\n")
-        md_lines.append(
-            f"**Generated:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
-        )
+        now = datetime.now(timezone.utc)
+        md_lines.append(f"**Generated:** {now.strftime('%Y-%m-%d %H:%M:%S UTC')}")
         md_lines.append(f"**Papers Found:** {total_papers}\n")
 
         # 3. Pipeline Summary

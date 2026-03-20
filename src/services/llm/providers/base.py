@@ -10,7 +10,7 @@ This module defines:
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Optional, Literal
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 @dataclass
@@ -70,7 +70,7 @@ class ProviderHealth:
         self.total_requests += 1
         self.consecutive_successes += 1
         self.consecutive_failures = 0
-        self.last_success = datetime.utcnow()
+        self.last_success = datetime.now(timezone.utc)
         if self.status == "degraded":
             self.status = "healthy"
 
@@ -80,7 +80,7 @@ class ProviderHealth:
         self.total_failures += 1
         self.consecutive_failures += 1
         self.consecutive_successes = 0
-        self.last_failure = datetime.utcnow()
+        self.last_failure = datetime.now(timezone.utc)
         self.failure_reason = reason
         if self.consecutive_failures >= 3:
             self.status = "degraded"

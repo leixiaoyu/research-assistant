@@ -25,7 +25,7 @@ The Automated Research Ingestion & Synthesis Pipeline (ARISP) presents a solid f
 - Topic-level customization
 
 ### 4. Appropriate Tech Stack ✅
-- Python 3.10+ for modern language features
+- Python 3.14 for modern language features
 - marker-pdf for code-preserving conversion
 - LLM with 1M+ context for comprehensive extraction
 

@@ -15,7 +15,7 @@ Usage:
 """
 
 from typing import Any, Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import structlog
 
 from src.models.notification import (
@@ -599,7 +599,7 @@ class NotificationService:
         """
         # Build base summary
         summary_data = {
-            "date": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
             "topics_processed": result.get("topics_processed", 0),
             "topics_failed": result.get("topics_failed", 0),
             "papers_discovered": result.get("papers_discovered", 0),

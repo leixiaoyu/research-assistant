@@ -24,7 +24,7 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
-    
+
     - name: Install system dependencies
       run: |
         # Required for building Pillow from source (no pre-built wheels for Python 3.14 yet)

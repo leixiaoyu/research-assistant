@@ -11,7 +11,7 @@ verification of the Phase 3.5/3.6/3.8 integration.
 
 import pytest
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 from typing import List, Optional, Any, Dict
 
@@ -151,7 +151,7 @@ def mock_extraction_results(sample_papers) -> List[ExtractedPaper]:
             ],
             tokens_used=500 + i * 100,
             cost_usd=0.01 + i * 0.005,
-            extraction_timestamp=datetime.utcnow(),
+            extraction_timestamp=datetime.now(timezone.utc),
         )
         results.append(
             ExtractedPaper(

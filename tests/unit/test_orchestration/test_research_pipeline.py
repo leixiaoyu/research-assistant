@@ -184,6 +184,109 @@ settings:
             Path(f.name).unlink()
 
 
+class TestResearchPipelinePhase72:
+    """Tests for Phase 7.2 multi-source discovery integration."""
+
+    def test_create_discovery_phase_without_phase72_config(self):
+        """Should create DiscoveryPhase with multi_source disabled."""
+        from src.orchestration.phases import DiscoveryPhase
+
+        pipeline = ResearchPipeline()
+
+        # Create mock context with Phase 7.2 disabled
+        mock_context = MagicMock()
+        mock_context.config.settings.query_expansion = None
+        mock_context.config.settings.citation_exploration = None
+        mock_context.config.settings.aggregation = None
+
+        pipeline._context = mock_context
+
+        phase = pipeline._create_discovery_phase()
+
+        assert isinstance(phase, DiscoveryPhase)
+        assert phase.multi_source_enabled is False
+        assert phase.query_expansion_config is None
+        assert phase.citation_config is None
+        assert phase.aggregation_config is None
+
+    def test_create_discovery_phase_with_query_expansion_enabled(self):
+        """Should enable multi_source when query_expansion is configured."""
+        from src.orchestration.phases import DiscoveryPhase
+        from src.models.config import QueryExpansionConfig
+
+        pipeline = ResearchPipeline()
+
+        # Create mock context with Phase 7.2 query expansion enabled
+        mock_context = MagicMock()
+        query_expansion = QueryExpansionConfig(enabled=True, max_variants=3)
+        mock_context.config.settings.query_expansion = query_expansion
+        mock_context.config.settings.citation_exploration = None
+        mock_context.config.settings.aggregation = None
+
+        pipeline._context = mock_context
+
+        phase = pipeline._create_discovery_phase()
+
+        assert isinstance(phase, DiscoveryPhase)
+        assert phase.multi_source_enabled is True
+        assert phase.query_expansion_config == query_expansion
+
+    def test_create_discovery_phase_with_citation_exploration_enabled(self):
+        """Should enable multi_source when citation_exploration is configured."""
+        from src.orchestration.phases import DiscoveryPhase
+        from src.models.config import CitationExplorationConfig
+
+        pipeline = ResearchPipeline()
+
+        # Create mock context with Phase 7.2 citation exploration enabled
+        mock_context = MagicMock()
+        citation_config = CitationExplorationConfig(enabled=True, forward=True)
+        mock_context.config.settings.query_expansion = None
+        mock_context.config.settings.citation_exploration = citation_config
+        mock_context.config.settings.aggregation = None
+
+        pipeline._context = mock_context
+
+        phase = pipeline._create_discovery_phase()
+
+        assert isinstance(phase, DiscoveryPhase)
+        assert phase.multi_source_enabled is True
+        assert phase.citation_config == citation_config
+
+    def test_create_discovery_phase_with_all_phase72_configs(self):
+        """Should pass all Phase 7.2 configs to DiscoveryPhase."""
+        from src.orchestration.phases import DiscoveryPhase
+        from src.models.config import (
+            QueryExpansionConfig,
+            CitationExplorationConfig,
+            AggregationConfig,
+        )
+
+        pipeline = ResearchPipeline()
+
+        # Create mock context with all Phase 7.2 features enabled
+        mock_context = MagicMock()
+        query_expansion = QueryExpansionConfig(enabled=True, max_variants=5)
+        citation_config = CitationExplorationConfig(
+            enabled=True, forward=True, backward=True
+        )
+        aggregation_config = AggregationConfig(max_papers_per_topic=100)
+
+        mock_context.config.settings.query_expansion = query_expansion
+        mock_context.config.settings.citation_exploration = citation_config
+        mock_context.config.settings.aggregation = aggregation_config
+
+        pipeline._context = mock_context
+
+        phase = pipeline._create_discovery_phase()
+
+        assert isinstance(phase, DiscoveryPhase)
+        assert phase.multi_source_enabled is True
+        assert phase.query_expansion_config == query_expansion
+        assert phase.citation_config == citation_config
+        assert phase.aggregation_config == aggregation_config
+
+
 class TestResearchPipelineProcessTopic:
     """Tests for _process_topic method."""
 
@@ -303,6 +406,10 @@ settings:
                                 concurrency=None,
                                 discovery_filter_settings=mock_filter,
                                 incremental_discovery_settings=mock_incr,
+                                # Phase 7.2: Disabled for this unit test
+                                query_expansion=None,
+                                citation_exploration=None,
+                                aggregation=None,
                             ),
                         )
 

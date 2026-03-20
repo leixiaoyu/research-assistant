@@ -1,5 +1,5 @@
 import pytest
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pydantic import ValidationError
 from src.models.config import (
     ResearchTopic,
@@ -133,7 +133,7 @@ def test_catalog_has_paper():
         paper_id="p1",
         doi="10.1234/test",
         title="Test Paper",
-        processed_at=datetime.utcnow(),
+        processed_at=datetime.now(timezone.utc),
         run_id="run1",
     )
     topic.processed_papers.append(paper)

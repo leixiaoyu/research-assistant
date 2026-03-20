@@ -4,7 +4,7 @@ Phase 5.1: Tests for cost tracking and budget enforcement.
 """
 
 import pytest
-from datetime import date
+from datetime import date, datetime, timezone
 from unittest.mock import patch
 
 from src.services.llm.cost_tracker import CostTracker, ProviderUsage
@@ -207,8 +207,6 @@ class TestCostTrackerDailyReset:
 
     def test_check_daily_reset_different_day(self) -> None:
         """Test reset on different day."""
-        from datetime import datetime
-
         limits = CostLimits(max_daily_spend_usd=100.0, max_total_spend_usd=1000.0)
         tracker = CostTracker(limits=limits)
 
@@ -219,7 +217,7 @@ class TestCostTrackerDailyReset:
             tracker._check_daily_reset()
 
         # Reset should have updated last_reset to current UTC date
-        assert tracker._last_reset_date == datetime.utcnow().date()
+        assert tracker._last_reset_date == datetime.now(timezone.utc).date()
 
     def test_reset_daily_stats(self) -> None:
         """Test _reset_daily_stats updates timestamp."""

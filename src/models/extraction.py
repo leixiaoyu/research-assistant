@@ -9,7 +9,7 @@ This module defines the data structures for:
 
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Any, Optional, Literal
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.models.paper import PaperMetadata
 
@@ -107,7 +107,8 @@ class PaperExtraction(BaseModel):
     )
     cost_usd: float = Field(default=0.0, ge=0.0, description="Total cost in USD")
     extraction_timestamp: datetime = Field(
-        default_factory=datetime.utcnow, description="When extraction was performed"
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="When extraction was performed",
     )
 
     model_config = ConfigDict(

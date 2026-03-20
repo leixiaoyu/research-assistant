@@ -219,6 +219,49 @@ settings:
     ttl_pdf_days: 7
     ttl_extraction_days: 30
 
+  # =========================================================================
+  # Phase 7.1: Incremental Discovery (NEW)
+  # =========================================================================
+  # Only fetch papers published AFTER the last successful run
+  incremental_discovery_settings:
+    enabled: true                 # Enable incremental mode
+    overlap_buffer_hours: 2       # 2-hour buffer for edge cases
+    reset_on_query_change: true   # Reset if query text changes
+
+  # Discovery-time filtering to skip already-processed papers
+  discovery_filter_settings:
+    enabled: true                 # Enable quality filtering
+    register_at_discovery: true   # Register papers immediately
+    verbose_logging: false        # Set true for debugging
+
+  # =========================================================================
+  # Phase 7.2: Multi-Source Discovery (NEW)
+  # =========================================================================
+  # LLM-based query expansion for broader coverage
+  query_expansion:
+    enabled: true                 # Generate related queries
+    max_variants: 3               # Conservative: 3 variants (balance cost/coverage)
+    cache_expansions: true        # Cache expansions to reduce LLM calls
+
+  # Citation network exploration (forward/backward citations)
+  citation_exploration:
+    enabled: true                 # Enable citation discovery
+    forward: true                 # Papers citing seed papers
+    backward: false               # Disabled for daily runs (cost savings)
+    max_forward_per_paper: 5      # Conservative: 5 per paper
+    max_backward_per_paper: 3     # Not used when backward=false
+    max_citation_depth: 1         # Single-hop only
+    respect_registry: true        # Skip already-registered papers
+
+  # Result aggregation and ranking
+  aggregation:
+    max_papers_per_topic: 30      # Daily limit per topic
+    ranking_weights:
+      citation_count: 0.25        # Slightly less weight on citations
+      recency: 0.40               # Prioritize recent papers for daily runs
+      source_count: 0.20          # Multi-source validation
+      pdf_availability: 0.15      # PDF access bonus
+
   # Notification Settings (Phase 3.7)
   # Send Slack notifications after each daily run
   notification_settings:

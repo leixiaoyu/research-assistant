@@ -3,7 +3,7 @@ import asyncio
 import re
 import urllib.parse
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import structlog
 from tenacity import (
     retry,
@@ -151,7 +151,7 @@ class ArxivProvider(DiscoveryProvider):
             elif tf.value.endswith("d"):
                 delta_hours = int(tf.value[:-1]) * 24
 
-            start_dt = datetime.utcnow() - timedelta(hours=delta_hours)
+            start_dt = datetime.now(timezone.utc) - timedelta(hours=delta_hours)
             start_str = start_dt.strftime("%Y%m%d%H%M")
             date_query = f"submittedDate:[{start_str} TO 300001010000]"
 

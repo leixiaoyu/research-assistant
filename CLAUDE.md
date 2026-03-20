@@ -734,7 +734,7 @@ The project includes a comprehensive verification script that runs all required 
 
 **GitHub Actions Workflow (`ci.yml`):**
 - Runs on: All pull requests and pushes to `main`
-- Python Version: 3.10 (enforced)
+- Python Version: 3.14 (enforced)
 - Checks:
   1. Black formatting
   2. Flake8 linting

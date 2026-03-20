@@ -30,19 +30,12 @@ repos:
   # =============================================
   # Security & Code Quality Hooks
   # =============================================
-  # Secret scanning with detect-secrets
-  - repo: https://github.com/Yelp/detect-secrets
-    rev: v1.4.0
+  # Secret scanning with Gitleaks
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.2
     hooks:
-      - id: detect-secrets
+      - id: gitleaks
         name: Detect hardcoded secrets
-        args: ['--baseline', '.secrets.baseline']
-        exclude: |
-          (?x)^(
-            .*\.lock$|
-            .*\.md$|
-            package-lock\.json$
-          )$
 
   # Trailing whitespace
   - repo: https://github.com/pre-commit/pre-commit-hooks

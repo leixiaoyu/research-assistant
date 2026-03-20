@@ -1,5 +1,5 @@
 from unittest.mock import Mock
-from datetime import datetime
+from datetime import datetime, timezone
 import pytest
 
 from src.services.extraction_service import ExtractionService
@@ -121,7 +121,7 @@ def mock_extractions(mock_papers) -> List[ExtractedPaper]:
         ],
         tokens_used=45000,
         cost_usd=0.18,
-        extraction_timestamp=datetime.utcnow(),
+        extraction_timestamp=datetime.now(timezone.utc),
     )
 
     extraction3 = PaperExtraction(
@@ -137,7 +137,7 @@ def mock_extractions(mock_papers) -> List[ExtractedPaper]:
         ],
         tokens_used=32000,
         cost_usd=0.12,
-        extraction_timestamp=datetime.utcnow(),
+        extraction_timestamp=datetime.now(timezone.utc),
     )
 
     return [
@@ -286,7 +286,7 @@ class TestPhase2PipelineIntegration:
             extraction_results=results,
             tokens_used=1000,
             cost_usd=0.01,
-            extraction_timestamp=datetime.utcnow(),
+            extraction_timestamp=datetime.now(timezone.utc),
         )
 
         extracted = ExtractedPaper(
@@ -331,7 +331,7 @@ class TestPhase2PipelineIntegration:
                 extraction_results=[],
                 tokens_used=500,
                 cost_usd=0.005,
-                extraction_timestamp=datetime.utcnow(),
+                extraction_timestamp=datetime.now(timezone.utc),
             )
             for p in mock_papers
         ]

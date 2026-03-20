@@ -365,6 +365,19 @@ class GlobalSettings(BaseModel):
         default_factory=IncrementalDiscoverySettings,  # type: ignore[arg-type]
         description="Incremental discovery settings (Phase 7.1)",
     )
+    # Phase 7.2: Multi-source discovery settings
+    query_expansion: Optional["QueryExpansionConfig"] = Field(
+        default=None,
+        description="Query expansion settings (Phase 7.2)",
+    )
+    citation_exploration: Optional["CitationExplorationConfig"] = Field(
+        default=None,
+        description="Citation exploration settings (Phase 7.2)",
+    )
+    aggregation: Optional["AggregationConfig"] = Field(
+        default=None,
+        description="Result aggregation settings (Phase 7.2)",
+    )
 
 
 class EnhancedDiscoveryConfig(BaseModel):

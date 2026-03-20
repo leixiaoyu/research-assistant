@@ -5,7 +5,7 @@ Phase 5.1: Provider implementation for Anthropic Claude models.
 
 import time
 from typing import Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import structlog
 
 from src.services.llm.providers.base import LLMProvider, LLMResponse, ProviderHealth
@@ -140,7 +140,7 @@ class AnthropicProvider(LLMProvider):
                 provider=self.name,
                 latency_ms=latency_ms,
                 finish_reason=response.stop_reason,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
             )
 
             # Record success

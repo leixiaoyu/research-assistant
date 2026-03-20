@@ -8,11 +8,12 @@ Implements async producer-consumer pattern with:
 - Integration with Phase 3 intelligence services
 - Integration with Phase 3.5 RegistryService (global identity)
 - Prometheus metrics export (Phase 4)
+
+Phase R3: Extracted PaperProcessor for single paper processing logic.
 """
 
 import asyncio
 from typing import List, AsyncIterator, Optional, Dict
-from pathlib import Path
 import time
 import structlog
 
@@ -35,16 +36,15 @@ from src.services.llm import LLMService
 # Phase 3.5 integration
 from src.services.registry_service import RegistryService
 
+# Phase R3: Extracted paper processor
+from src.orchestration.paper_processor import PaperProcessor
+
 # Phase 4: Prometheus metrics
 from src.observability.metrics import (
     PAPERS_PROCESSED,
     ACTIVE_WORKERS,
     QUEUE_SIZE,
     PAPERS_IN_QUEUE,
-    PAPER_PROCESSING_DURATION,
-    PDF_DOWNLOADS,
-    PDF_CONVERSIONS,
-    EXTRACTION_ERRORS,
 )
 
 logger = structlog.get_logger()
@@ -96,6 +96,15 @@ class ConcurrentPipeline:
         self.download_sem = asyncio.Semaphore(config.max_concurrent_downloads)
         self.conversion_sem = asyncio.Semaphore(config.max_concurrent_conversions)
         self.llm_sem = asyncio.Semaphore(config.max_concurrent_llm)
+
+        # Phase R3: Paper processor for single paper extraction
+        self._paper_processor = PaperProcessor(
+            fallback_pdf_service=fallback_pdf_service,
+            llm_service=llm_service,
+            cache_service=cache_service,
+            download_semaphore=self.download_sem,
+            llm_semaphore=self.llm_sem,
+        )
 
         # Statistics
         self.stats = PipelineStats()
@@ -530,11 +539,7 @@ class ConcurrentPipeline:
     ) -> Optional[ExtractedPaper]:
         """Process single paper with full pipeline.
 
-        1. Check extraction cache
-        2. If not cached:
-           a. Download + convert PDF (Phase 2.5)
-           b. Extract with LLM
-           c. Cache result
+        Phase R3: Delegates to PaperProcessor for actual processing.
 
         Args:
             paper: Paper to process
@@ -544,131 +549,13 @@ class ConcurrentPipeline:
         Returns:
             ExtractedPaper or None if processing failed
         """
-        logger.debug(
-            "processing_paper_start",
-            worker_id=worker_id,
-            paper_id=paper.paper_id,
-            title=paper.title[:50] if paper.title else "Untitled",
-        )
-
-        # Check extraction cache (Phase 3)
+        # Check cache first to track stats locally
         cached_extraction = self.cache_service.get_extraction(paper.paper_id, targets)
-
         if cached_extraction:
-            logger.info(
-                "extraction_cache_hit", worker_id=worker_id, paper_id=paper.paper_id
-            )
             self.stats.papers_cached += 1
 
-            return ExtractedPaper(
-                metadata=paper,
-                extraction=cached_extraction,
-                pdf_available=True,  # Assume PDF was available when cached
-            )
-
-        # Not cached - process from scratch
-
-        # Download + convert PDF with Phase 2.5 multi-backend fallback
-        pdf_result = None
-        markdown_content = ""
-
-        if paper.open_access_pdf:
-            async with self.download_sem:
-                pdf_start = time.time()
-                try:
-                    # Phase 2.5 FallbackPDFService automatically tries:
-                    # PyMuPDF → pdfplumber → marker → pandoc
-                    pdf_result = await self.fallback_pdf_service.extract_with_fallback(
-                        pdf_path=Path(str(paper.open_access_pdf))
-                    )
-
-                    if pdf_result and pdf_result.success and pdf_result.markdown:
-                        markdown_content = pdf_result.markdown
-
-                        # Track successful PDF conversion
-                        backend_name = (
-                            pdf_result.backend.value
-                            if pdf_result.backend
-                            else "unknown"
-                        )
-                        PDF_CONVERSIONS.labels(
-                            backend=backend_name, status="success"
-                        ).inc()
-                        PDF_DOWNLOADS.labels(status="success").inc()
-
-                        # Track processing duration
-                        PAPER_PROCESSING_DURATION.labels(stage="conversion").observe(
-                            time.time() - pdf_start
-                        )
-
-                        logger.info(
-                            "pdf_extraction_complete",
-                            worker_id=worker_id,
-                            paper_id=paper.paper_id,
-                            backend=backend_name,
-                            quality_score=pdf_result.quality_score or 0.0,
-                        )
-                    else:
-                        error_msg = pdf_result.error if pdf_result else "Unknown error"
-                        PDF_DOWNLOADS.labels(status="failed").inc()
-                        PDF_CONVERSIONS.labels(backend="unknown", status="failed").inc()
-                        raise Exception(f"PDF extraction failed: {error_msg}")
-
-                except Exception as e:
-                    EXTRACTION_ERRORS.labels(error_type="conversion").inc()
-                    logger.error(
-                        "pdf_extraction_failed",
-                        worker_id=worker_id,
-                        paper_id=paper.paper_id,
-                        error=str(e),
-                    )
-
-        # Prepare content for LLM
-        if markdown_content:
-            pdf_available = True
-        elif paper.abstract:
-            # Fallback to abstract
-            markdown_content = f"# {paper.title or 'Untitled'}\n\n{paper.abstract}"
-            pdf_available = False
-            logger.warning(
-                "using_abstract_fallback",
-                worker_id=worker_id,
-                paper_id=paper.paper_id,
-            )
-        else:
-            logger.error(
-                "no_content_available", worker_id=worker_id, paper_id=paper.paper_id
-            )
-            return None
-
-        # Extract with LLM
-        async with self.llm_sem:
-            try:
-                extraction = await self.llm_service.extract(
-                    markdown_content, targets, paper
-                )
-
-                logger.info(
-                    "llm_extraction_complete",
-                    worker_id=worker_id,
-                    paper_id=paper.paper_id,
-                )
-
-                # Cache extraction result (Phase 3)
-                self.cache_service.set_extraction(paper.paper_id, targets, extraction)
-
-                return ExtractedPaper(
-                    metadata=paper, extraction=extraction, pdf_available=pdf_available
-                )
-
-            except Exception as e:
-                logger.error(
-                    "llm_extraction_failed",
-                    worker_id=worker_id,
-                    paper_id=paper.paper_id,
-                    error=str(e),
-                )
-                return None
+        # Delegate to paper processor
+        return await self._paper_processor.process(paper, targets, worker_id)
 
     async def _collect_results(
         self, results_queue: asyncio.Queue, num_workers: int

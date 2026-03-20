@@ -646,3 +646,47 @@ class TestFallbackFailureRecording:
             assert "google" in str(exc_info.value.provider_errors)
             # Verify fallback activation was counted
             assert service.usage_stats.total_fallback_activations == 1
+
+
+class TestLegacyProviderMethods:
+    """Tests for legacy provider initialization wrapper methods."""
+
+    def test_init_primary_provider_legacy(
+        self, llm_config: LLMConfig, cost_limits: CostLimits
+    ) -> None:
+        """Test _init_primary_provider legacy method (no-op)."""
+        with patch.dict("sys.modules", {"anthropic": MagicMock()}):
+            service = LLMService(config=llm_config, cost_limits=cost_limits)
+            # Call legacy method - should be a no-op
+            service._init_primary_provider()
+            # Service should still work
+            assert service.config.provider == "anthropic"
+
+    def test_init_fallback_provider_legacy(
+        self, llm_config: LLMConfig, cost_limits: CostLimits
+    ) -> None:
+        """Test _init_fallback_provider legacy method (no-op)."""
+        with patch.dict("sys.modules", {"anthropic": MagicMock()}):
+            service = LLMService(config=llm_config, cost_limits=cost_limits)
+            # Call legacy method - should be a no-op
+            service._init_fallback_provider()
+            # Fallback should still be None (not configured)
+            assert service.fallback_provider is None
+
+    def test_init_provider_health_legacy(
+        self, llm_config: LLMConfig, cost_limits: CostLimits
+    ) -> None:
+        """Test _init_provider_health legacy method delegates to manager."""
+        with patch.dict("sys.modules", {"anthropic": MagicMock()}):
+            service = LLMService(config=llm_config, cost_limits=cost_limits)
+
+            # Create a mock provider
+            mock_provider = MagicMock()
+            mock_health = ProviderHealth(provider="test")
+            mock_provider.get_health.return_value = mock_health
+
+            # Call legacy method
+            service._init_provider_health("test", mock_provider)
+
+            # Verify it was added to manager
+            assert "test" in service._provider_manager.get_all_health()

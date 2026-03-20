@@ -600,7 +600,7 @@ class TestLLMServiceFallbackInit:
         # Patch GoogleProvider to raise during initialization
         with patch.dict("sys.modules", {"anthropic": MagicMock()}):
             with patch(
-                "src.services.llm.service.GoogleProvider",
+                "src.services.llm.provider_manager.GoogleProvider",
                 side_effect=Exception("Google init failed"),
             ):
                 service = LLMService(config=config, cost_limits=cost_limits)

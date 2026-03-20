@@ -133,7 +133,7 @@ class TestLLMServiceBranches:
         )
         limits = CostLimits()
 
-        with patch("src.services.llm.service.AnthropicProvider"):
+        with patch("src.services.llm.provider_manager.AnthropicProvider"):
             service = LLMService(config=config, cost_limits=limits)
             result = service._google_model
             assert result is None
@@ -151,7 +151,7 @@ class TestLLMServiceBranches:
         )
         limits = CostLimits()
 
-        with patch("src.services.llm.service.GoogleProvider"):
+        with patch("src.services.llm.provider_manager.GoogleProvider"):
             service = LLMService(config=config, cost_limits=limits)
             service._response_parser = Mock()
             service._response_parser.parse_from_text.return_value = []
@@ -177,7 +177,7 @@ class TestLLMServiceBranches:
         )
         limits = CostLimits()
 
-        with patch("src.services.llm.service.GoogleProvider"):
+        with patch("src.services.llm.provider_manager.GoogleProvider"):
             service = LLMService(config=config, cost_limits=limits)
 
             usage = Mock()
@@ -209,7 +209,8 @@ class TestLLMServiceBranches:
         mock_provider.generate = AsyncMock(return_value=mock_response)
 
         with patch(
-            "src.services.llm.service.AnthropicProvider", return_value=mock_provider
+            "src.services.llm.provider_manager.AnthropicProvider",
+            return_value=mock_provider,
         ):
             service = LLMService(config=config, cost_limits=limits)
             result = await service._call_anthropic_raw("test prompt", 1024)
@@ -237,7 +238,8 @@ class TestLLMServiceBranches:
         mock_provider.generate = AsyncMock(return_value=mock_response)
 
         with patch(
-            "src.services.llm.service.GoogleProvider", return_value=mock_provider
+            "src.services.llm.provider_manager.GoogleProvider",
+            return_value=mock_provider,
         ):
             service = LLMService(config=config, cost_limits=limits)
             result = await service._call_google_raw("test prompt", 1024)
@@ -255,7 +257,7 @@ class TestLLMServiceBranches:
         )
         limits = CostLimits()
 
-        with patch("src.services.llm.service.GoogleProvider"):
+        with patch("src.services.llm.provider_manager.GoogleProvider"):
             service = LLMService(config=config, cost_limits=limits)
 
             # Create error with non-numeric retry_after that will raise ValueError
@@ -277,7 +279,7 @@ class TestLLMServiceBranches:
         )
         limits = CostLimits()
 
-        with patch("src.services.llm.service.GoogleProvider"):
+        with patch("src.services.llm.provider_manager.GoogleProvider"):
             service = LLMService(config=config, cost_limits=limits)
 
             # Create error without retry_after but with invalid header
@@ -791,7 +793,8 @@ class TestLLMServiceProviderStatsBranches:
         mock_provider.generate = AsyncMock(return_value=mock_response)
 
         with patch(
-            "src.services.llm.service.GoogleProvider", return_value=mock_provider
+            "src.services.llm.provider_manager.GoogleProvider",
+            return_value=mock_provider,
         ):
             service = LLMService(config=config, cost_limits=limits)
 
@@ -814,7 +817,7 @@ class TestLLMServiceProviderStatsBranches:
         )
         limits = CostLimits()
 
-        with patch("src.services.llm.service.GoogleProvider"):
+        with patch("src.services.llm.provider_manager.GoogleProvider"):
             service = LLMService(config=config, cost_limits=limits)
             service._response_parser = Mock()
             service._response_parser.parse_from_text.return_value = []
@@ -1001,7 +1004,7 @@ class TestLLMServiceMoreBranches:
         )
         limits = CostLimits()
 
-        with patch("src.services.llm.service.GoogleProvider"):
+        with patch("src.services.llm.provider_manager.GoogleProvider"):
             service = LLMService(config=config, cost_limits=limits)
             assert service is not None
             assert service.config.provider == "google"
@@ -1520,7 +1523,7 @@ class TestLLMServiceMoreCoverageBranches:
         )
         limits = CostLimits()
 
-        with patch("src.services.llm.service.AnthropicProvider"):
+        with patch("src.services.llm.provider_manager.AnthropicProvider"):
             service = LLMService(config=config, cost_limits=limits)
             assert service is not None
             assert service.config.provider == "anthropic"

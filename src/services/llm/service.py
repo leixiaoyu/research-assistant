@@ -1,19 +1,19 @@
 """LLM Service - Main Orchestrator
 
 Phase 5.1: Refactored LLMService as thin orchestrator.
+Phase R2: Further decomposed into focused modules.
 
 This service orchestrates LLM extraction by delegating to:
-- LLMProvider implementations (Anthropic, Google)
+- ProviderManager for provider lifecycle
 - CostTracker for budget enforcement
 - PromptBuilder for prompt construction
 - ResponseParser for JSON parsing
 - RetryHandler for retry logic
-- CircuitBreaker for failure isolation
+- ErrorClassifier for error classification
 
 The service maintains backward compatibility with the original API.
 """
 
-import os
 import time
 from typing import List, Any, Optional, Dict
 from datetime import datetime, timezone
@@ -25,12 +25,10 @@ from src.models.paper import PaperMetadata
 from src.services.llm.cost_tracker import CostTracker
 from src.services.llm.prompt_builder import PromptBuilder
 from src.services.llm.response_parser import ResponseParser
-from src.services.llm.providers.base import LLMProvider, LLMResponse, ProviderHealth
-from src.services.llm.providers.anthropic import AnthropicProvider
-from src.services.llm.providers.google import GoogleProvider
+from src.services.llm.providers.base import LLMResponse, ProviderHealth
+from src.services.llm.provider_manager import ProviderManager
 from src.services.llm.exceptions import LLMProviderError, RateLimitError
 from src.utils.exceptions import (
-    ExtractionError,
     LLMAPIError,
     JSONParseError,
     RetryableError,
@@ -38,6 +36,7 @@ from src.utils.exceptions import (
 )
 from src.utils.retry import RetryHandler
 from src.utils.circuit_breaker import CircuitBreakerRegistry
+from src.services.llm.error_classifier import ErrorClassifier
 
 # Phase 4: Prometheus metrics
 from src.observability.metrics import (
@@ -97,15 +96,14 @@ class LLMService:
         # Initialize circuit breaker registry
         self.circuit_registry = CircuitBreakerRegistry()
 
-        # Initialize providers
-        self._providers: Dict[str, LLMProvider] = {}
-        self._provider_health: Dict[str, ProviderHealth] = {}
-        self._init_primary_provider()
+        # Initialize provider manager (delegates provider lifecycle)
+        self._provider_manager = ProviderManager(config, self.circuit_registry)
+        self._provider_manager.initialize()
 
-        # Initialize fallback provider if configured
-        self.fallback_provider: Optional[str] = None
-        if config.fallback and config.fallback.enabled:
-            self._init_fallback_provider()
+        # Expose provider collections for backward compatibility
+        self._providers = self._provider_manager.get_all_providers()
+        self._provider_health = self._provider_manager.get_all_health()
+        self.fallback_provider = self._provider_manager.fallback_provider
 
         logger.info(
             "llm_service_initialized",
@@ -113,106 +111,9 @@ class LLMService:
             model=config.model,
             max_tokens=config.max_tokens,
             retry_enabled=True,
-            fallback_enabled=bool(config.fallback and config.fallback.enabled),
+            fallback_enabled=self._provider_manager.has_fallback(),
             circuit_breaker_enabled=config.circuit_breaker.enabled,
         )
-
-    def _init_primary_provider(self) -> None:
-        """Initialize the primary provider."""
-        provider = self._create_provider(
-            self.config.provider,
-            self.config.api_key,
-            self.config.model,
-        )
-        self._providers[self.config.provider] = provider
-        self._init_provider_health(self.config.provider, provider)
-
-    def _init_fallback_provider(self) -> None:
-        """Initialize fallback provider if configured."""
-        fallback_config = self.config.fallback
-        if not fallback_config:
-            return
-
-        # Get API key from config or environment
-        api_key = fallback_config.api_key
-        if not api_key:
-            if fallback_config.provider == "anthropic":
-                api_key = os.environ.get("ANTHROPIC_API_KEY")
-            else:
-                api_key = os.environ.get("GOOGLE_API_KEY")
-
-        if not api_key:
-            logger.warning(
-                "fallback_api_key_not_found",
-                provider=fallback_config.provider,
-            )
-            return
-
-        try:
-            provider = self._create_provider(
-                fallback_config.provider,
-                api_key,
-                fallback_config.model,
-            )
-            self._providers[fallback_config.provider] = provider
-            self._init_provider_health(fallback_config.provider, provider)
-            self.fallback_provider = fallback_config.provider
-
-            logger.info(
-                "fallback_provider_initialized",
-                provider=fallback_config.provider,
-                model=fallback_config.model,
-            )
-        except Exception as e:
-            logger.warning(
-                "fallback_provider_init_failed",
-                provider=fallback_config.provider,
-                error=str(e),
-            )
-
-    def _create_provider(
-        self,
-        provider_name: str,
-        api_key: str,
-        model: str,
-    ) -> LLMProvider:
-        """Create a provider instance.
-
-        Args:
-            provider_name: Provider name (anthropic, google)
-            api_key: API key
-            model: Model identifier
-
-        Returns:
-            LLMProvider instance
-
-        Raises:
-            ExtractionError: If provider is unknown or cannot be initialized
-        """
-        try:
-            if provider_name == "anthropic":
-                return AnthropicProvider(api_key=api_key, model=model)
-            elif provider_name == "google":
-                return GoogleProvider(api_key=api_key, model=model)
-            else:
-                raise ExtractionError(f"Unknown provider: {provider_name}")
-        except LLMProviderError as e:
-            # Re-raise as ExtractionError for backward compatibility
-            raise ExtractionError(str(e))
-
-    def _init_provider_health(self, name: str, provider: LLMProvider) -> None:
-        """Initialize health tracking for a provider."""
-        health = provider.get_health()
-
-        # Attach circuit breaker if enabled
-        if self.config.circuit_breaker.enabled:
-            circuit_breaker = self.circuit_registry.get_or_create(
-                name, self.config.circuit_breaker
-            )
-            # Store circuit breaker reference for later use
-            health.circuit_breaker = circuit_breaker  # type: ignore
-
-        self._provider_health[name] = health
 
     async def extract(
         self,
@@ -703,10 +604,9 @@ class LLMService:
 
     def reset_circuit_breakers(self) -> None:
         """Reset all circuit breakers to CLOSED state."""
-        self.circuit_registry.reset_all()
-        for health in self._provider_health.values():
-            health.status = "healthy"
-            health.consecutive_failures = 0
+        self._provider_manager.reset_circuit_breakers()
+        # Update local references for backward compatibility
+        self._provider_health = self._provider_manager.get_all_health()
 
     # Legacy property for backward compatibility
     @property
@@ -748,6 +648,29 @@ class LLMService:
     # Legacy methods for backward compatibility
     # These methods delegate to the new component-based architecture
     # ==========================================================================
+
+    def _init_primary_provider(self) -> None:
+        """Legacy method - delegates to ProviderManager."""
+        # Already initialized via ProviderManager in __init__
+        pass
+
+    def _init_fallback_provider(self) -> None:
+        """Legacy method - delegates to ProviderManager."""
+        # Already initialized via ProviderManager in __init__
+        pass
+
+    def _create_provider(
+        self,
+        provider_name: str,
+        api_key: str,
+        model: str,
+    ) -> Any:
+        """Legacy method - delegates to ProviderManager."""
+        return self._provider_manager._create_provider(provider_name, api_key, model)
+
+    def _init_provider_health(self, name: str, provider: Any) -> None:
+        """Legacy method - delegates to ProviderManager."""
+        self._provider_manager._init_provider_health(name, provider)
 
     def _build_extraction_prompt(
         self,
@@ -965,58 +888,19 @@ class LLMService:
     def _classify_error(self, error: Exception) -> Exception:
         """Legacy method - classify an error for retry/fallback decisions.
 
+        Delegates to ErrorClassifier for consistent error classification.
+
         Returns:
             Classified exception (RateLimitError, RetryableError, or LLMAPIError)
         """
-        # Import from src.utils.exceptions for backward compatibility
-        from src.utils.exceptions import (
-            RateLimitError as UtilsRateLimitError,
-            RetryableError as UtilsRetryableError,
-            LLMAPIError as UtilsLLMAPIError,
-        )
-
-        error_str = str(error).lower()
-
-        # Rate limit errors
-        if "429" in error_str or ("rate" in error_str and "limit" in error_str):
-            return UtilsRateLimitError(str(error))
-        if "quota" in error_str or "resource_exhausted" in error_str:
-            return UtilsRateLimitError(str(error))
-
-        # Retryable errors
-        if "timeout" in error_str or "timed out" in error_str:
-            return UtilsRetryableError(str(error))
-        if "503" in error_str or "service unavailable" in error_str:
-            return UtilsRetryableError(str(error))
-        if "internal" in error_str and "server" in error_str:
-            return UtilsRetryableError(str(error))
-
-        # Non-retryable
-        return UtilsLLMAPIError(str(error))
+        return ErrorClassifier.classify(error)
 
     def _extract_retry_after(self, error: Exception) -> Optional[float]:
         """Legacy method - extract retry-after value from an error.
 
+        Delegates to ErrorClassifier for consistent behavior.
+
         Returns:
             Retry delay in seconds, or None if not available
         """
-        # Check for retry_after attribute
-        if hasattr(error, "retry_after"):
-            retry_after = error.retry_after
-            if retry_after is not None:
-                try:
-                    return float(retry_after)
-                except (ValueError, TypeError):
-                    pass
-
-        # Check for response headers
-        if hasattr(error, "response") and hasattr(error.response, "headers"):
-            headers = error.response.headers
-            retry_after = headers.get("retry-after") or headers.get("Retry-After")
-            if retry_after is not None:
-                try:
-                    return float(retry_after)
-                except (ValueError, TypeError):
-                    return None
-
-        return None
+        return ErrorClassifier.extract_retry_after(error)

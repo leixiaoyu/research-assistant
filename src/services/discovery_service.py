@@ -29,27 +29,46 @@ from src.services.quality_scorer import QualityScorer
 # Phase 6: Enhanced Discovery Pipeline imports
 if TYPE_CHECKING:
     from src.services.llm import LLMService
+    from src.services.enhanced_discovery_service import EnhancedDiscoveryService
 
 logger = structlog.get_logger()
 
 
 class DiscoveryService:
-    """Wrapper service for paper discovery with multi-provider support.
+    """Orchestrates paper discovery across multiple providers.
 
-    Phase 3.2 Features:
-    - Intelligent provider selection based on query characteristics
-    - Automatic fallback on provider failure
-    - Benchmark mode for multi-provider comparison
-    - Metrics collection for performance analysis
+    This service provides two search modes:
 
-    Phase 3.4 Features:
-    - Quality-first paper ranking
-    - PDF availability tracking and statistics
-    - ArXiv supplement mode for PDF gaps
+    1. **Basic Search** (search method):
+       - Direct provider queries with intelligent fallback
+       - Provider selection based on query characteristics
+       - Quality scoring and PDF availability tracking
+
+    2. **Enhanced Search** (enhanced_search method):
+       - 4-stage pipeline: Query Decomposition → Multi-Source Retrieval
+         → Quality Filtering → Relevance Ranking
+       - LLM-powered query expansion and relevance scoring
+       - Delegated to EnhancedDiscoveryService (composition pattern)
+
+    Architecture:
+        DiscoveryService acts as a facade that coordinates:
+        - Multiple DiscoveryProvider implementations (ArXiv, SemanticScholar, etc.)
+        - Optional EnhancedDiscoveryService for advanced pipeline (Phase 6)
+
+        The EnhancedDiscoveryService can be injected via constructor for:
+        - Easier testing with mock dependencies
+        - Custom pipeline configurations
+        - Decoupled component management
+
+    Phase Features:
+        3.2: Intelligent provider selection, fallback, benchmark mode
+        3.4: Quality-first ranking, PDF tracking, ArXiv supplement
+        6.0: Enhanced 4-stage pipeline with LLM integration
+        7.2: Multi-source discovery with citation exploration
 
     Provider Categories:
-    - Comprehensive: ArXiv, SemanticScholar (query-based, can return 0 for niche)
-    - Sampling: HuggingFace (trending-based, often returns 0 for non-trending)
+        - Comprehensive: ArXiv, SemanticScholar, OpenAlex (query-based)
+        - Trending: HuggingFace (curated/trending papers)
     """
 
     # Sampling providers return trending/curated results only.
@@ -61,17 +80,33 @@ class DiscoveryService:
         api_key: str = "",
         config: Optional[ProviderSelectionConfig] = None,
         quality_scorer: Optional[QualityScorer] = None,
+        enhanced_discovery_service: Optional["EnhancedDiscoveryService"] = None,
     ):
         """Initialize discovery service with providers.
+
+        This service provides multi-provider paper discovery with two modes:
+        1. Basic search: Direct provider queries with fallback (search method)
+        2. Enhanced search: 4-stage pipeline with LLM (enhanced_search method)
+
+        The enhanced_discovery_service parameter enables dependency injection
+        for the Phase 6 enhanced pipeline. If not provided, enhanced_search()
+        will create one internally (backward compatible).
 
         Args:
             api_key: Semantic Scholar API key (optional).
             config: Provider selection configuration.
             quality_scorer: Quality scorer instance (optional, created if None).
+            enhanced_discovery_service: Pre-configured enhanced discovery service
+                for dependency injection. If provided, enhanced_search() will use
+                this instance instead of creating one internally. This enables
+                easier testing and customization of the 4-stage pipeline.
         """
         self.config = config or ProviderSelectionConfig()
         self.providers: Dict[ProviderType, DiscoveryProvider] = {}
         self._api_key = api_key
+
+        # Phase 6: Store injected enhanced service (optional DI)
+        self._enhanced_service = enhanced_discovery_service
 
         # Initialize ArXiv (Always available)
         self.providers[ProviderType.ARXIV] = ArxivProvider()
@@ -102,6 +137,30 @@ class DiscoveryService:
     def available_providers(self) -> List[ProviderType]:
         """Get list of available provider types."""
         return list(self.providers.keys())
+
+    @property
+    def enhanced_service(self) -> Optional["EnhancedDiscoveryService"]:
+        """Get the injected EnhancedDiscoveryService, if any.
+
+        Returns:
+            The EnhancedDiscoveryService instance if one was injected
+            via the constructor, None otherwise.
+
+        Note:
+            This property is useful for testing and introspection.
+            If None, enhanced_search() will create a service internally.
+        """
+        return self._enhanced_service
+
+    @enhanced_service.setter
+    def enhanced_service(self, service: Optional["EnhancedDiscoveryService"]) -> None:
+        """Set the EnhancedDiscoveryService for dependency injection.
+
+        Args:
+            service: Pre-configured EnhancedDiscoveryService, or None
+                to revert to internal creation in enhanced_search().
+        """
+        self._enhanced_service = service
 
     async def search(self, topic: ResearchTopic) -> List[PaperMetadata]:
         """Search for papers using intelligent provider selection.
@@ -610,11 +669,17 @@ class DiscoveryService:
         3. Quality Filtering: Score papers on multiple quality signals
         4. Relevance Ranking: LLM-based semantic relevance scoring
 
+        The enhanced pipeline can be customized via dependency injection:
+        - Pass enhanced_discovery_service to __init__ for full control
+        - Or let this method create one internally (backward compatible)
+
         Args:
             topic: Research topic with query and settings.
             llm_service: Optional LLM service for query decomposition and
                 relevance ranking. If not provided, these stages are skipped.
+                Note: Ignored if enhanced_discovery_service was injected.
             config: Optional enhanced discovery configuration.
+                Note: Ignored if enhanced_discovery_service was injected.
 
         Returns:
             DiscoveryResult with scored and ranked papers, metrics, and queries.
@@ -624,6 +689,33 @@ class DiscoveryService:
             - Query decomposition returns only the original query
             - Relevance ranking uses quality score only
         """
+        # Use injected service if available (dependency injection pattern)
+        if self._enhanced_service is not None:
+            # Warn if caller provided parameters that will be ignored
+            if llm_service is not None or config is not None:
+                logger.warning(
+                    "enhanced_search_params_ignored",
+                    reason="using_injected_service",
+                    llm_service_provided=llm_service is not None,
+                    config_provided=config is not None,
+                )
+            logger.info(
+                "enhanced_search_starting",
+                query=topic.query[:50],
+                providers=list(self.providers.keys()),
+                mode="injected_service",
+            )
+            result = await self._enhanced_service.discover(topic)
+            logger.info(
+                "enhanced_search_completed",
+                query=topic.query[:50],
+                papers_found=result.paper_count,
+                avg_quality=result.metrics.avg_quality_score,
+                avg_relevance=result.metrics.avg_relevance_score,
+            )
+            return result
+
+        # Backward compatible: Create service internally if not injected
         # Import here to avoid circular dependencies
         from src.services.enhanced_discovery_service import EnhancedDiscoveryService
         from src.services.query_decomposer import QueryDecomposer
@@ -664,6 +756,7 @@ class DiscoveryService:
             query=topic.query[:50],
             providers=list(self.providers.keys()),
             llm_enabled=llm_service is not None,
+            mode="internal_creation",
         )
 
         # Run enhanced discovery

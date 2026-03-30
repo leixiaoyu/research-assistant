@@ -729,3 +729,76 @@ class TestResultAggregatorRecency:
 
         assert len(result.papers) == 1
         assert result.papers[0].ranking_score is not None
+
+
+class TestResultAggregatorTitleSimilarity:
+    """Tests for ResultAggregator title similarity handling."""
+
+    @pytest.mark.asyncio
+    async def test_similar_titles_exact_match_after_normalization(self):
+        """Test that very similar titles are deduplicated after normalization.
+
+        The current implementation uses exact normalized title matching.
+        This test verifies that titles differing only in punctuation,
+        case, and whitespace are correctly identified as duplicates.
+        """
+        aggregator = ResultAggregator()
+
+        source_results = {
+            "source1": [
+                PaperMetadata(
+                    paper_id="p1",
+                    title="Machine Learning: A Comprehensive Study!!!",
+                    url="https://example.com/1",
+                ),
+            ],
+            "source2": [
+                PaperMetadata(
+                    paper_id="p2",
+                    title="machine   learning  a  comprehensive  study",
+                    url="https://example.com/2",
+                ),
+            ],
+        }
+
+        result = await aggregator.aggregate(source_results)
+
+        # Should deduplicate to 1 paper (exact match after normalization)
+        assert len(result.papers) == 1
+        assert result.papers[0].source_count == 2
+
+    @pytest.mark.asyncio
+    async def test_similar_titles_no_fuzzy_matching(self):
+        """Test that similar but not identical titles are NOT deduplicated.
+
+        The current implementation does NOT use fuzzy title similarity matching.
+        Titles that differ in actual words (e.g., "Study" vs "Survey") are treated
+        as unique papers, even if they're very similar.
+
+        Note: Future enhancement could add fuzzy matching with configurable threshold.
+        """
+        aggregator = ResultAggregator()
+
+        source_results = {
+            "source1": [
+                PaperMetadata(
+                    paper_id="p1",
+                    title="Machine Learning: A Comprehensive Study",
+                    url="https://example.com/1",
+                ),
+            ],
+            "source2": [
+                PaperMetadata(
+                    paper_id="p2",
+                    title="Machine Learning: A Comprehensive Survey",  # "Survey" vs "Study"
+                    url="https://example.com/2",
+                ),
+            ],
+        }
+
+        result = await aggregator.aggregate(source_results)
+
+        # Should NOT deduplicate (different words after normalization)
+        assert len(result.papers) == 2
+        # Each paper should have source_count=1 (not merged)
+        assert all(p.source_count == 1 for p in result.papers)

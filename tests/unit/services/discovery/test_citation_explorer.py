@@ -488,6 +488,60 @@ class TestCitationExplorerParsing:
         paper = explorer._parse_paper(data, "semantic_scholar")
         assert paper is None
 
+    @pytest.mark.asyncio
+    async def test_parse_paper_handles_malformed_api_response(self):
+        """Test that malformed entries in API response are skipped gracefully.
+
+        Simulates an API response where one paper is missing the paperId field.
+        The malformed entry should be skipped without raising an exception,
+        and other valid papers in the same response should still be parsed.
+        """
+        explorer = CitationExplorer(api_key="test-key")
+
+        # Simulate _fetch_citations processing multiple papers with one malformed
+        mock_api_response_data = [
+            {
+                "citingPaper": {
+                    "paperId": "valid1",
+                    "title": "Valid Paper 1",
+                    "abstract": "This paper is complete.",
+                    "year": 2023,
+                }
+            },
+            {
+                "citingPaper": {
+                    # Missing paperId - this is malformed
+                    "title": "Malformed Paper",
+                    "abstract": "This paper is missing paperId.",
+                }
+            },
+            {
+                "citingPaper": {
+                    "paperId": "valid2",
+                    "title": "Valid Paper 2",
+                    "year": 2024,
+                }
+            },
+        ]
+
+        # Parse each paper like _fetch_citations does
+        parsed_papers = []
+        for item in mock_api_response_data:
+            paper_data = item.get("citingPaper", {})
+            if paper_data:
+                parsed = explorer._parse_paper(paper_data, "semantic_scholar")
+                if parsed:  # Only append if parsing succeeded
+                    parsed_papers.append(parsed)
+
+        # Should have 2 valid papers (malformed one skipped)
+        assert len(parsed_papers) == 2
+        assert parsed_papers[0].paper_id == "valid1"
+        assert parsed_papers[0].title == "Valid Paper 1"
+        assert parsed_papers[1].paper_id == "valid2"
+        assert parsed_papers[1].title == "Valid Paper 2"
+
+        # Verify the malformed entry was silently skipped (no exception raised)
+
 
 class TestCitationExplorerAPISuccess:
     """Tests for CitationExplorer API success paths."""

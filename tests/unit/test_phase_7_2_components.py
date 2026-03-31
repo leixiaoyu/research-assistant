@@ -1,6 +1,25 @@
 """Comprehensive tests for Phase 7.2: Discovery Expansion components.
 
-Tests cover:
+DEPRECATION NOTICE (Phase P0-T1):
+This monolithic test file has been split into component-specific files.
+DO NOT ADD NEW TESTS HERE - use the appropriate split file instead:
+
+COMPLETED SPLITS (tests duplicated in new locations):
+- tests/unit/utils/test_query_expander.py - QueryExpander tests
+- tests/unit/services/discovery/test_citation_explorer.py - CitationExplorer tests
+- tests/unit/services/discovery/test_result_aggregator.py - ResultAggregator tests
+- tests/unit/services/providers/test_paper_search_mcp.py - PaperSearchMCPProvider tests
+- tests/unit/orchestration/test_discovery_phase_multisource.py - DiscoveryPhase tests
+- tests/unit/test_phase_7_2_integration.py - Integration and config model tests
+
+NEXT STEPS (Phase P0-T1 follow-up):
+1. Remove duplicated test classes from this file after PR merge
+2. Delete this file once all tests are migrated
+
+This file is kept temporarily for safety. Tests run from both locations.
+See REFACTORING_OPPORTUNITIES.md Phase T1 for details.
+
+Legacy tests below (DO NOT ADD NEW TESTS HERE):
 - QueryExpander: LLM-based query expansion
 - CitationExplorer: Forward/backward citation discovery
 - ResultAggregator: Multi-source deduplication and ranking

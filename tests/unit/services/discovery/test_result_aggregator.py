@@ -790,7 +790,8 @@ class TestResultAggregatorTitleSimilarity:
             "source2": [
                 PaperMetadata(
                     paper_id="p2",
-                    title="Machine Learning: A Comprehensive Survey",  # "Survey" vs "Study"
+                    # "Survey" vs "Study" - tests fuzzy title matching
+                    title="Machine Learning: A Comprehensive Survey",
                     url="https://example.com/2",
                 ),
             ],

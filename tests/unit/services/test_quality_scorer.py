@@ -80,6 +80,23 @@ class TestLoadVenueScores:
         assert "emnlp" in venues
         assert venues["neurips"] == 30
 
+    def test_load_venue_scores_invalid_values(self, tmp_path):
+        """Test handling invalid score values (non-integer)."""
+        invalid_yaml = tmp_path / "invalid_values.yaml"
+        invalid_yaml.write_text(
+            yaml.dump(
+                {
+                    "default_score": "not_a_number",
+                    "venues": {"venue1": "also_not_a_number"},
+                }
+            )
+        )
+
+        venues, default = load_venue_scores(invalid_yaml)
+        # Should return fallback defaults on ValueError/TypeError
+        assert venues == {}
+        assert default == 15
+
 
 class TestQualityScorerInit:
     """Tests for QualityScorer initialization."""
@@ -311,10 +328,12 @@ class TestQualityScorerRecencyScore:
 
     def test_timezone_naive_date(self, scorer):
         """Test handling of timezone-naive dates."""
-        pub_date = datetime.now(timezone.utc) - timedelta(days=100)  # Naive
-        paper = self._make_paper(publication_date=pub_date)
+        # Create actual naive datetime (without tzinfo)
+        pub_date_naive = datetime.now() - timedelta(days=100)
+        assert pub_date_naive.tzinfo is None  # Verify it's naive
+        paper = self._make_paper(publication_date=pub_date_naive)
         score = scorer._recency_score(paper)
-        assert score == 1.0  # Should handle gracefully
+        assert score == 1.0  # Should handle gracefully by adding UTC timezone
 
     @staticmethod
     def _make_paper(**kwargs) -> PaperMetadata:

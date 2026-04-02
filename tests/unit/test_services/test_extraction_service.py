@@ -240,3 +240,17 @@ class TestExtractionService:
         # Verify all papers were processed
         assert mock_llm_service.extract.call_count == 3
         assert mock_pdf_service.cleanup_temp_files.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_get_processing_results_without_concurrent_pipeline(
+        self, extraction_service
+    ):
+        """Test get_processing_results returns empty without concurrent pipeline."""
+        # extraction_service doesn't have concurrent pipeline initialized
+        assert extraction_service._concurrent_pipeline is None
+
+        # Call get_processing_results - should return empty list (line 504)
+        results = extraction_service.get_processing_results()
+
+        assert results == []
+        assert isinstance(results, list)

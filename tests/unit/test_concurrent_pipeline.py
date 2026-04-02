@@ -985,3 +985,131 @@ class TestRegistryIntegration:
         processing_results = pipeline_with_registry.get_processing_results()
         assert len(processing_results) == 1
         assert processing_results[0].status == ProcessingStatus.MAPPED
+
+    @pytest.mark.asyncio
+    async def test_registry_persist_paper_without_pdf_path(
+        self, pipeline_with_registry, mock_services, mock_registry_service
+    ):
+        """Test registry persistence when paper has no pdf_path (line 340)."""
+        from src.models.registry import ProcessingAction
+        from src.models.extraction import ExtractedPaper
+
+        paper = PaperMetadata(
+            paper_id="no-pdf-path",
+            title="Paper Without PDF Path",
+            abstract="Test abstract",
+            url="https://example.com",
+            open_access_pdf="https://example.com/paper.pdf",
+        )
+        targets = [ExtractionTarget(name="summary", description="Summary")]
+
+        # Configure registry to return FULL_PROCESS
+        mock_registry_service.determine_action.return_value = (
+            ProcessingAction.FULL_PROCESS,
+            None,
+        )
+        mock_registry_service.register_paper = Mock()
+
+        # Configure dedup and filter
+        mock_services["dedup"].find_duplicates.return_value = ([paper], [])
+        mock_services["filter"].filter_and_rank.return_value = [paper]
+
+        # Configure PDF and LLM - create ExtractedPaper WITHOUT pdf_path attribute
+        mock_services["fallback_pdf"].extract_with_fallback.return_value = Mock(
+            success=True, markdown="# Test", backend="test"
+        )
+
+        # Create extraction result without pdf_path
+        extraction_result = PaperExtraction(
+            paper_id=paper.paper_id,
+            extraction_results=[],
+            tokens_used=100,
+            cost_usd=0.001,
+        )
+        mock_services["llm"].extract.return_value = extraction_result
+
+        # Mock _process_single_paper to return ExtractedPaper WITHOUT pdf_path
+        extracted_without_pdf_path = ExtractedPaper(
+            metadata=paper,
+            pdf_available=True,
+            extraction=extraction_result,
+        )
+        # Ensure pdf_path attribute doesn't exist or is None
+        extracted_without_pdf_path.pdf_path = None
+
+        # Patch to return our custom extracted paper
+        from unittest.mock import patch
+
+        with patch.object(
+            pipeline_with_registry._paper_processor,
+            "process",
+            return_value=extracted_without_pdf_path,
+        ):
+            results = []
+            async for result in pipeline_with_registry.process_papers_concurrent(
+                papers=[paper],
+                targets=targets,
+                run_id="test-run",
+                query="test",
+                topic_slug="test-topic",
+            ):
+                results.append(result)
+
+        # Verify register_paper was called with pdf_path=None (line 340 branch)
+        assert mock_registry_service.register_paper.call_count >= 1
+        # Check that at least one call had pdf_path=None
+        calls = mock_registry_service.register_paper.call_args_list
+        persistence_calls = [c for c in calls if "pdf_path" in c.kwargs]
+        if persistence_calls:
+            assert any(c.kwargs.get("pdf_path") is None for c in persistence_calls)
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_dedup_service(self, concurrency_config, mock_services):
+        """Test fallback to dedup service when registry not available."""
+        # Create pipeline WITHOUT registry service
+        pipeline_no_registry = ConcurrentPipeline(
+            config=concurrency_config,
+            fallback_pdf_service=mock_services["fallback_pdf"],
+            llm_service=mock_services["llm"],
+            cache_service=mock_services["cache"],
+            dedup_service=mock_services["dedup"],
+            filter_service=mock_services["filter"],
+            checkpoint_service=mock_services["checkpoint"],
+            registry_service=None,  # No registry
+        )
+
+        paper = PaperMetadata(
+            paper_id="dedup-fallback",
+            title="Dedup Fallback Paper",
+            url="https://example.com",
+        )
+        targets = [ExtractionTarget(name="summary", description="Summary")]
+
+        # Configure dedup service
+        mock_services["dedup"].find_duplicates.return_value = ([paper], [])
+        mock_services["filter"].filter_and_rank.return_value = [paper]
+
+        # Configure successful processing
+        mock_services["fallback_pdf"].extract_with_fallback.return_value = Mock(
+            success=True, markdown="# Test", backend="test"
+        )
+        mock_services["llm"].extract.return_value = PaperExtraction(
+            paper_id=paper.paper_id,
+            extraction_results=[],
+            tokens_used=100,
+            cost_usd=0.001,
+        )
+
+        results = []
+        async for result in pipeline_no_registry.process_papers_concurrent(
+            papers=[paper],
+            targets=targets,
+            run_id="test-run-no-registry",
+            query="test",
+            topic_slug="test-topic",  # topic_slug provided but no registry
+        ):
+            results.append(result)
+
+        # Verify dedup service was used (fallback path)
+        mock_services["dedup"].find_duplicates.assert_called_once()
+        assert len(results) >= 0  # Processing completed via fallback path

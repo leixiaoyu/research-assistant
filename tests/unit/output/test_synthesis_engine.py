@@ -402,6 +402,50 @@ class TestRenderPaperSection:
         # Should show other topics (excluding the paper_id which isn't a topic here)
         assert "topic-a" in section or "topic-b" in section or "topic-c" in section
 
+    def test_renders_single_topic_affiliation_no_message(self, engine):
+        """Test that single topic affiliation doesn't show 'Also appears in' message."""
+        entry = KnowledgeBaseEntry(
+            paper_id="test-id",
+            title="Test Paper",
+            quality_score=60.0,
+            topic_affiliations=["single-topic"],
+        )
+
+        section = engine._render_paper_section(entry)
+
+        # Should NOT show "Also appears in" for single topic
+        assert "Also appears in:" not in section
+
+    def test_renders_affiliations_excluding_paper_id(self, engine):
+        """Test that topic affiliations exclude the paper_id itself."""
+        entry = KnowledgeBaseEntry(
+            paper_id="test-id",
+            title="Test Paper",
+            quality_score=60.0,
+            topic_affiliations=["test-id", "other-topic"],
+        )
+
+        section = engine._render_paper_section(entry)
+
+        # Should show "Also appears in" since there are 2 affiliations
+        assert "Also appears in:" in section
+        # Should show "other-topic" but filter out the paper_id
+        assert "other-topic" in section
+
+    def test_renders_affiliations_all_filtered_out(self, engine):
+        """Test that no affiliation message shown when all topics filtered out."""
+        entry = KnowledgeBaseEntry(
+            paper_id="test-id",
+            title="Test Paper",
+            quality_score=60.0,
+            topic_affiliations=["test-id", "test-id"],  # All are paper_id
+        )
+
+        section = engine._render_paper_section(entry)
+
+        # Should NOT show "Also appears in" when all topics are filtered
+        assert "Also appears in:" not in section
+
 
 class TestSynthesize:
     """Tests for synthesis operation."""
@@ -414,6 +458,19 @@ class TestSynthesize:
 
         assert stats.topic_slug == "empty-topic"
         assert stats.total_papers == 0
+
+    def test_render_knowledge_base_empty_entries(self, engine):
+        """Test rendering Knowledge Base with empty entries list."""
+        content = engine._render_knowledge_base("test-topic", [], {})
+
+        # Should still render header and overview
+        assert "# Knowledge Base: test-topic" in content
+        assert "## Overview" in content
+        assert "**Total Papers:** 0" in content
+        # Should NOT render "Top Papers by Quality" section
+        assert "## Top Papers by Quality" not in content
+        # Should still render "All Papers" section
+        assert "## All Papers" in content
 
     def test_synthesize_creates_kb_file(
         self, engine, mock_registry_service, sample_registry_entry, temp_output_dir
@@ -563,6 +620,52 @@ class TestAtomicWrite:
         # Verify no temp files left behind
         temp_files = list(topic_dir.glob(".kb_*.tmp"))
         assert len(temp_files) == 0
+
+    def test_atomic_write_temp_file_creation_failure(
+        self, engine, temp_output_dir, mocker
+    ):
+        """Test atomic write handles temp file creation failure."""
+        import tempfile
+
+        topic_dir = temp_output_dir / "test-topic"
+        topic_dir.mkdir(parents=True)
+        file_path = topic_dir / "test.md"
+
+        # Mock tempfile.mkstemp to fail
+        mocker.patch.object(
+            tempfile, "mkstemp", side_effect=OSError("Cannot create temp file")
+        )
+
+        result = engine._atomic_write(file_path, "test content")
+
+        assert result is False
+
+    def test_atomic_write_failure_after_write(self, engine, temp_output_dir, mocker):
+        """Test atomic write cleanup when error occurs after write."""
+        import os
+
+        topic_dir = temp_output_dir / "test-topic"
+        topic_dir.mkdir(parents=True)
+        file_path = topic_dir / "test.md"
+
+        # Track tmp_path to delete it before the exception handler runs
+        def mock_fdopen(fd, *args, **kwargs):
+            # We need to capture tmp_path differently
+            raise OSError("Write failed after fdopen")
+
+        # Mock os.rename to fail, and ensure temp file doesn't exist for cleanup
+        def mock_rename(src, dst):
+            # Delete the temp file before raising
+            if os.path.exists(src):
+                os.unlink(src)
+            raise OSError("Rename failed")
+
+        mocker.patch.object(os, "rename", side_effect=mock_rename)
+
+        result = engine._atomic_write(file_path, "test content")
+
+        # Should return False on failure
+        assert result is False
 
 
 class TestSynthesizeAllTopics:

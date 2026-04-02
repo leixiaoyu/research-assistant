@@ -390,6 +390,27 @@ class TestExtractTopicSlug:
         # Should use path.parent.parent.name since path.parent.name == "runs"
         assert slug == "my-research-topic"
 
+    def test_extract_topic_slug_with_output_not_in_parts(self) -> None:
+        """Test topic slug extraction when 'output' ValueError is raised."""
+        parser = ReportParser()
+        # Path without 'output' in parts triggers ValueError in parts.index("output")
+        path = Path("/some/random/path/topic-name/file.md")
+
+        slug = parser._extract_topic_slug(path)
+        # Should fall back to parent directory name
+        assert slug == "topic-name"
+
+    def test_extract_topic_slug_output_is_last(self) -> None:
+        """Test when 'output' is the last element in path."""
+        parser = ReportParser()
+        # Path where 'output' is the last directory
+        path = Path("/some/path/output")
+
+        slug = parser._extract_topic_slug(path)
+        # Should fall back to parent directory name since output_idx + 1 >= len(parts)
+        # The fallback logic returns path.parent.name which is "path"
+        assert slug == "path"
+
 
 class TestCleanTitle:
     """Tests for _clean_title method."""
@@ -493,6 +514,17 @@ class TestTruncateSummary:
         truncated = parser._truncate_summary(summary)
         # Should not cut in middle of a word
         assert not truncated.rstrip("...").endswith("Wor")
+
+    def test_truncate_no_good_word_boundary(self) -> None:
+        """Test truncation when no good word boundary exists."""
+        parser = ReportParser(max_summary_length=50)
+        # Create a summary with first space very early, no space in second half
+        summary = "W VeryLongWordWithoutSpacesThatExceedsTheMaximumLengthLimit"
+
+        truncated = parser._truncate_summary(summary)
+        # Should truncate at max_length since no good word boundary
+        assert truncated.endswith("...")
+        assert len(truncated) <= 53  # 50 + "..."
 
 
 class TestFindDeltaBriefs:
@@ -616,6 +648,35 @@ No summary here.
         # May return None if no blockquote or engineering summary
         # The implementation extracts blockquotes only if > 50 chars
         assert summary is None
+
+    def test_fallback_to_short_abstract_rejected(self) -> None:
+        """Test that short abstract (<=50 chars) is rejected as fallback."""
+        parser = ReportParser()
+        section = """
+### Paper Title
+
+> Short abstract here.
+
+---
+"""
+        summary = parser._extract_summary_from_section(section)
+        # Should return None because abstract is too short (<=50 chars)
+        assert summary is None
+
+    def test_fallback_to_long_abstract_accepted(self) -> None:
+        """Test that long abstract (>50 chars) is accepted as fallback."""
+        parser = ReportParser()
+        section = """
+### Paper Title
+
+> This is a sufficiently long abstract that exceeds fifty characters
+> and should be accepted as a valid summary fallback option.
+
+---
+"""
+        summary = parser._extract_summary_from_section(section)
+        assert summary is not None
+        assert "sufficiently long abstract" in summary
 
     def test_extract_general_engineering_summary(self) -> None:
         """Test extracting general engineering summary without confidence score."""

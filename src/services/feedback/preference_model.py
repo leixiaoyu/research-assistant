@@ -298,17 +298,15 @@ class PreferenceModel:
                 beta = self._beta[paper_id]
             else:
                 # Uninformative prior for unknown papers
+                # Thompson Sampling naturally explores unknown papers
+                # through wider Beta distributions
                 alpha = 1.0
                 beta = 1.0
 
-            # Add exploration bonus for unknown papers
-            uncertainty = 1.0 / math.sqrt(alpha + beta)
-
-            # Sample from Beta distribution
+            # Thompson Sampling: sample from Beta distribution
+            # Unknown papers have wider distributions (alpha=beta=1),
+            # providing natural exploration without explicit bonus
             sampled_score = random.betavariate(alpha, beta)
-
-            # Add uncertainty bonus
-            sampled_score += self.exploration_rate * uncertainty
 
             sampled_scores.append((paper, sampled_score))
 

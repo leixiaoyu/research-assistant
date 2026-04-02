@@ -119,46 +119,45 @@ class EmbeddingService:
         return self._model is None and self.fallback != "none"
 
     async def _compute_tfidf_embedding(self, text: str) -> np.ndarray:
-        """Compute TF-IDF based embedding as fallback.
+        """Compute hash-based embedding as fallback.
+
+        Uses HashingVectorizer which doesn't require corpus fitting,
+        making it suitable for single-document embedding. This avoids
+        the TF-IDF pitfall of fitting on a single text.
 
         Args:
             text: Text to embed.
 
         Returns:
-            TF-IDF vector padded/truncated to EMBEDDING_DIM.
+            Hash-based vector of shape (EMBEDDING_DIM,).
         """
         try:
-            from sklearn.feature_extraction.text import TfidfVectorizer
+            from sklearn.feature_extraction.text import HashingVectorizer
         except ImportError:  # pragma: no cover - external library check
             logger.error(
-                "sklearn not installed for TF-IDF fallback"
+                "sklearn not installed for hash-based fallback"
             )  # pragma: no cover
             return np.zeros(self.EMBEDDING_DIM, dtype=np.float32)  # pragma: no cover
 
         if self._tfidf_vectorizer is None:
-            vectorizer = TfidfVectorizer(
-                max_features=self.EMBEDDING_DIM,
+            # HashingVectorizer doesn't need fitting - it uses a hash
+            # function to map terms to features deterministically
+            self._tfidf_vectorizer = HashingVectorizer(
+                n_features=self.EMBEDDING_DIM,
                 stop_words="english",
+                norm="l2",  # L2 normalize for cosine similarity
+                alternate_sign=False,  # All positive values
             )
-            # Fit on the text (will be refitted as more texts come in)
-            vectorizer.fit([text])
-            self._tfidf_vectorizer = vectorizer
-        else:
-            vectorizer = self._tfidf_vectorizer
+
+        vectorizer = self._tfidf_vectorizer
+        assert vectorizer is not None  # For mypy type narrowing
 
         try:
-            # Transform text to TF-IDF vector
-            tfidf_vec = vectorizer.transform([text]).toarray()[0]
-
-            # Pad or truncate to match EMBEDDING_DIM
-            if len(tfidf_vec) < self.EMBEDDING_DIM:
-                padded = np.zeros(self.EMBEDDING_DIM, dtype=np.float32)
-                padded[: len(tfidf_vec)] = tfidf_vec
-                return padded
-            result: np.ndarray = tfidf_vec[: self.EMBEDDING_DIM].astype(np.float32)
-            return result
+            # Transform text to hash-based vector
+            hash_vec: np.ndarray = vectorizer.transform([text]).toarray()[0]
+            return hash_vec.astype(np.float32)
         except Exception as e:
-            logger.error(f"TF-IDF embedding failed: {e}")
+            logger.error(f"Hash-based embedding failed: {e}")
             return np.zeros(self.EMBEDDING_DIM, dtype=np.float32)
 
     def _prepare_text(self, paper: PaperLike) -> str:

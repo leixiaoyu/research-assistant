@@ -207,10 +207,12 @@ output/
 - [Phase 3.1: Concurrent Orchestration](docs/specs/PHASE_3.1_SPEC.md) - ✅ Complete (Async Workers & Resource Limiting)
 - [Phase 3.2: Semantic Scholar Activation](docs/specs/PHASE_3.2_SPEC.md) - 🎯 Ready (Multi-Provider Intelligence)
 - [Phase 4: Hardening](docs/specs/PHASE_4_SPEC.md) - 📋 Planned (Production Readiness)
+- [Phase 8: Deep Research Agent](docs/specs/PHASE_8_DRA_SPEC.md) - 📋 Planned (Autonomous Research Agent)
 
 ### Proposals
 - [Proposal 001: Discovery Provider Strategy](docs/proposals/001_DISCOVERY_PROVIDER_STRATEGY.md) - ✅ Approved & Implemented
 - [Proposal 002: PDF Extraction Reliability](docs/proposals/002_PDF_EXTRACTION_RELIABILITY.md) - ✅ Approved & Implemented
+- [Proposal 004: Deep Research Agent (DRA)](docs/proposals/004_OPENRESEARCHER_OFFLINE_TRAJECTORY_SYNTHESIS.md) - 📋 Draft (Autonomous, Self-Improving Research)
 
 ### Development
 - [CLAUDE.md](CLAUDE.md) - Development guide for Claude Code integration

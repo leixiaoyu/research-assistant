@@ -27,6 +27,15 @@ This document outlines a phased delivery plan to build the Automated Research In
 │ Delta    │Cross-    │   LLM    │Research  │   CLI    │ Utility  │ Model    │ Enhanced │
 │ Briefs   │Synthesis │ Decompose│ Pipeline │ Commands │ Patterns │Consolid. │ Discovery│
 └──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
+
+┌──────────┬──────────┐
+│ Phase 8  │ Phase 4  │
+│📋Planned │📋Planned │
+│          │          │
+│   DRA    │Production│
+│Autonomous│Hardening │
+│ Research │          │
+└──────────┴──────────┘
 ```
 
 ### Investment & Returns
@@ -241,6 +250,101 @@ Despite retrieving 90+ papers, the synthesis phase covered 0 topics due to poor 
 4. **Relevance Ranking** - LLM-based semantic relevance scoring
 
 **Details:** See [PHASE_6_DISCOVERY_ENHANCEMENT_SPEC.md](specs/PHASE_6_DISCOVERY_ENHANCEMENT_SPEC.md) for full specification.
+
+---
+
+### Phase 8: Deep Research Agent (DRA)
+**Status:** 📋 **PLANNED**
+**Duration:** 4-5 weeks
+**Dependencies:** Phase 3.5 (Global Registry), Phase 5.1 (LLM Service Decomposition), Phase 6 Core (Enhanced Discovery, optional)
+**Goal:** Autonomous, self-improving research agent with iterative reasoning and trajectory learning
+
+#### Problem Addressed
+ARISP currently operates as a pipeline-driven ingestion system, not an autonomous research agent. It cannot:
+- Perform iterative, multi-step research (only single-shot API queries)
+- Conduct evidence gathering or cross-paper reasoning
+- Learn from execution trajectories to improve over time
+- Operate offline (every run requires expensive, rate-limited API calls)
+
+#### Key Deliverables (4 Sub-Phases)
+
+**Phase 8.1: Corpus Infrastructure (Week 1-2)**
+✅ Corpus Manager with ingest, chunking, and refresh operations
+✅ SPECTER2 embeddings for academic paper search
+✅ FAISS index (dense) + BM25 index (sparse)
+✅ Hybrid retrieval with Reciprocal Rank Fusion (RRF)
+✅ Unit tests with >99% coverage
+
+**Phase 8.2: Browser Primitives & Agent Loop (Week 2-3)**
+✅ ResearchBrowser with search/open/find primitives
+✅ DeepResearchAgent with ReAct (Reasoning + Acting) loop
+✅ System prompt with research protocol
+✅ Resource limits and timeout handling
+✅ CLI command: `arisp research "question"`
+✅ Unit tests with >95% coverage
+
+**Phase 8.3: Trajectory Collection & Learning (Week 3-4)**
+✅ TrajectoryCollector with recording and analysis
+✅ Pattern extraction from trajectory history
+✅ Contextual learning tip generation
+✅ Adaptive memory retrieval for strategy tips
+✅ Quality scoring and JSONL export
+✅ CLI commands: `arisp trajectories analyze`, `arisp trajectories export`
+✅ Unit tests with >95% coverage
+
+**Phase 8.4: Integration & Validation (Week 4-5)**
+✅ Batch trajectory synthesis over question sets
+✅ Decision attribution analysis (identify failure/success patterns)
+✅ End-to-end integration tests
+✅ Performance benchmarking (latency, cost analysis)
+✅ Documentation (user guide, API reference)
+
+#### Architecture Overview
+
+```
+Deep Research Agent (DRA)
+├── Corpus Manager (offline indexed corpus from ARISP papers)
+├── Research Browser (search/open/find browser primitives)
+├── Agent Loop (ReAct-style iterative reasoning)
+└── Trajectory Learning (analyze patterns, generate tips)
+    ↓
+Offline Search Engine (FAISS + BM25 hybrid retrieval)
+    ↓
+ARISP Paper Registry + LLM Service
+```
+
+#### Success Metrics
+
+**Phase 8.1 (Corpus):**
+- 95%+ of registry papers successfully ingested and indexed
+- Search latency < 200ms for 10K-chunk corpus
+- Hybrid retrieval outperforms dense-only on manual spot checks
+
+**Phase 8.2 (Agent):**
+- Agent produces cited answers for 70%+ of test questions
+- Average session completes in < 50 turns
+- All resource limits enforced (verified by tests)
+
+**Phase 8.3 (Trajectory Learning):**
+- 80%+ of trajectories pass quality filters
+- Trajectory analysis produces actionable insights (5+ contextual tips)
+- Agent performance improves measurably after learning cycle (10+ trajectories)
+
+**Phase 8.4 (Integration):**
+- 1000+ quality trajectories generated in batch synthesis
+- Decision attribution identifies top 5 failure/success patterns
+- Full documentation complete
+
+#### Research Foundation
+
+- [OpenResearcher (Li et al., 2025)](https://arxiv.org/abs/2603.20278) - 97K trajectories, 34.0+ point improvement
+- [ReAct Framework (Yao et al., 2022)](https://arxiv.org/abs/2210.03629) - Reasoning + Acting pattern
+- [Trajectory-Informed Memory (2025)](https://arxiv.org/abs/2603.10600) - 14.3+ point gains through learning
+- [Tongyi DeepResearch (Alibaba, 2025)](https://github.com/Alibaba-NLP/DeepResearch)
+- [LangChain Open Deep Research (2025)](https://github.com/langchain-ai/open_deep_research)
+- [SPECTER2 (Allen AI)](https://allenai.org/blog/specter2) - Citation-aware paper embeddings
+
+**Details:** See [PHASE_8_DRA_SPEC.md](specs/PHASE_8_DRA_SPEC.md) and [Proposal 004](proposals/004_OPENRESEARCHER_OFFLINE_TRAJECTORY_SYNTHESIS.md) for full specification.
 
 ---
 

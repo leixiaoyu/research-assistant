@@ -61,6 +61,7 @@ dmypy.json
 /cache/
 /temp/
 /checkpoints/
+/data/
 /logs/*
 !logs/.gitkeep
 *.pdf

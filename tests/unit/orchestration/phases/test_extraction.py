@@ -294,3 +294,73 @@ class TestExtractionPhase:
         assert results[0].paper_id == "paper1"
         assert results[0].quality_score == 0.85
         assert results[0].pdf_available is True
+
+    @pytest.mark.asyncio
+    async def test_get_processing_results_fallback_without_extraction(
+        self, mock_context, sample_papers
+    ):
+        """Test _get_processing_results with paper but no extraction."""
+        # No extraction service
+        mock_context.extraction_service = None
+
+        # Create mock extracted paper WITHOUT extraction (line 427->430 branch)
+        mock_extracted = MagicMock()
+        mock_extracted.metadata = MagicMock()
+        mock_extracted.metadata.paper_id = "paper1"
+        mock_extracted.metadata.title = "Test Paper"
+        mock_extracted.extraction = None  # No extraction
+        mock_extracted.pdf_available = True
+
+        phase = ExtractionPhase(mock_context)
+        results = phase._get_processing_results(
+            sample_papers, "machine-learning", [mock_extracted]
+        )
+
+        assert len(results) == 1
+        assert results[0].paper_id == "paper1"
+        assert results[0].quality_score == 0.0  # Default when no extraction
+
+    @pytest.mark.asyncio
+    async def test_get_processing_results_fallback_no_extracted_papers(
+        self, mock_context, sample_papers
+    ):
+        """Test _get_processing_results fallback without extracted papers."""
+        # No extraction service
+        mock_context.extraction_service = None
+
+        phase = ExtractionPhase(mock_context)
+        # Call with extracted_papers=None (line 191->199 branch)
+        results = phase._get_processing_results(sample_papers, "machine-learning", None)
+
+        # Should create basic results from papers
+        assert len(results) == 1
+        assert results[0].paper_id == "paper1"
+        assert results[0].status.value == "new"
+
+    @pytest.mark.asyncio
+    async def test_execute_topic_failure_with_no_output_file(
+        self, mock_context, sample_topic, sample_papers
+    ):
+        """Test execute handles topic failure without output file."""
+        mock_context.config.research_topics = [sample_topic]
+        mock_context.discovered_papers = {"machine-learning": sample_papers}
+        mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
+            topic_slug="machine-learning"
+        )
+        # Make extraction fail before output file is created
+        mock_context.extraction_service = MagicMock()
+        mock_context.extraction_service.process_papers = AsyncMock(
+            side_effect=Exception("Extraction service failed")
+        )
+
+        phase = ExtractionPhase(mock_context)
+        result = await phase.execute()
+
+        # Topic should be marked as failed
+        assert result.topics_failed == 1
+        assert result.topics_processed == 0
+        # Should have called add_error with the exception message
+        mock_context.add_error.assert_called_once()
+        # Error message should be in the call
+        call_args = mock_context.add_error.call_args
+        assert "Extraction service failed" in str(call_args)

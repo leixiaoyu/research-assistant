@@ -886,6 +886,18 @@ class TestRegistryServiceFileLocking:
         # os.close should have been called to clean up
         assert len(close_calls) == 1
 
+    def test_lock_fd_setter(self, temp_registry_path):
+        """Test _lock_fd setter for backward compatibility."""
+        service = RegistryService(registry_path=temp_registry_path)
+
+        # Test setter
+        service._lock_fd = 42
+        assert service._lock_fd == 42
+
+        # Test resetting to None
+        service._lock_fd = None
+        assert service._lock_fd is None
+
 
 class TestProviderIdLookup:
     """Tests for provider ID lookup in find_existing."""

@@ -10,6 +10,9 @@ Usage:
     python -m src.cli health
     python -m src.cli synthesize
     python -m src.cli validate config/research_config.yaml
+    python -m src.cli feedback rate <paper_id> <rating>
+    python -m src.cli feedback similar <paper_id>
+    python -m src.cli feedback analytics
 """
 
 import typer
@@ -20,6 +23,7 @@ from src.cli.catalog import catalog_app, catalog_command
 from src.cli.schedule import schedule_app, schedule_command
 from src.cli.health import health_command
 from src.cli.synthesize import synthesize_command
+from src.cli.feedback import app as feedback_app
 
 # Create main app
 app = typer.Typer(help="ARISP: Automated Research Ingestion & Synthesis Pipeline")
@@ -33,6 +37,7 @@ app.command(name="synthesize")(synthesize_command)
 # Register sub-applications
 app.add_typer(catalog_app, name="catalog")
 app.add_typer(schedule_app, name="schedule")
+app.add_typer(feedback_app, name="feedback")
 
 # Legacy command registrations for backward compatibility
 # These allow the old invocation style: python -m src.cli catalog show
@@ -51,4 +56,5 @@ __all__ = [
     "schedule_command",
     "health_command",
     "synthesize_command",
+    "feedback_app",
 ]

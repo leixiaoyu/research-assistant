@@ -17,6 +17,8 @@ from src.services.embeddings.embedding_service import EmbeddingService
 
 if TYPE_CHECKING:
     from src.services.registry_service import RegistryService
+    from src.services.feedback.preference_model import PreferenceModel
+    from src.services.feedback.feedback_service import FeedbackService
 
 logger = structlog.get_logger()
 
@@ -46,6 +48,8 @@ class ResultAggregator:
         registry_service: Optional["RegistryService"] = None,
         config: Optional[AggregationConfig] = None,
         query: Optional[str] = None,
+        preference_model: Optional["PreferenceModel"] = None,
+        feedback_service: Optional["FeedbackService"] = None,
     ):
         """Initialize ResultAggregator.
 
@@ -53,10 +57,14 @@ class ResultAggregator:
             registry_service: Registry for duplicate detection
             config: Aggregation configuration
             query: Research query for relevance filtering
+            preference_model: Optional preference learning model
+            feedback_service: Optional feedback service for training data
         """
         self.registry = registry_service
         self.config = config or AggregationConfig()
         self.query = query
+        self.preference_model = preference_model
+        self.feedback_service = feedback_service
 
         # Initialize relevance filter if enabled and query provided
         self.relevance_filter: Optional[RelevanceFilter] = None
@@ -106,8 +114,8 @@ class ResultAggregator:
                 deduplicated, self.query
             )
 
-        # 6. Rank papers
-        ranked = self._rank(filtered)
+        # 6. Rank papers (now async to support preference model)
+        ranked = await self._rank(filtered)
 
         # 7. Apply limit if configured
         if self.config.max_papers_per_topic > 0:
@@ -333,7 +341,7 @@ class ResultAggregator:
             score += 1
         return score
 
-    def _rank(self, papers: List[PaperMetadata]) -> List[PaperMetadata]:
+    async def _rank(self, papers: List[PaperMetadata]) -> List[PaperMetadata]:
         """Rank papers by composite score.
 
         Score components (configurable weights):
@@ -341,6 +349,7 @@ class ResultAggregator:
         - recency: based on publication date
         - source_count: papers found by multiple sources
         - pdf_availability: binary score
+        - preference_score: user preference if model is trained
 
         Args:
             papers: Papers to rank
@@ -350,13 +359,26 @@ class ResultAggregator:
         """
         weights = self.config.ranking_weights
 
+        # Calculate base scores for all papers
+        base_scores: Dict[str, float] = {}
         ranked_papers = []
+
         for paper in papers:
             score = self._calculate_score(paper, weights)
-            updated = paper.model_copy(update={"ranking_score": score})
-            ranked_papers.append(updated)
+            base_scores[paper.paper_id] = score
 
-        return sorted(ranked_papers, key=lambda p: p.ranking_score or 0, reverse=True)
+        # Apply preference ranking if model is trained
+        if self.preference_model and self.preference_model.is_trained:
+            papers = await self._apply_preference_ranking(papers, base_scores)
+        else:
+            # Just set ranking_score to base score
+            for paper in papers:
+                score = base_scores[paper.paper_id]
+                updated = paper.model_copy(update={"ranking_score": score})
+                ranked_papers.append(updated)
+            papers = ranked_papers
+
+        return sorted(papers, key=lambda p: p.ranking_score or 0, reverse=True)
 
     def _calculate_score(
         self,
@@ -439,3 +461,50 @@ class ResultAggregator:
             return 0.0
         else:
             return 1.0 - (days_old - 365) / (365 * 4)
+
+    async def _apply_preference_ranking(
+        self,
+        papers: List[PaperMetadata],
+        base_scores: Dict[str, float],
+    ) -> List[PaperMetadata]:
+        """Apply preference-based ranking to papers.
+
+        Blends user preference scores with base quality scores.
+
+        Args:
+            papers: Papers to rank
+            base_scores: Base quality scores for each paper
+
+        Returns:
+            Papers with preference_score and ranking_score set
+        """
+        if not self.preference_model:
+            return papers
+
+        ranked_papers = []
+
+        for paper in papers:
+            # Get preference score
+            pref_score = await self.preference_model.predict_preference(paper)
+
+            # Blend with base score
+            base_score = base_scores.get(paper.paper_id, 0.0)
+            blend_weight = self.preference_model.blend_weight
+            blended_score = blend_weight * pref_score + (1 - blend_weight) * base_score
+
+            # Update paper with scores
+            updated = paper.model_copy(
+                update={
+                    "preference_score": pref_score,
+                    "ranking_score": blended_score,
+                }
+            )
+            ranked_papers.append(updated)
+
+        logger.info(
+            "preference_ranking_applied",
+            paper_count=len(ranked_papers),
+            blend_weight=self.preference_model.blend_weight,
+        )
+
+        return ranked_papers

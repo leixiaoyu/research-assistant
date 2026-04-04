@@ -19,6 +19,7 @@ from src.models.config import (
     CitationExplorationConfig,
     QueryExpansionConfig,
     AggregationConfig,
+    GlobalSettings,
 )
 from src.models.paper import PaperMetadata
 from src.models.provider import ProviderMetrics, ProviderComparison
@@ -85,6 +86,7 @@ class DiscoveryService:
         config: Optional[ProviderSelectionConfig] = None,
         quality_scorer: Optional[QualityScorer] = None,
         enhanced_discovery_service: Optional["EnhancedDiscoveryService"] = None,
+        settings: Optional[GlobalSettings] = None,
     ):
         """Initialize discovery service with providers.
 
@@ -104,16 +106,19 @@ class DiscoveryService:
                 for dependency injection. If provided, enhanced_search() will use
                 this instance instead of creating one internally. This enables
                 easier testing and customization of the 4-stage pipeline.
+            settings: Global settings including ArXiv configuration (Phase 7 Fix I1).
         """
         self.config = config or ProviderSelectionConfig()
         self.providers: Dict[ProviderType, DiscoveryProvider] = {}
         self._api_key = api_key
+        self._settings = settings
 
         # Phase 6: Store injected enhanced service (optional DI)
         self._enhanced_service = enhanced_discovery_service
 
         # Initialize ArXiv (Always available)
-        self.providers[ProviderType.ARXIV] = ArxivProvider()
+        # Phase 7 Fix I1: Pass GlobalSettings to ArxivProvider for query configuration
+        self.providers[ProviderType.ARXIV] = ArxivProvider(settings=settings)
 
         # Initialize Semantic Scholar (Only if key provided)
         if api_key:

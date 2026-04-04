@@ -96,6 +96,15 @@ class GlobalSettings(BaseModel):
         default=None,
         description="Result aggregation settings (Phase 7.2)",
     )
+    # Phase 7 Fixes: ArXiv query improvements
+    arxiv_use_structured_query: bool = Field(
+        True,
+        description="Use structured field search (ti:, abs:, cat:) for ArXiv",
+    )
+    arxiv_default_categories: List[str] = Field(
+        default_factory=lambda: ["cs.CL", "cs.LG", "cs.AI"],
+        description="Default ArXiv categories for structured queries (Phase 7 Fix I1)",
+    )
 
 
 class ResearchConfig(BaseModel):

@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field
 
 from src.models.config import AggregationConfig, RankingWeights
 from src.models.paper import PaperMetadata
+from src.services.discovery.relevance_filter import RelevanceFilter
+from src.services.embeddings.embedding_service import EmbeddingService
 
 if TYPE_CHECKING:
     from src.services.registry_service import RegistryService
@@ -43,15 +45,27 @@ class ResultAggregator:
         self,
         registry_service: Optional["RegistryService"] = None,
         config: Optional[AggregationConfig] = None,
+        query: Optional[str] = None,
     ):
         """Initialize ResultAggregator.
 
         Args:
             registry_service: Registry for duplicate detection
             config: Aggregation configuration
+            query: Research query for relevance filtering
         """
         self.registry = registry_service
         self.config = config or AggregationConfig()
+        self.query = query
+
+        # Initialize relevance filter if enabled and query provided
+        self.relevance_filter: Optional[RelevanceFilter] = None
+        if self.config.relevance_filter.enabled and query:
+            embedding_service = EmbeddingService()
+            self.relevance_filter = RelevanceFilter(
+                embedding_service=embedding_service,
+                threshold=self.config.relevance_filter.threshold,
+            )
 
     async def aggregate(
         self,
@@ -85,10 +99,17 @@ class ResultAggregator:
         # 4. Deduplicate
         deduplicated = self._deduplicate(all_papers)
 
-        # 5. Rank papers
-        ranked = self._rank(deduplicated)
+        # 5. Apply relevance filtering if enabled
+        filtered = deduplicated
+        if self.relevance_filter and self.query:
+            filtered = await self.relevance_filter.filter_papers(
+                deduplicated, self.query
+            )
 
-        # 6. Apply limit if configured
+        # 6. Rank papers
+        ranked = self._rank(filtered)
+
+        # 7. Apply limit if configured
         if self.config.max_papers_per_topic > 0:
             ranked = ranked[: self.config.max_papers_per_topic]
 
@@ -96,6 +117,7 @@ class ResultAggregator:
             "aggregation_complete",
             total_raw=total_raw,
             after_dedup=len(deduplicated),
+            after_filter=len(filtered),
             after_ranking=len(ranked),
             source_breakdown=source_breakdown,
         )

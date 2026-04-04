@@ -56,7 +56,7 @@ class PaperMetadata(BaseModel):
         None,
         description=(
             "Provider that discovered this paper "
-            "(arxiv, semantic_scholar, openalex, etc.)"
+            "(arxiv, semantic_scholar, openalex, feedback_recommended, etc.)"
         ),
     )
     discovery_method: Optional[str] = Field(
@@ -74,6 +74,14 @@ class PaperMetadata(BaseModel):
         ge=0.0,
         le=1.0,
         description="Aggregation ranking score for multi-source results",
+    )
+
+    # Phase 7.3: Feedback integration fields
+    preference_score: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="User preference score from feedback learning",
     )
 
     model_config = ConfigDict(populate_by_name=True)

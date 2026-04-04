@@ -50,6 +50,7 @@ from src.models.config.phase7 import (
     QueryExpansionConfig,
     RelevanceFilterConfig,
     AggregationConfig,
+    FeedbackIntegrationConfig,
 )
 
 # Settings and root config
@@ -85,6 +86,7 @@ __all__ = [
     "QueryExpansionConfig",
     "RelevanceFilterConfig",
     "AggregationConfig",
+    "FeedbackIntegrationConfig",
     # Settings
     "GlobalSettings",
     "ResearchConfig",

@@ -123,6 +123,34 @@ class RelevanceFilterConfig(BaseModel):
     )
 
 
+class FeedbackIntegrationConfig(BaseModel):
+    """Configuration for Phase 7.3 feedback integration into discovery.
+
+    Controls how user feedback influences paper ranking and recommendations.
+
+    Attributes:
+        enabled: Enable feedback integration
+        preference_blend_weight: Weight of preference score vs base score (0-1)
+        min_feedback_for_training: Minimum feedback entries before training
+        recommendation_count: Number of similar papers to recommend
+        similarity_threshold: Minimum similarity score for recommendations
+    """
+
+    enabled: bool = Field(True, description="Enable feedback integration")
+    preference_blend_weight: float = Field(
+        0.3, ge=0.0, le=1.0, description="Weight of preference vs base score"
+    )
+    min_feedback_for_training: int = Field(
+        10, ge=1, description="Minimum feedback for training"
+    )
+    recommendation_count: int = Field(
+        10, ge=0, le=50, description="Number of recommended papers"
+    )
+    similarity_threshold: float = Field(
+        0.5, ge=0.0, le=1.0, description="Minimum similarity for recommendations"
+    )
+
+
 class AggregationConfig(BaseModel):
     """Configuration for multi-source result aggregation (Phase 7.2).
 

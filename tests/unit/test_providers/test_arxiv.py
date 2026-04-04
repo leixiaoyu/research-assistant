@@ -38,10 +38,16 @@ def test_validate_query(provider):
 
 
 def test_build_query_params(provider, topic_arxiv):
-    # Recent
+    # Recent - with structured query enabled by default
     q = provider._build_query_params(topic_arxiv, "machine learning")
-    assert "search_query=all%3Amachine%20learning" in q
+    # Should use ti:/abs: fields (structured query) or all: (legacy)
+    assert "search_query=" in q
     assert "submittedDate" in q
+    # Verify structured query fields are present when enabled
+    if provider.use_structured_query:
+        assert "ti%3A" in q or "abs%3A" in q
+    else:
+        assert "all%3A" in q
 
     # Since Year
     topic_arxiv.timeframe = TimeframeSinceYear(value=2023)
@@ -189,6 +195,192 @@ def test_arxiv_properties(provider):
     """Cover name and requires_api_key properties"""
     assert provider.name == "arxiv"
     assert provider.requires_api_key is False
+
+
+# Phase 7 Fix I1: ArXiv Structured Query Tests
+
+
+def test_structured_query_simple_terms():
+    """Test structured query with simple terms"""
+    from src.models.config import GlobalSettings
+
+    settings = GlobalSettings(
+        arxiv_use_structured_query=True,
+        arxiv_default_categories=["cs.CL", "cs.LG"],
+    )
+    provider = ArxivProvider(settings=settings)
+
+    query = provider._build_structured_query("machine learning")
+
+    # Should search in title OR abstract (may treat as single phrase or split terms)
+    assert "ti:" in query and "abs:" in query
+    # Should include category filter
+    assert "cat:cs.CL" in query
+    assert "cat:cs.LG" in query
+
+
+def test_structured_query_quoted_phrases():
+    """Test structured query with quoted phrases for exact matching"""
+    from src.models.config import GlobalSettings
+
+    settings = GlobalSettings(
+        arxiv_use_structured_query=True,
+        arxiv_default_categories=["cs.AI"],
+    )
+    provider = ArxivProvider(settings=settings)
+
+    query = provider._build_structured_query('"tree of thoughts" reasoning')
+
+    # Should have exact phrase match
+    assert 'ti:"tree of thoughts"' in query or 'abs:"tree of thoughts"' in query
+    # Should search remaining terms
+    assert "ti:reasoning" in query or "abs:reasoning" in query
+    # Should include category filter
+    assert "cat:cs.AI" in query
+
+
+def test_structured_query_no_categories():
+    """Test structured query without category filter"""
+    from src.models.config import GlobalSettings
+
+    settings = GlobalSettings(
+        arxiv_use_structured_query=True,
+        arxiv_default_categories=[],
+    )
+    provider = ArxivProvider(settings=settings)
+
+    query = provider._build_structured_query("neural networks")
+
+    # Should search in title OR abstract
+    assert "ti:" in query
+    assert "abs:" in query
+    # Should NOT include category filter
+    assert "cat:" not in query
+
+
+def test_legacy_query_when_disabled():
+    """Test that legacy all: query is used when structured query is disabled"""
+    from src.models.config import GlobalSettings
+
+    settings = GlobalSettings(
+        arxiv_use_structured_query=False,
+    )
+    provider = ArxivProvider(settings=settings)
+
+    topic = ResearchTopic(
+        query="machine learning",
+        provider="arxiv",
+        timeframe=TimeframeRecent(value="48h"),
+        max_papers=5,
+    )
+
+    params = provider._build_query_params(topic, "machine learning")
+
+    # Should use legacy all: field
+    assert "all%3Amachine%20learning" in params or "all:machine learning" in params
+
+
+def test_structured_query_in_build_params():
+    """Test that structured query is used in _build_query_params"""
+    from src.models.config import GlobalSettings
+
+    settings = GlobalSettings(
+        arxiv_use_structured_query=True,
+        arxiv_default_categories=["cs.CL"],
+    )
+    provider = ArxivProvider(settings=settings)
+
+    topic = ResearchTopic(
+        query="transformers attention",
+        provider="arxiv",
+        timeframe=TimeframeRecent(value="48h"),
+        max_papers=10,
+    )
+
+    params = provider._build_query_params(topic, "transformers attention")
+
+    # Should NOT use all: field
+    assert "all%3A" not in params
+    # Should include title/abstract fields
+    assert "ti%3A" in params or "abs%3A" in params
+    # Should include category
+    assert "cat%3A" in params or "cat:" in params
+
+
+def test_structured_query_with_timeframe():
+    """Test structured query preserves timeframe filtering"""
+    from src.models.config import GlobalSettings
+
+    settings = GlobalSettings(
+        arxiv_use_structured_query=True,
+        arxiv_default_categories=["cs.AI"],
+    )
+    provider = ArxivProvider(settings=settings)
+
+    topic = ResearchTopic(
+        query="GPT",
+        provider="arxiv",
+        timeframe=TimeframeSinceYear(value=2023),
+        max_papers=20,
+    )
+
+    params = provider._build_query_params(topic, "GPT")
+
+    # Should have structured query
+    assert "ti%3A" in params or "abs%3A" in params
+    # Should have timeframe
+    assert "submittedDate" in params
+    assert "202301010000" in params
+
+
+def test_default_settings_use_structured_query():
+    """Test that provider defaults to structured query when no settings provided"""
+    provider = ArxivProvider()
+
+    # Should default to structured query enabled
+    assert provider.use_structured_query is True
+    assert provider.default_categories == ["cs.CL", "cs.LG", "cs.AI"]
+
+
+def test_structured_query_boolean_operators():
+    """Test structured query handles Boolean operators correctly"""
+    from src.models.config import GlobalSettings
+
+    settings = GlobalSettings(
+        arxiv_use_structured_query=True,
+        arxiv_default_categories=["cs.AI"],
+    )
+    provider = ArxivProvider(settings=settings)
+
+    # Query with AND operator
+    query = provider._build_structured_query("neural AND networks")
+
+    # Should search each term in title or abstract
+    assert "ti:neural" in query or "abs:neural" in query
+    assert "ti:networks" in query or "abs:networks" in query
+    # Should have AND between terms
+    assert "AND" in query
+
+
+def test_structured_query_multiple_quoted_phrases():
+    """Test structured query with multiple quoted phrases"""
+    from src.models.config import GlobalSettings
+
+    settings = GlobalSettings(
+        arxiv_use_structured_query=True,
+        arxiv_default_categories=["cs.CL"],
+    )
+    provider = ArxivProvider(settings=settings)
+
+    query = provider._build_structured_query(
+        '"large language models" "in-context learning"'
+    )
+
+    # Should have both exact phrase matches
+    assert (
+        'ti:"large language models"' in query or 'abs:"large language models"' in query
+    )
+    assert 'ti:"in-context learning"' in query or 'abs:"in-context learning"' in query
 
 
 @pytest.mark.asyncio

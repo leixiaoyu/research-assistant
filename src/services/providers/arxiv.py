@@ -24,6 +24,7 @@ from src.models.config import (
     TimeframeRecent,
     TimeframeSinceYear,
     TimeframeDateRange,
+    GlobalSettings,
 )
 from src.models.paper import PaperMetadata, Author
 from src.utils.rate_limiter import RateLimiter
@@ -37,10 +38,24 @@ class ArxivProvider(DiscoveryProvider):
 
     BASE_URL = "https://export.arxiv.org/api/query"
 
-    def __init__(self, rate_limiter: Optional[RateLimiter] = None):
+    def __init__(
+        self,
+        rate_limiter: Optional[RateLimiter] = None,
+        settings: Optional[GlobalSettings] = None,
+    ):
         # ArXiv requires 3 seconds between requests
         self.rate_limiter = rate_limiter or RateLimiter(
             requests_per_minute=20, burst_size=1  # 60/3 = 20
+        )
+        self.settings = settings
+        # Feature flag for structured query (Phase 7 Fix I1)
+        self.use_structured_query = (
+            settings.arxiv_use_structured_query if settings else True
+        )
+        self.default_categories = (
+            settings.arxiv_default_categories
+            if settings
+            else ["cs.CL", "cs.LG", "cs.AI"]
         )
 
     @property
@@ -137,8 +152,11 @@ class ArxivProvider(DiscoveryProvider):
 
     def _build_query_params(self, topic: ResearchTopic, query: str) -> str:
         """Build ArXiv query string"""
-        # Base query
-        q_part = f"all:{query}"
+        # Base query - use structured fields or legacy all: field
+        if self.use_structured_query:
+            q_part = self._build_structured_query(query)
+        else:
+            q_part = f"all:{query}"
 
         # Timeframe
         tf = topic.timeframe
@@ -174,6 +192,59 @@ class ArxivProvider(DiscoveryProvider):
             f"max_results={topic.max_papers}&"
             f"sortBy=submittedDate&sortOrder=descending"
         )
+
+    def _build_structured_query(self, query: str) -> str:
+        """Build structured field query for ArXiv (Phase 7 Fix I1).
+
+        Uses ti: (title) and abs: (abstract) fields for targeted search,
+        with category filtering for computer science papers.
+
+        Args:
+            query: User's search query
+
+        Returns:
+            Structured query string with field prefixes
+        """
+        # Extract quoted phrases for exact matching
+        phrases = re.findall(r'"([^"]+)"', query)
+        # Remove quoted phrases from query to get remaining terms
+        remaining = re.sub(r'"[^"]+"', "", query).strip()
+
+        # Build field queries
+        query_parts = []
+
+        # Add quoted phrases (exact match in title or abstract)
+        for phrase in phrases:
+            query_parts.append(f'(ti:"{phrase}" OR abs:"{phrase}")')
+
+        # Add remaining terms (search in title and abstract)
+        if remaining:
+            # Split on common Boolean operators, preserve them
+            terms = re.split(r"\s+(AND|OR|NOT)\s+", remaining)
+            term_query_parts = []
+
+            for term in terms:
+                term = term.strip()
+                if not term or term in ("AND", "OR", "NOT"):
+                    continue
+                # Search each term in title or abstract
+                term_query_parts.append(f"(ti:{term} OR abs:{term})")
+
+            if term_query_parts:
+                query_parts.append(f"({' AND '.join(term_query_parts)})")
+
+        # Combine all parts
+        content_query = (
+            " AND ".join(query_parts) if query_parts else f"(ti:{query} OR abs:{query})"
+        )
+
+        # Add category filter for computer science papers
+        if self.default_categories:
+            cat_parts = [f"cat:{cat}" for cat in self.default_categories]
+            cat_query = f"({' OR '.join(cat_parts)})"
+            return f"({content_query}) AND {cat_query}"
+
+        return content_query
 
     def _parse_feed(self, feed) -> List[PaperMetadata]:
         papers = []

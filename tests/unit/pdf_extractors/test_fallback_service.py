@@ -170,3 +170,199 @@ async def test_multiple_successful_backends_picks_best(service, mock_extractors)
         assert result.success is True
         assert result.backend == PDFBackend.PDFPLUMBER
         assert result.quality_score == 0.9  # Higher quality selected
+
+
+def test_get_health_status_all_available(service):
+    """Test health status when all extractors are available"""
+    health = service.get_health_status()
+
+    assert health["healthy"] is True
+    assert "pymupdf" in health["available_extractors"]
+    assert "pdfplumber" in health["available_extractors"]
+    assert health["total_available"] == 2
+    assert health["total_enabled"] == 2
+    assert health["total_ready"] == 2
+
+
+def test_get_health_status_none_available():
+    """Test health status when no extractors are available"""
+    settings = PDFSettings(
+        fallback_chain=[
+            PDFBackendConfig(backend="pymupdf", enabled=True),
+        ],
+    )
+
+    with (
+        patch(
+            "src.services.pdf_extractors.fallback_service.PyMuPDFExtractor",
+            return_value=Mock(
+                name=PDFBackend.PYMUPDF, validate_setup=Mock(return_value=False)
+            ),
+        ),
+        patch(
+            "src.services.pdf_extractors.fallback_service.PDFPlumberExtractor",
+            return_value=Mock(
+                name=PDFBackend.PDFPLUMBER, validate_setup=Mock(return_value=False)
+            ),
+        ),
+        patch(
+            "src.services.pdf_extractors.fallback_service.PandocExtractor",
+            return_value=Mock(
+                name=PDFBackend.PANDOC, validate_setup=Mock(return_value=False)
+            ),
+        ),
+    ):
+        service = FallbackPDFService(settings)
+        health = service.get_health_status()
+
+        assert health["healthy"] is False
+        assert health["total_available"] == 0
+        assert health["total_ready"] == 0
+
+
+def test_get_health_status_some_enabled_some_disabled():
+    """Test health status when some extractors are disabled in config"""
+    settings = PDFSettings(
+        fallback_chain=[
+            PDFBackendConfig(backend="pymupdf", enabled=True),
+            PDFBackendConfig(backend="pdfplumber", enabled=False),
+        ],
+    )
+
+    # Create mocks with proper name attribute (not Mock's special name parameter)
+    pymupdf_mock = Mock()
+    pymupdf_mock.name = PDFBackend.PYMUPDF
+    pymupdf_mock.validate_setup.return_value = True
+
+    pdfplumber_mock = Mock()
+    pdfplumber_mock.name = PDFBackend.PDFPLUMBER
+    pdfplumber_mock.validate_setup.return_value = True
+
+    pandoc_mock = Mock()
+    pandoc_mock.name = PDFBackend.PANDOC
+    pandoc_mock.validate_setup.return_value = False
+
+    with (
+        patch(
+            "src.services.pdf_extractors.fallback_service.PyMuPDFExtractor",
+            return_value=pymupdf_mock,
+        ),
+        patch(
+            "src.services.pdf_extractors.fallback_service.PDFPlumberExtractor",
+            return_value=pdfplumber_mock,
+        ),
+        patch(
+            "src.services.pdf_extractors.fallback_service.PandocExtractor",
+            return_value=pandoc_mock,
+        ),
+    ):
+        service = FallbackPDFService(settings)
+        health = service.get_health_status()
+
+        assert health["healthy"] is True
+        assert health["total_available"] == 2
+        assert health["total_enabled"] == 1
+        assert health["total_ready"] == 1
+        assert "pymupdf" in health["enabled_and_available"]
+        assert "pdfplumber" not in health["enabled_and_available"]
+
+
+@pytest.mark.asyncio
+async def test_no_enabled_extractors_returns_error():
+    """Test that no enabled extractors returns proper error (Issue I3 fix)"""
+    settings = PDFSettings(
+        fallback_chain=[
+            PDFBackendConfig(backend="pymupdf", enabled=False),
+            PDFBackendConfig(backend="pdfplumber", enabled=False),
+        ],
+    )
+
+    # Create mocks with proper name attribute
+    pymupdf_mock = Mock()
+    pymupdf_mock.name = PDFBackend.PYMUPDF
+    pymupdf_mock.validate_setup.return_value = True
+
+    pdfplumber_mock = Mock()
+    pdfplumber_mock.name = PDFBackend.PDFPLUMBER
+    pdfplumber_mock.validate_setup.return_value = True
+
+    pandoc_mock = Mock()
+    pandoc_mock.name = PDFBackend.PANDOC
+    pandoc_mock.validate_setup.return_value = False
+
+    with (
+        patch(
+            "src.services.pdf_extractors.fallback_service.PyMuPDFExtractor",
+            return_value=pymupdf_mock,
+        ),
+        patch(
+            "src.services.pdf_extractors.fallback_service.PDFPlumberExtractor",
+            return_value=pdfplumber_mock,
+        ),
+        patch(
+            "src.services.pdf_extractors.fallback_service.PandocExtractor",
+            return_value=pandoc_mock,
+        ),
+    ):
+        service = FallbackPDFService(settings)
+        result = await service.extract_with_fallback(Path("test.pdf"))
+
+        assert result.success is False
+        assert result.error == "No enabled PDF extractors available"
+        assert result.backend == PDFBackend.TEXT_ONLY
+
+
+@pytest.mark.asyncio
+async def test_enabled_but_not_installed_extractors():
+    """Test that enabled extractors that aren't installed are skipped"""
+    settings = PDFSettings(
+        fallback_chain=[
+            PDFBackendConfig(backend="pymupdf", enabled=True),
+            PDFBackendConfig(backend="pdfplumber", enabled=True),
+        ],
+    )
+
+    # Create mocks with proper name attribute
+    # PyMuPDF not installed (validate_setup returns False)
+    pymupdf_mock = Mock()
+    pymupdf_mock.name = PDFBackend.PYMUPDF
+    pymupdf_mock.validate_setup.return_value = False
+
+    # PDFPlumber installed and working
+    pdfplumber_mock = Mock()
+    pdfplumber_mock.name = PDFBackend.PDFPLUMBER
+    pdfplumber_mock.validate_setup.return_value = True
+    pdfplumber_mock.extract = AsyncMock(
+        return_value=PDFExtractionResult(
+            success=True,
+            markdown="Content",
+            metadata=ExtractionMetadata(backend=PDFBackend.PDFPLUMBER),
+        )
+    )
+
+    pandoc_mock = Mock()
+    pandoc_mock.name = PDFBackend.PANDOC
+    pandoc_mock.validate_setup.return_value = False
+
+    with (
+        patch(
+            "src.services.pdf_extractors.fallback_service.PyMuPDFExtractor",
+            return_value=pymupdf_mock,
+        ),
+        patch(
+            "src.services.pdf_extractors.fallback_service.PDFPlumberExtractor",
+            return_value=pdfplumber_mock,
+        ),
+        patch(
+            "src.services.pdf_extractors.fallback_service.PandocExtractor",
+            return_value=pandoc_mock,
+        ),
+    ):
+        service = FallbackPDFService(settings)
+
+        with patch.object(service.validator, "score_extraction", return_value=0.8):
+            result = await service.extract_with_fallback(Path("test.pdf"))
+
+        # Should succeed with pdfplumber even though pymupdf is not installed
+        assert result.success is True
+        assert result.backend == PDFBackend.PDFPLUMBER

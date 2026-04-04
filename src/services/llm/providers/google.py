@@ -138,11 +138,11 @@ class GoogleProvider(LLMProvider):
             # Extract token counts from usage_metadata
             usage = getattr(response, "usage_metadata", None)
             if usage:
-                input_tokens = getattr(usage, "prompt_token_count", 0)
-                output_tokens = getattr(usage, "candidates_token_count", 0)
+                input_tokens = getattr(usage, "prompt_token_count", 0) or 0
+                output_tokens = getattr(usage, "candidates_token_count", 0) or 0
                 # Fallback to total if individual counts not available
                 if input_tokens == 0 and output_tokens == 0:
-                    total = getattr(usage, "total_token_count", 0)
+                    total = getattr(usage, "total_token_count", 0) or 0
                     # Estimate split (rough approximation)
                     input_tokens = int(total * 0.7)
                     output_tokens = total - input_tokens

@@ -29,6 +29,14 @@ diskcache==5.6.3
 structlog>=23.1.0
 python-json-logger>=2.0.0
 
+# Phase 8: Deep Research Agent (DRA)
+# ADR-8.2: Full torch package for future GPU upgrade path
+torch>=2.0.0
+transformers>=4.30.0  # For SPECTER2 embeddings
+faiss-cpu>=1.7.4  # Dense vector search
+rank-bm25>=0.2.2  # Sparse keyword search
+numpy>=1.24.0  # Required by FAISS and transformers
+
 # Metrics (optional for Phase 4)
 prometheus-client>=0.19.0
 

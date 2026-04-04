@@ -5,7 +5,7 @@ Tests relevance filtering using embedding-based similarity.
 
 import pytest
 import numpy as np
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from src.models.paper import PaperMetadata
 from src.services.discovery.relevance_filter import RelevanceFilter, QueryPaper

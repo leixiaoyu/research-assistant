@@ -66,9 +66,7 @@ class TestRelevanceFilterIntegration:
         config = AggregationConfig(
             relevance_filter=RelevanceFilterConfig(enabled=False)
         )
-        aggregator = ResultAggregator(
-            config=config, query="neural machine translation"
-        )
+        aggregator = ResultAggregator(config=config, query="neural machine translation")
 
         source_results = {
             "arxiv": nmt_papers[:1] + irrelevant_papers[:1],
@@ -88,9 +86,7 @@ class TestRelevanceFilterIntegration:
         config = AggregationConfig(
             relevance_filter=RelevanceFilterConfig(enabled=True, threshold=0.3)
         )
-        aggregator = ResultAggregator(
-            config=config, query="neural machine translation"
-        )
+        aggregator = ResultAggregator(config=config, query="neural machine translation")
 
         # Mock the embedding service to return appropriate similarities
         with patch.object(
@@ -130,9 +126,7 @@ class TestRelevanceFilterIntegration:
         self, nmt_papers, irrelevant_papers
     ):
         """Test that without query, filtering is skipped."""
-        config = AggregationConfig(
-            relevance_filter=RelevanceFilterConfig(enabled=True)
-        )
+        config = AggregationConfig(relevance_filter=RelevanceFilterConfig(enabled=True))
         # No query provided
         aggregator = ResultAggregator(config=config, query=None)
 
@@ -153,9 +147,7 @@ class TestRelevanceFilterIntegration:
         config = AggregationConfig(
             relevance_filter=RelevanceFilterConfig(enabled=True, threshold=0.1)
         )
-        aggregator = ResultAggregator(
-            config=config, query="neural machine translation"
-        )
+        aggregator = ResultAggregator(config=config, query="neural machine translation")
 
         with patch.object(
             aggregator.relevance_filter.embedding_service,
@@ -241,9 +233,7 @@ class TestRelevanceFilterIntegration:
         config = AggregationConfig(
             relevance_filter=RelevanceFilterConfig(enabled=True, threshold=0.3)
         )
-        aggregator = ResultAggregator(
-            config=config, query="neural machine translation"
-        )
+        aggregator = ResultAggregator(config=config, query="neural machine translation")
 
         with patch.object(
             aggregator.relevance_filter.embedding_service,
@@ -277,9 +267,7 @@ class TestRelevanceFilterIntegration:
         config = AggregationConfig(
             relevance_filter=RelevanceFilterConfig(enabled=True, threshold=0.5)
         )
-        aggregator = ResultAggregator(
-            config=config, query="neural machine translation"
-        )
+        aggregator = ResultAggregator(config=config, query="neural machine translation")
 
         with patch.object(
             aggregator.relevance_filter.embedding_service,

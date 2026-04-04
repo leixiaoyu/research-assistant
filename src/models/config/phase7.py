@@ -99,6 +99,30 @@ class QueryExpansionConfig(BaseModel):
     llm_model: str = Field("gemini-1.5-flash", description="LLM model for expansion")
 
 
+class RelevanceFilterConfig(BaseModel):
+    """Configuration for embedding-based relevance filtering (Phase 7 Fix I2).
+
+    Filters papers based on semantic similarity to the query using embeddings.
+
+    Attributes:
+        enabled: Enable relevance filtering
+        threshold: Minimum similarity score to keep paper (0.0-1.0)
+        embedding_model: Model to use for embeddings
+        batch_size: Batch size for embedding generation
+    """
+
+    enabled: bool = Field(True, description="Enable relevance filtering")
+    threshold: float = Field(
+        0.3, ge=0.0, le=1.0, description="Minimum similarity threshold"
+    )
+    embedding_model: str = Field(
+        "specter2", description="Embedding model (specter2 or tfidf)"
+    )
+    batch_size: int = Field(
+        32, ge=1, le=128, description="Batch size for embedding generation"
+    )
+
+
 class AggregationConfig(BaseModel):
     """Configuration for multi-source result aggregation (Phase 7.2).
 
@@ -107,6 +131,7 @@ class AggregationConfig(BaseModel):
     Attributes:
         max_papers_per_topic: Maximum papers to return per topic
         ranking_weights: Weights for ranking algorithm
+        relevance_filter: Relevance filtering configuration (Phase 7 Fix I2)
     """
 
     max_papers_per_topic: int = Field(
@@ -115,4 +140,8 @@ class AggregationConfig(BaseModel):
     ranking_weights: RankingWeights = Field(
         default_factory=lambda: RankingWeights(),
         description="Ranking algorithm weights",
+    )
+    relevance_filter: RelevanceFilterConfig = Field(
+        default_factory=lambda: RelevanceFilterConfig(),
+        description="Relevance filtering configuration",
     )

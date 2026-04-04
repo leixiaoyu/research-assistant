@@ -48,6 +48,7 @@ from src.models.config.phase7 import (
     RankingWeights,
     CitationExplorationConfig,
     QueryExpansionConfig,
+    RelevanceFilterConfig,
     AggregationConfig,
 )
 
@@ -82,6 +83,7 @@ __all__ = [
     "RankingWeights",
     "CitationExplorationConfig",
     "QueryExpansionConfig",
+    "RelevanceFilterConfig",
     "AggregationConfig",
     # Settings
     "GlobalSettings",

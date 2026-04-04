@@ -10,7 +10,7 @@ import numpy as np
 import structlog
 
 from src.models.paper import PaperMetadata
-from src.services.embeddings.embedding_service import EmbeddingService, PaperLike
+from src.services.embeddings.embedding_service import EmbeddingService
 
 logger = structlog.get_logger()
 

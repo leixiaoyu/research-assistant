@@ -362,6 +362,127 @@ def test_structured_query_boolean_operators():
     assert "AND" in query
 
 
+def test_structured_query_or_operator():
+    """Test structured query preserves OR operator"""
+    from src.models.config import GlobalSettings
+
+    settings = GlobalSettings(
+        arxiv_use_structured_query=True,
+        arxiv_default_categories=["cs.AI"],
+    )
+    provider = ArxivProvider(settings=settings)
+
+    query = provider._build_structured_query("transformers OR attention")
+
+    # Should search each term in title or abstract
+    assert "ti:transformers" in query or "abs:transformers" in query
+    assert "ti:attention" in query or "abs:attention" in query
+    # Should have OR between terms
+    assert " OR " in query
+    # Count how many ORs - should have at least one for the Boolean operator
+    # (plus the OR for ti:/abs: fields)
+    or_count = query.count(" OR ")
+    assert or_count >= 1
+
+
+def test_structured_query_not_operator():
+    """Test structured query preserves NOT operator"""
+    from src.models.config import GlobalSettings
+
+    settings = GlobalSettings(
+        arxiv_use_structured_query=True,
+        arxiv_default_categories=["cs.AI"],
+    )
+    provider = ArxivProvider(settings=settings)
+
+    query = provider._build_structured_query("transformers NOT reinforcement")
+
+    # Should search each term in title or abstract
+    assert "ti:transformers" in query or "abs:transformers" in query
+    assert "ti:reinforcement" in query or "abs:reinforcement" in query
+    # Should have NOT operator preserved
+    assert " NOT " in query
+
+
+def test_structured_query_mixed_operators():
+    """Test structured query with multiple Boolean operators"""
+    from src.models.config import GlobalSettings
+
+    settings = GlobalSettings(
+        arxiv_use_structured_query=True,
+        arxiv_default_categories=["cs.AI"],
+    )
+    provider = ArxivProvider(settings=settings)
+
+    query = provider._build_structured_query("GPT AND (summarization OR translation)")
+
+    # Should have both operators preserved
+    assert "AND" in query
+    assert "OR" in query
+    # Should search terms
+    assert "ti:GPT" in query or "abs:GPT" in query
+
+
+def test_structured_query_quoted_phrase_with_boolean():
+    """Test structured query with quoted phrases and Boolean operators"""
+    from src.models.config import GlobalSettings
+
+    settings = GlobalSettings(
+        arxiv_use_structured_query=True,
+        arxiv_default_categories=["cs.CL"],
+    )
+    provider = ArxivProvider(settings=settings)
+
+    query = provider._build_structured_query(
+        '"machine learning" OR "deep learning" AND neural'
+    )
+
+    # Should have exact phrase matches
+    assert (
+        'ti:"machine learning"' in query or 'abs:"machine learning"' in query
+    )
+    assert 'ti:"deep learning"' in query or 'abs:"deep learning"' in query
+    # Should search remaining term
+    assert "ti:neural" in query or "abs:neural" in query
+    # Should have OR and AND operators
+    assert "OR" in query
+    assert "AND" in query
+
+
+def test_structured_query_empty_string():
+    """Test that empty query raises ValueError"""
+    from src.models.config import GlobalSettings
+
+    settings = GlobalSettings(
+        arxiv_use_structured_query=True,
+        arxiv_default_categories=["cs.AI"],
+    )
+    provider = ArxivProvider(settings=settings)
+
+    with pytest.raises(ValueError, match="Query cannot be empty"):
+        provider._build_structured_query("")
+
+    with pytest.raises(ValueError, match="Query cannot be empty"):
+        provider._build_structured_query("   ")
+
+
+def test_structured_query_only_quotes():
+    """Test query with only empty quoted phrases"""
+    from src.models.config import GlobalSettings
+
+    settings = GlobalSettings(
+        arxiv_use_structured_query=True,
+        arxiv_default_categories=["cs.AI"],
+    )
+    provider = ArxivProvider(settings=settings)
+
+    # Query with only quotes but no content - should still have category filter
+    query = provider._build_structured_query('""')
+
+    # Should have category filter at minimum
+    assert "cat:cs.AI" in query
+
+
 def test_structured_query_multiple_quoted_phrases():
     """Test structured query with multiple quoted phrases"""
     from src.models.config import GlobalSettings

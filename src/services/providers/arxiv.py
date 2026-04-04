@@ -205,6 +205,10 @@ class ArxivProvider(DiscoveryProvider):
         Returns:
             Structured query string with field prefixes
         """
+        # Guard against empty queries
+        if not query or not query.strip():
+            raise ValueError("Query cannot be empty")
+
         # Extract quoted phrases for exact matching
         phrases = re.findall(r'"([^"]+)"', query)
         # Remove quoted phrases from query to get remaining terms
@@ -220,18 +224,22 @@ class ArxivProvider(DiscoveryProvider):
         # Add remaining terms (search in title and abstract)
         if remaining:
             # Split on common Boolean operators, preserve them
-            terms = re.split(r"\s+(AND|OR|NOT)\s+", remaining)
+            parts = re.split(r"\s+(AND|OR|NOT)\s+", remaining)
             term_query_parts = []
 
-            for term in terms:
-                term = term.strip()
-                if not term or term in ("AND", "OR", "NOT"):
+            for part in parts:
+                part = part.strip()
+                if not part:
                     continue
-                # Search each term in title or abstract
-                term_query_parts.append(f"(ti:{term} OR abs:{term})")
+                # If it's a Boolean operator, add it directly
+                if part in ("AND", "OR", "NOT"):
+                    term_query_parts.append(part)
+                else:
+                    # Search each term in title or abstract
+                    term_query_parts.append(f"(ti:{part} OR abs:{part})")
 
             if term_query_parts:
-                query_parts.append(f"({' AND '.join(term_query_parts)})")
+                query_parts.append(f"({' '.join(term_query_parts)})")
 
         # Combine all parts
         content_query = (

@@ -24,6 +24,7 @@ from src.models.config import (
     TimeframeRecent,
     TimeframeSinceYear,
     TimeframeDateRange,
+    GlobalSettings,
 )
 from src.models.paper import PaperMetadata, Author
 from src.utils.rate_limiter import RateLimiter
@@ -37,10 +38,24 @@ class ArxivProvider(DiscoveryProvider):
 
     BASE_URL = "https://export.arxiv.org/api/query"
 
-    def __init__(self, rate_limiter: Optional[RateLimiter] = None):
+    def __init__(
+        self,
+        rate_limiter: Optional[RateLimiter] = None,
+        settings: Optional[GlobalSettings] = None,
+    ):
         # ArXiv requires 3 seconds between requests
         self.rate_limiter = rate_limiter or RateLimiter(
             requests_per_minute=20, burst_size=1  # 60/3 = 20
+        )
+        self.settings = settings
+        # Feature flag for structured query (Phase 7 Fix I1)
+        self.use_structured_query = (
+            settings.arxiv_use_structured_query if settings else True
+        )
+        self.default_categories = (
+            settings.arxiv_default_categories
+            if settings
+            else ["cs.CL", "cs.LG", "cs.AI"]
         )
 
     @property
@@ -137,8 +152,11 @@ class ArxivProvider(DiscoveryProvider):
 
     def _build_query_params(self, topic: ResearchTopic, query: str) -> str:
         """Build ArXiv query string"""
-        # Base query
-        q_part = f"all:{query}"
+        # Base query - use structured fields or legacy all: field
+        if self.use_structured_query:
+            q_part = self._build_structured_query(query)
+        else:
+            q_part = f"all:{query}"
 
         # Timeframe
         tf = topic.timeframe
@@ -174,6 +192,157 @@ class ArxivProvider(DiscoveryProvider):
             f"max_results={topic.max_papers}&"
             f"sortBy=submittedDate&sortOrder=descending"
         )
+
+    def _build_structured_query(self, query: str) -> str:
+        """Build structured field query for ArXiv (Phase 7 Fix I1).
+
+        Uses ti: (title) and abs: (abstract) fields for targeted search,
+        with category filtering for computer science papers.
+
+        Properly handles:
+        - Quoted phrases: "machine learning" → (ti:"machine learning" OR abs:"machine learning")  # noqa: E501
+        - Boolean operators: AND, OR, NOT
+        - Parenthesized groups: (A OR B)
+        - Complex combinations: "foo" AND (bar OR baz) NOT "qux"
+
+        Args:
+            query: User's search query
+
+        Returns:
+            Structured query string with field prefixes
+        """
+        # Guard against empty queries
+        if not query or not query.strip():
+            raise ValueError("Query cannot be empty")
+
+        # Tokenize the query respecting quotes and parentheses
+        tokens = self._tokenize_query(query)
+
+        # Process tokens to build structured query
+        content_query = self._process_tokens(tokens)
+
+        # Add category filter for computer science papers
+        if self.default_categories:
+            cat_parts = [f"cat:{cat}" for cat in self.default_categories]
+            cat_query = f"({' OR '.join(cat_parts)})"
+            return f"({content_query}) AND {cat_query}"
+
+        return content_query
+
+    def _tokenize_query(self, query: str) -> List[str]:
+        """Tokenize query into terms, quoted phrases, operators, and parentheses.
+
+        Args:
+            query: Raw query string
+
+        Returns:
+            List of tokens preserving order and structure
+        """
+        tokens = []
+        i = 0
+        while i < len(query):
+            char = query[i]
+
+            # Skip whitespace
+            if char.isspace():
+                i += 1
+                continue
+
+            # Handle quoted phrases
+            if char == '"':
+                # Find closing quote
+                j = i + 1
+                while j < len(query) and query[j] != '"':
+                    j += 1
+                if j < len(query):
+                    # Extract phrase (including quotes)
+                    tokens.append(query[i : j + 1])
+                    i = j + 1
+                else:
+                    # Unclosed quote - treat as regular char
+                    i += 1
+                continue
+
+            # Handle parentheses
+            if char in "()":
+                tokens.append(char)
+                i += 1
+                continue
+
+            # Handle words and operators
+            j = i
+            while j < len(query) and not query[j].isspace() and query[j] not in '"()':
+                j += 1
+            token = query[i:j].strip()
+            if token:
+                tokens.append(token)
+            i = j
+
+        return tokens
+
+    def _process_tokens(self, tokens: List[str]) -> str:
+        """Process tokens into structured ArXiv query.
+
+        Args:
+            tokens: List of tokens from _tokenize_query
+
+        Returns:
+            Structured query string
+        """
+        if not tokens:
+            raise ValueError("No tokens to process")
+
+        result_parts = []
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+
+            # Quoted phrase - wrap in field search
+            if token.startswith('"') and token.endswith('"'):
+                phrase = token[1:-1]  # Remove quotes
+                result_parts.append(f'(ti:"{phrase}" OR abs:"{phrase}")')
+                i += 1
+
+            # Boolean operators - pass through
+            elif token in ("AND", "OR", "NOT"):
+                result_parts.append(token)
+                i += 1
+
+            # Opening parenthesis - recursively process group
+            elif token == "(":
+                # Find matching closing parenthesis
+                depth = 1
+                j = i + 1
+                while j < len(tokens) and depth > 0:
+                    if tokens[j] == "(":
+                        depth += 1
+                    elif tokens[j] == ")":
+                        depth -= 1
+                    j += 1
+
+                if depth == 0:
+                    # Extract group (excluding outer parentheses)
+                    group_tokens = tokens[i + 1 : j - 1]
+                    if group_tokens:
+                        group_query = self._process_tokens(group_tokens)
+                        result_parts.append(f"({group_query})")
+                    i = j
+                else:
+                    # Unmatched parenthesis - treat as regular term
+                    result_parts.append(f"(ti:{token} OR abs:{token})")
+                    i += 1
+
+            # Closing parenthesis without opening - treat as regular term
+            elif token == ")":
+                result_parts.append(f"(ti:{token} OR abs:{token})")
+                i += 1
+
+            # Regular term - wrap in field search
+            else:
+                result_parts.append(f"(ti:{token} OR abs:{token})")
+                i += 1
+
+        return " ".join(result_parts)
 
     def _parse_feed(self, feed) -> List[PaperMetadata]:
         papers = []

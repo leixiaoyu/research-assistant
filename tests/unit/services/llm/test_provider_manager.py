@@ -198,6 +198,89 @@ class TestProviderManager:
         assert health.status == "healthy"
         assert health.consecutive_failures == 0
 
+    @patch("src.services.llm.provider_manager.AnthropicProvider")
+    def test_health_check_all_healthy(self, mock_anthropic):
+        """Test health_check with healthy providers."""
+        mock_provider = MagicMock()
+        mock_health = MagicMock()
+        mock_health.status = "healthy"
+        mock_circuit = MagicMock()
+        mock_circuit.state.value = "closed"
+        mock_circuit.allow_request.return_value = True
+        mock_health.circuit_breaker = mock_circuit
+        mock_provider.get_health.return_value = mock_health
+        mock_anthropic.return_value = mock_provider
+
+        config = self._create_config()
+        manager = ProviderManager(config)
+        manager.initialize()
+
+        results = manager.health_check()
+
+        assert "anthropic" in results
+        assert results["anthropic"]["available"] is True
+        assert results["anthropic"]["circuit_state"] == "closed"
+        assert results["anthropic"]["status"] == "healthy"
+        assert "error" not in results["anthropic"]
+
+    @patch("src.services.llm.provider_manager.AnthropicProvider")
+    def test_health_check_circuit_open(self, mock_anthropic):
+        """Test health_check with open circuit breaker."""
+        mock_provider = MagicMock()
+        mock_health = MagicMock()
+        mock_health.status = "degraded"
+        mock_provider.get_health.return_value = mock_health
+        mock_anthropic.return_value = mock_provider
+
+        config = self._create_config()
+        registry = CircuitBreakerRegistry()
+        manager = ProviderManager(config, registry)
+        manager.initialize()
+
+        # Manually open the circuit breaker
+        circuit = registry.get("anthropic")
+        for _ in range(config.circuit_breaker.failure_threshold):
+            circuit.record_failure()
+
+        results = manager.health_check()
+
+        assert "anthropic" in results
+        assert results["anthropic"]["available"] is False
+        assert results["anthropic"]["circuit_state"] == "open"
+        assert results["anthropic"]["status"] == "degraded"
+        assert "error" in results["anthropic"]
+        assert "open" in results["anthropic"]["error"]
+
+    @patch("src.services.llm.provider_manager.AnthropicProvider")
+    def test_health_check_no_circuit_breaker(self, mock_anthropic):
+        """Test health_check when circuit breaker is disabled."""
+        mock_provider = MagicMock()
+        mock_health = MagicMock()
+        mock_health.status = "healthy"
+        mock_provider.get_health.return_value = mock_health
+        mock_anthropic.return_value = mock_provider
+
+        # Create config with circuit breaker disabled
+        config = LLMConfig(
+            provider="anthropic",
+            api_key="test-api-key",
+            model="claude-3-sonnet",
+            max_tokens=4096,
+            temperature=0.7,
+            retry=RetryConfig(),
+            circuit_breaker=CircuitBreakerConfig(enabled=False),
+        )
+
+        manager = ProviderManager(config)
+        manager.initialize()
+
+        results = manager.health_check()
+
+        assert "anthropic" in results
+        assert results["anthropic"]["available"] is True
+        assert results["anthropic"]["circuit_state"] == "disabled"
+        assert results["anthropic"]["status"] == "healthy"
+
     def test_create_unknown_provider(self):
         """Test creating unknown provider raises error at config validation.
 
@@ -327,3 +410,122 @@ class TestProviderManagerEdgeCases:
         manager.initialize()
 
         assert manager.get_provider("unknown") is None
+
+    @patch("src.services.llm.provider_manager.GoogleProvider")
+    @patch("src.services.llm.provider_manager.AnthropicProvider")
+    def test_fallback_with_anthropic_env_key(self, mock_anthropic, mock_google):
+        """Test fallback gets API key from environment for Anthropic."""
+        mock_primary = MagicMock()
+        mock_primary.get_health.return_value = MagicMock()
+        mock_google.return_value = mock_primary
+
+        mock_fallback = MagicMock()
+        mock_fallback.get_health.return_value = MagicMock()
+        mock_anthropic.return_value = mock_fallback
+
+        fallback = FallbackProviderConfig(
+            enabled=True,
+            provider="anthropic",
+            model="claude-3-sonnet",
+            api_key=None,  # Should use env var
+        )
+        config = LLMConfig(
+            provider="google",
+            api_key="test-google-key",
+            model="gemini-1.5-pro",
+            max_tokens=4096,
+            temperature=0.7,
+            retry=RetryConfig(),
+            circuit_breaker=CircuitBreakerConfig(enabled=False),
+            fallback=fallback,
+        )
+
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "env-anthropic-key"}):
+            manager = ProviderManager(config)
+            manager.initialize()
+
+            assert manager.fallback_provider == "anthropic"
+
+    @patch("src.services.llm.provider_manager.GoogleProvider")
+    @patch("src.services.llm.provider_manager.AnthropicProvider")
+    def test_fallback_init_exception_handling(self, mock_anthropic, mock_google):
+        """Test fallback initialization handles exceptions gracefully."""
+        mock_primary = MagicMock()
+        mock_primary.get_health.return_value = MagicMock()
+        mock_anthropic.return_value = mock_primary
+
+        # Make Google provider raise exception
+        mock_google.side_effect = Exception("Provider init failed")
+
+        fallback = FallbackProviderConfig(
+            enabled=True,
+            provider="google",
+            model="gemini-1.5-pro",
+            api_key="test-key",
+        )
+        config = LLMConfig(
+            provider="anthropic",
+            api_key="test-api-key",
+            model="claude-3-sonnet",
+            max_tokens=4096,
+            temperature=0.7,
+            retry=RetryConfig(),
+            circuit_breaker=CircuitBreakerConfig(enabled=False),
+            fallback=fallback,
+        )
+
+        manager = ProviderManager(config)
+        manager.initialize()
+
+        # Fallback should not be initialized due to exception
+        assert manager.fallback_provider is None
+
+    @patch("src.services.llm.provider_manager.AnthropicProvider")
+    def test_get_all_health(self, mock_anthropic):
+        """Test get_all_health returns all provider health objects."""
+        mock_provider = MagicMock()
+        mock_health = MagicMock()
+        mock_provider.get_health.return_value = mock_health
+        mock_anthropic.return_value = mock_provider
+
+        config = LLMConfig(
+            provider="anthropic",
+            api_key="test-api-key",
+            model="claude-3-sonnet",
+            max_tokens=4096,
+            temperature=0.7,
+            retry=RetryConfig(),
+            circuit_breaker=CircuitBreakerConfig(enabled=False),
+        )
+
+        manager = ProviderManager(config)
+        manager.initialize()
+
+        all_health = manager.get_all_health()
+        assert "anthropic" in all_health
+        assert all_health["anthropic"] == mock_health
+
+    @patch("src.services.llm.provider_manager.AnthropicProvider")
+    def test_create_provider_llm_error(self, mock_anthropic):
+        """Test _create_provider converts LLMProviderError to ExtractionError."""
+        from src.services.llm.exceptions import LLMProviderError
+        from src.utils.exceptions import ExtractionError
+
+        mock_anthropic.side_effect = LLMProviderError("API key invalid")
+
+        config = LLMConfig(
+            provider="anthropic",
+            api_key="test-api-key",
+            model="claude-3-sonnet",
+            max_tokens=4096,
+            temperature=0.7,
+            retry=RetryConfig(),
+            circuit_breaker=CircuitBreakerConfig(enabled=False),
+        )
+
+        manager = ProviderManager(config)
+
+        import pytest
+
+        with pytest.raises(ExtractionError, match="API key invalid"):
+            manager.initialize()

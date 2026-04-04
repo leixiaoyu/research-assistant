@@ -60,6 +60,10 @@ class ProviderManager:
             circuit_breaker_enabled=self.config.circuit_breaker.enabled,
         )
 
+        # Log provider health at startup
+        health_status = self.health_check()
+        logger.info("startup_health_check", health=health_status)
+
     def _init_primary_provider(self) -> None:
         """Initialize the primary provider."""
         provider = self._create_provider(
@@ -199,6 +203,7 @@ class ProviderManager:
         for health in self._provider_health.values():
             health.status = "healthy"
             health.consecutive_failures = 0
+        logger.info("circuit_breakers_reset", providers=list(self._providers.keys()))
 
     def has_fallback(self) -> bool:
         """Check if fallback provider is available."""
@@ -206,6 +211,49 @@ class ProviderManager:
             self.fallback_provider is not None
             and self.fallback_provider in self._providers
         )
+
+    def health_check(self) -> Dict[str, dict]:
+        """Test health of all providers and return status report.
+
+        Returns:
+            Dictionary mapping provider names to health check results:
+            {
+                "provider_name": {
+                    "available": bool,
+                    "circuit_state": str,
+                    "status": str,
+                    "error": str (if unavailable)
+                }
+            }
+        """
+        results = {}
+        for name, provider in self._providers.items():
+            health = self._provider_health.get(name)
+
+            # Get circuit breaker from registry if enabled
+            circuit_breaker = None
+            if self.config.circuit_breaker.enabled:
+                circuit_breaker = self.circuit_registry.get(name)
+
+            # Check circuit breaker state
+            if circuit_breaker:
+                circuit_state = circuit_breaker.state.value
+                is_available = circuit_breaker.allow_request()
+            else:
+                circuit_state = "disabled"
+                is_available = True
+
+            results[name] = {
+                "available": is_available,
+                "circuit_state": circuit_state,
+                "status": health.status if health else "unknown",
+            }
+
+            if not is_available:
+                results[name]["error"] = f"Circuit breaker is {circuit_state}"
+
+        logger.info("health_check_completed", results=results)
+        return results
 
 
 # Module-level convenience function

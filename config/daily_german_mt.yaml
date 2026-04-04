@@ -180,6 +180,24 @@ settings:
     keep_pdfs: false
     max_file_size_mb: 50
     timeout_seconds: 300
+    # Fallback chain: ordered list of PDF extractors to try
+    # Primary: pymupdf (fast, reliable)
+    # Fallback 1: pdfplumber (excellent table extraction)
+    # Fallback 2: pandoc (lightweight fallback)
+    fallback_chain:
+      - backend: "pymupdf"
+        timeout_seconds: 30
+        min_quality: 0.5
+        enabled: true
+      - backend: "pdfplumber"
+        timeout_seconds: 45
+        min_quality: 0.5
+        enabled: true
+      - backend: "pandoc"
+        timeout_seconds: 60
+        min_quality: 0.3
+        enabled: true
+    stop_on_success: true
 
   # LLM Configuration
   # API keys are loaded from .env file

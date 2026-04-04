@@ -49,6 +49,16 @@ class FallbackPDFService:
         self.extractors: dict[str, PDFExtractor] = {}
         self._initialize_extractors()
 
+        # Log health status at startup
+        health = self.get_health_status()
+        logger.info(
+            "fallback_pdf_service_initialized",
+            available_extractors=health["available_extractors"],
+            enabled_extractors=health["enabled_extractors"],
+            ready_extractors=health["enabled_and_available"],
+            healthy=health["healthy"],
+        )
+
     def _initialize_extractors(self):
         """Initialize available extraction backends."""
         # Register all supported backends
@@ -62,9 +72,39 @@ class FallbackPDFService:
         for extractor in available:
             if extractor.validate_setup():
                 self.extractors[extractor.name.value] = extractor
-                logger.info("extractor_initialized", backend=extractor.name)
+                logger.info("extractor_initialized", backend=extractor.name.value)
             else:
-                logger.warning("extractor_unavailable", backend=extractor.name)
+                logger.warning("extractor_unavailable", backend=extractor.name.value)
+
+    def get_health_status(self) -> dict:
+        """Get health status of PDF extraction service.
+
+        Returns:
+            Dictionary with:
+            - available_extractors: List of available backend names
+            - enabled_extractors: List of enabled backend names from config
+            - total_available: Count of available extractors
+            - total_enabled: Count of enabled extractors
+            - healthy: Boolean indicating if at least one extractor is enabled
+        """
+        enabled_backends = [
+            cfg.backend for cfg in self.config.fallback_chain if cfg.enabled
+        ]
+        available_backends = list(self.extractors.keys())
+
+        enabled_and_available = [
+            backend for backend in enabled_backends if backend in available_backends
+        ]
+
+        return {
+            "available_extractors": available_backends,
+            "enabled_extractors": enabled_backends,
+            "enabled_and_available": enabled_and_available,
+            "total_available": len(available_backends),
+            "total_enabled": len(enabled_backends),
+            "total_ready": len(enabled_and_available),
+            "healthy": len(enabled_and_available) > 0,
+        }
 
     async def extract_with_fallback(self, pdf_path: Path) -> PDFExtractionResult:
         """
@@ -86,6 +126,14 @@ class FallbackPDFService:
         ]
 
         if not chain:
+            # Log health status for debugging
+            health = self.get_health_status()
+            logger.error(
+                "no_enabled_extractors",
+                available=health["available_extractors"],
+                enabled_in_config=health["enabled_extractors"],
+                enabled_and_available=health["enabled_and_available"],
+            )
             return PDFExtractionResult(
                 success=False,
                 error="No enabled PDF extractors available",

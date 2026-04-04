@@ -212,11 +212,9 @@ def test_structured_query_simple_terms():
 
     query = provider._build_structured_query("machine learning")
 
-    # Should search in title OR abstract (may treat as single phrase or split terms)
-    assert "ti:" in query and "abs:" in query
-    # Should include category filter
-    assert "cat:cs.CL" in query
-    assert "cat:cs.LG" in query
+    # Exact match for two-term query
+    expected = "((ti:machine OR abs:machine) (ti:learning OR abs:learning)) AND (cat:cs.CL OR cat:cs.LG)"   # noqa: E501
+    assert query == expected, f"Expected: {expected}\nGot: {query}"
 
 
 def test_structured_query_quoted_phrases():
@@ -231,12 +229,9 @@ def test_structured_query_quoted_phrases():
 
     query = provider._build_structured_query('"tree of thoughts" reasoning')
 
-    # Should have exact phrase match
-    assert 'ti:"tree of thoughts"' in query or 'abs:"tree of thoughts"' in query
-    # Should search remaining terms
-    assert "ti:reasoning" in query or "abs:reasoning" in query
-    # Should include category filter
-    assert "cat:cs.AI" in query
+    # Exact match for quoted phrase + term
+    expected = '((ti:"tree of thoughts" OR abs:"tree of thoughts") (ti:reasoning OR abs:reasoning)) AND (cat:cs.AI)'  # noqa: E501
+    assert query == expected, f"Expected: {expected}\nGot: {query}"
 
 
 def test_structured_query_no_categories():
@@ -251,11 +246,9 @@ def test_structured_query_no_categories():
 
     query = provider._build_structured_query("neural networks")
 
-    # Should search in title OR abstract
-    assert "ti:" in query
-    assert "abs:" in query
-    # Should NOT include category filter
-    assert "cat:" not in query
+    # Exact match for two terms without category filter
+    expected = "(ti:neural OR abs:neural) (ti:networks OR abs:networks)"   # noqa: E501
+    assert query == expected, f"Expected: {expected}\nGot: {query}"
 
 
 def test_legacy_query_when_disabled():
@@ -355,11 +348,11 @@ def test_structured_query_boolean_operators():
     # Query with AND operator
     query = provider._build_structured_query("neural AND networks")
 
-    # Should search each term in title or abstract
-    assert "ti:neural" in query or "abs:neural" in query
-    assert "ti:networks" in query or "abs:networks" in query
-    # Should have AND between terms
-    assert "AND" in query
+    # Exact match with AND operator preserved
+    expected = (
+        "((ti:neural OR abs:neural) AND (ti:networks OR abs:networks)) AND (cat:cs.AI)"
+    )
+    assert query == expected, f"Expected: {expected}\nGot: {query}"
 
 
 def test_structured_query_or_operator():
@@ -374,15 +367,9 @@ def test_structured_query_or_operator():
 
     query = provider._build_structured_query("transformers OR attention")
 
-    # Should search each term in title or abstract
-    assert "ti:transformers" in query or "abs:transformers" in query
-    assert "ti:attention" in query or "abs:attention" in query
-    # Should have OR between terms
-    assert " OR " in query
-    # Count how many ORs - should have at least one for the Boolean operator
-    # (plus the OR for ti:/abs: fields)
-    or_count = query.count(" OR ")
-    assert or_count >= 1
+    # Exact match with OR operator preserved
+    expected = "((ti:transformers OR abs:transformers) OR (ti:attention OR abs:attention)) AND (cat:cs.AI)"   # noqa: E501
+    assert query == expected, f"Expected: {expected}\nGot: {query}"
 
 
 def test_structured_query_not_operator():
@@ -397,11 +384,9 @@ def test_structured_query_not_operator():
 
     query = provider._build_structured_query("transformers NOT reinforcement")
 
-    # Should search each term in title or abstract
-    assert "ti:transformers" in query or "abs:transformers" in query
-    assert "ti:reinforcement" in query or "abs:reinforcement" in query
-    # Should have NOT operator preserved
-    assert " NOT " in query
+    # Exact match with NOT operator preserved
+    expected = "((ti:transformers OR abs:transformers) NOT (ti:reinforcement OR abs:reinforcement)) AND (cat:cs.AI)"   # noqa: E501
+    assert query == expected, f"Expected: {expected}\nGot: {query}"
 
 
 def test_structured_query_mixed_operators():
@@ -416,11 +401,9 @@ def test_structured_query_mixed_operators():
 
     query = provider._build_structured_query("GPT AND (summarization OR translation)")
 
-    # Should have both operators preserved
-    assert "AND" in query
-    assert "OR" in query
-    # Should search terms
-    assert "ti:GPT" in query or "abs:GPT" in query
+    # Exact match with parentheses and mixed operators
+    expected = "((ti:GPT OR abs:GPT) AND ((ti:summarization OR abs:summarization) OR (ti:translation OR abs:translation))) AND (cat:cs.AI)"   # noqa: E501
+    assert query == expected, f"Expected: {expected}\nGot: {query}"
 
 
 def test_structured_query_quoted_phrase_with_boolean():
@@ -437,16 +420,9 @@ def test_structured_query_quoted_phrase_with_boolean():
         '"machine learning" OR "deep learning" AND neural'
     )
 
-    # Should have exact phrase matches
-    assert (
-        'ti:"machine learning"' in query or 'abs:"machine learning"' in query
-    )
-    assert 'ti:"deep learning"' in query or 'abs:"deep learning"' in query
-    # Should search remaining term
-    assert "ti:neural" in query or "abs:neural" in query
-    # Should have OR and AND operators
-    assert "OR" in query
-    assert "AND" in query
+    # Exact match with quoted phrases and Boolean operators
+    expected = '((ti:"machine learning" OR abs:"machine learning") OR (ti:"deep learning" OR abs:"deep learning") AND (ti:neural OR abs:neural)) AND (cat:cs.CL)'  # noqa: E501
+    assert query == expected, f"Expected: {expected}\nGot: {query}"
 
 
 def test_structured_query_empty_string():

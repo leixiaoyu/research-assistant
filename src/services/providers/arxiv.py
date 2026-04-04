@@ -199,6 +199,12 @@ class ArxivProvider(DiscoveryProvider):
         Uses ti: (title) and abs: (abstract) fields for targeted search,
         with category filtering for computer science papers.
 
+        Properly handles:
+        - Quoted phrases: "machine learning" → (ti:"machine learning" OR abs:"machine learning")  # noqa: E501
+        - Boolean operators: AND, OR, NOT
+        - Parenthesized groups: (A OR B)
+        - Complex combinations: "foo" AND (bar OR baz) NOT "qux"
+
         Args:
             query: User's search query
 
@@ -209,42 +215,11 @@ class ArxivProvider(DiscoveryProvider):
         if not query or not query.strip():
             raise ValueError("Query cannot be empty")
 
-        # Extract quoted phrases for exact matching
-        phrases = re.findall(r'"([^"]+)"', query)
-        # Remove quoted phrases from query to get remaining terms
-        remaining = re.sub(r'"[^"]+"', "", query).strip()
+        # Tokenize the query respecting quotes and parentheses
+        tokens = self._tokenize_query(query)
 
-        # Build field queries
-        query_parts = []
-
-        # Add quoted phrases (exact match in title or abstract)
-        for phrase in phrases:
-            query_parts.append(f'(ti:"{phrase}" OR abs:"{phrase}")')
-
-        # Add remaining terms (search in title and abstract)
-        if remaining:
-            # Split on common Boolean operators, preserve them
-            parts = re.split(r"\s+(AND|OR|NOT)\s+", remaining)
-            term_query_parts = []
-
-            for part in parts:
-                part = part.strip()
-                if not part:
-                    continue
-                # If it's a Boolean operator, add it directly
-                if part in ("AND", "OR", "NOT"):
-                    term_query_parts.append(part)
-                else:
-                    # Search each term in title or abstract
-                    term_query_parts.append(f"(ti:{part} OR abs:{part})")
-
-            if term_query_parts:
-                query_parts.append(f"({' '.join(term_query_parts)})")
-
-        # Combine all parts
-        content_query = (
-            " AND ".join(query_parts) if query_parts else f"(ti:{query} OR abs:{query})"
-        )
+        # Process tokens to build structured query
+        content_query = self._process_tokens(tokens)
 
         # Add category filter for computer science papers
         if self.default_categories:
@@ -253,6 +228,121 @@ class ArxivProvider(DiscoveryProvider):
             return f"({content_query}) AND {cat_query}"
 
         return content_query
+
+    def _tokenize_query(self, query: str) -> List[str]:
+        """Tokenize query into terms, quoted phrases, operators, and parentheses.
+
+        Args:
+            query: Raw query string
+
+        Returns:
+            List of tokens preserving order and structure
+        """
+        tokens = []
+        i = 0
+        while i < len(query):
+            char = query[i]
+
+            # Skip whitespace
+            if char.isspace():
+                i += 1
+                continue
+
+            # Handle quoted phrases
+            if char == '"':
+                # Find closing quote
+                j = i + 1
+                while j < len(query) and query[j] != '"':
+                    j += 1
+                if j < len(query):
+                    # Extract phrase (including quotes)
+                    tokens.append(query[i : j + 1])
+                    i = j + 1
+                else:
+                    # Unclosed quote - treat as regular char
+                    i += 1
+                continue
+
+            # Handle parentheses
+            if char in "()":
+                tokens.append(char)
+                i += 1
+                continue
+
+            # Handle words and operators
+            j = i
+            while j < len(query) and not query[j].isspace() and query[j] not in '"()':
+                j += 1
+            token = query[i:j].strip()
+            if token:
+                tokens.append(token)
+            i = j
+
+        return tokens
+
+    def _process_tokens(self, tokens: List[str]) -> str:
+        """Process tokens into structured ArXiv query.
+
+        Args:
+            tokens: List of tokens from _tokenize_query
+
+        Returns:
+            Structured query string
+        """
+        if not tokens:
+            raise ValueError("No tokens to process")
+
+        result_parts = []
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+
+            # Quoted phrase - wrap in field search
+            if token.startswith('"') and token.endswith('"'):
+                phrase = token[1:-1]  # Remove quotes
+                result_parts.append(f'(ti:"{phrase}" OR abs:"{phrase}")')
+                i += 1
+
+            # Boolean operators - pass through
+            elif token in ("AND", "OR", "NOT"):
+                result_parts.append(token)
+                i += 1
+
+            # Opening parenthesis - recursively process group
+            elif token == "(":
+                # Find matching closing parenthesis
+                depth = 1
+                j = i + 1
+                while j < len(tokens) and depth > 0:
+                    if tokens[j] == "(":
+                        depth += 1
+                    elif tokens[j] == ")":
+                        depth -= 1
+                    j += 1
+
+                if depth == 0:
+                    # Extract group (excluding outer parentheses)
+                    group_tokens = tokens[i + 1 : j - 1]
+                    if group_tokens:
+                        group_query = self._process_tokens(group_tokens)
+                        result_parts.append(f"({group_query})")
+                    i = j
+                else:
+                    # Unmatched parenthesis - treat as regular term
+                    result_parts.append(f"(ti:{token} OR abs:{token})")
+                    i += 1
+
+            # Closing parenthesis without opening - treat as regular term
+            elif token == ")":
+                result_parts.append(f"(ti:{token} OR abs:{token})")
+                i += 1
+
+            # Regular term - wrap in field search
+            else:
+                result_parts.append(f"(ti:{token} OR abs:{token})")
+                i += 1
+
+        return " ".join(result_parts)
 
     def _parse_feed(self, feed) -> List[PaperMetadata]:
         papers = []

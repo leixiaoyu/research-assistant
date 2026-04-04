@@ -71,7 +71,7 @@ class CircuitBreakerConfig(BaseModel):
         default=True, description="Whether circuit breaker is enabled"
     )
     failure_threshold: int = Field(
-        default=5,
+        default=10,
         ge=1,
         le=50,
         description="Consecutive failures to open circuit",
@@ -93,7 +93,7 @@ class CircuitBreakerConfig(BaseModel):
         json_schema_extra={
             "example": {
                 "enabled": True,
-                "failure_threshold": 5,
+                "failure_threshold": 10,
                 "success_threshold": 2,
                 "cooldown_seconds": 300.0,
             }

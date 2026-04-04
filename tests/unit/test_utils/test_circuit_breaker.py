@@ -80,6 +80,12 @@ class TestStateTransitions:
         cb.record_success()
         assert cb.state == CircuitState.CLOSED
 
+    def test_should_transition_with_no_failures(self, circuit_breaker):
+        """Test _should_transition_to_half_open when no failures recorded."""
+        # When no failures have been recorded, _last_failure_time is None
+        # and _should_transition_to_half_open should return True
+        assert circuit_breaker._should_transition_to_half_open() is True
+
 
 class TestAllowRequest:
     """Tests for allow_request method."""
@@ -130,6 +136,15 @@ class TestGetStats:
         assert stats["name"] == "test-provider"
         assert stats["state"] == "closed"
 
+    def test_get_stats_with_cooldown_remaining(self, circuit_config):
+        """Test stats shows cooldown_remaining when OPEN."""
+        cb = CircuitBreaker("test", circuit_config)
+        for _ in range(3):
+            cb.record_failure()
+        stats = cb.get_stats()
+        assert stats["state"] == "open"
+        assert stats["cooldown_remaining"] > 0.0
+
 
 class TestCircuitBreakerRegistry:
     """Tests for CircuitBreakerRegistry singleton."""
@@ -165,3 +180,96 @@ class TestCircuitBreakerRegistry:
             cb.record_failure()
         registry.reset_all()
         assert cb.state == CircuitState.CLOSED
+
+    def test_remove_non_existing(self):
+        """Test remove returns False for non-existing breaker."""
+        registry = CircuitBreakerRegistry()
+        assert registry.remove("non-existing") is False
+
+    def test_get_all_stats(self, circuit_config):
+        """Test get_all_stats returns stats for all breakers."""
+        registry = CircuitBreakerRegistry()
+        cb1 = registry.get_or_create("provider-a", circuit_config)
+        cb2 = registry.get_or_create("provider-b", circuit_config)
+        cb1.record_success()
+        cb2.record_failure()
+
+        stats = registry.get_all_stats()
+        assert "provider-a" in stats
+        assert "provider-b" in stats
+        assert stats["provider-a"]["state"] == "closed"
+        assert stats["provider-b"]["consecutive_failures"] == 1
+
+
+class TestCircuitBreakerThresholds:
+    """Tests for updated circuit breaker thresholds."""
+
+    def test_default_failure_threshold_is_10(self):
+        """Test default failure threshold is 10 (updated from 5)."""
+        config = CircuitBreakerConfig()
+        assert config.failure_threshold == 10
+
+    def test_default_cooldown_is_300(self):
+        """Test default cooldown is 300 seconds (updated from 60)."""
+        config = CircuitBreakerConfig()
+        assert config.cooldown_seconds == 300.0
+
+    def test_circuit_opens_after_10_failures(self):
+        """Test circuit opens after 10 consecutive failures."""
+        config = CircuitBreakerConfig()  # Uses new defaults
+        cb = CircuitBreaker("test-provider", config)
+
+        # Record 9 failures - should stay CLOSED
+        for _ in range(9):
+            cb.record_failure()
+        assert cb.state == CircuitState.CLOSED
+
+        # 10th failure - should open
+        cb.record_failure()
+        assert cb.state == CircuitState.OPEN
+
+    def test_half_open_to_closed_after_success_threshold(self):
+        """Test HALF_OPEN -> CLOSED requires success_threshold successes."""
+        config = CircuitBreakerConfig(
+            failure_threshold=3,
+            success_threshold=3,  # Require 3 successes
+            cooldown_seconds=0.1,
+        )
+        cb = CircuitBreaker("test", config)
+
+        # Open the circuit
+        for _ in range(3):
+            cb.record_failure()
+        assert cb.state == CircuitState.OPEN
+
+        # Wait for cooldown
+        time.sleep(0.15)
+        assert cb.state == CircuitState.HALF_OPEN
+
+        # Record 2 successes - should stay HALF_OPEN
+        cb.record_success()
+        cb.record_success()
+        assert cb.state == CircuitState.HALF_OPEN
+
+        # 3rd success - should close
+        cb.record_success()
+        assert cb.state == CircuitState.CLOSED
+
+    def test_half_open_reopens_on_failure(self):
+        """Test HALF_OPEN -> OPEN on any failure."""
+        config = CircuitBreakerConfig(
+            failure_threshold=3,
+            success_threshold=2,
+            cooldown_seconds=0.1,
+        )
+        cb = CircuitBreaker("test", config)
+
+        # Open the circuit
+        for _ in range(3):
+            cb.record_failure()
+        time.sleep(0.15)
+        assert cb.state == CircuitState.HALF_OPEN
+
+        # Any failure in HALF_OPEN should reopen
+        cb.record_failure()
+        assert cb.state == CircuitState.OPEN

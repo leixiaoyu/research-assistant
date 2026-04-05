@@ -8,18 +8,14 @@ Tests cover:
 """
 
 import pytest
-from datetime import datetime, timezone
 from typing import List, Optional
-from unittest.mock import AsyncMock, MagicMock, Mock
-
 import numpy as np
 
-from src.models.config import AggregationConfig, FeedbackIntegrationConfig
+from src.models.config import FeedbackIntegrationConfig
 from src.models.feedback import FeedbackEntry, FeedbackRating
 from src.models.paper import PaperMetadata
 from src.services.result_aggregator import ResultAggregator
 from src.services.feedback.preference_model import PreferenceModel
-from src.services.feedback.feedback_service import FeedbackService
 
 
 class MockFeedbackService:

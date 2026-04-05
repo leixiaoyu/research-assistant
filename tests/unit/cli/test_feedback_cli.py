@@ -25,7 +25,6 @@ from src.models.feedback import (
     TopicAnalytics,
 )
 
-
 runner = CliRunner()
 
 

@@ -25,7 +25,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
 
-
 # Directory containing phase specifications
 SPECS_DIR = Path("docs/specs")
 

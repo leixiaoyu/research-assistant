@@ -9,6 +9,7 @@ Tests cover:
 
 import pytest
 from typing import List, Optional
+
 import numpy as np
 
 from src.models.config import FeedbackIntegrationConfig

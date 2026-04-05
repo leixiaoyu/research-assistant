@@ -12,7 +12,6 @@ from unittest.mock import Mock, patch
 from pathlib import Path
 import typer
 
-
 # =============================================================================
 # Module 1: src/cli/catalog.py - Branch 68->exit
 # =============================================================================

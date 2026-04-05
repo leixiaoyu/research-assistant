@@ -25,7 +25,6 @@ from src.models.config import (
 )
 from src.models.paper import PaperMetadata, Author
 
-
 # =============================================================================
 # ScoredPaper.from_paper_metadata Coverage Tests
 # =============================================================================

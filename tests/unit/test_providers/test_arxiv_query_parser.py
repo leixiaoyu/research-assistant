@@ -83,7 +83,7 @@ def test_simple_parenthesized_group(provider_no_categories):
         "GPT AND (summarization OR translation)"
     )
 
-    expected = "(ti:GPT OR abs:GPT) AND ((ti:summarization OR abs:summarization) OR (ti:translation OR abs:translation))"   # noqa: E501
+    expected = "(ti:GPT OR abs:GPT) AND ((ti:summarization OR abs:summarization) OR (ti:translation OR abs:translation))"  # noqa: E501
     assert query == expected, f"Expected: {expected}\nGot: {query}"
 
 
@@ -113,7 +113,7 @@ def test_parentheses_with_not(provider_no_categories):
         "transformers NOT (reinforcement OR supervised)"
     )
 
-    expected = "(ti:transformers OR abs:transformers) NOT ((ti:reinforcement OR abs:reinforcement) OR (ti:supervised OR abs:supervised))"   # noqa: E501
+    expected = "(ti:transformers OR abs:transformers) NOT ((ti:reinforcement OR abs:reinforcement) OR (ti:supervised OR abs:supervised))"  # noqa: E501
     assert query == expected, f"Expected: {expected}\nGot: {query}"
 
 
@@ -157,7 +157,7 @@ def test_simple_term_with_categories(provider_with_categories):
     """Test: Simple term with category filter"""
     query = provider_with_categories._build_structured_query("transformers")
 
-    expected = "((ti:transformers OR abs:transformers)) AND (cat:cs.CL OR cat:cs.LG)"   # noqa: E501
+    expected = "((ti:transformers OR abs:transformers)) AND (cat:cs.CL OR cat:cs.LG)"  # noqa: E501
     assert query == expected, f"Expected: {expected}\nGot: {query}"
 
 
@@ -173,7 +173,7 @@ def test_boolean_operators_with_categories(provider_with_categories):
     """Test: Boolean operators with category filter"""
     query = provider_with_categories._build_structured_query("A AND B OR C")
 
-    expected = "((ti:A OR abs:A) AND (ti:B OR abs:B) OR (ti:C OR abs:C)) AND (cat:cs.CL OR cat:cs.LG)"   # noqa: E501
+    expected = "((ti:A OR abs:A) AND (ti:B OR abs:B) OR (ti:C OR abs:C)) AND (cat:cs.CL OR cat:cs.LG)"  # noqa: E501
     assert query == expected, f"Expected: {expected}\nGot: {query}"
 
 
@@ -195,7 +195,7 @@ def test_empty_parentheses(provider_no_categories):
     query = provider_no_categories._build_structured_query("GPT AND ()")
 
     # Empty group should be skipped
-    expected = "(ti:GPT OR abs:GPT) AND"   # noqa: E501
+    expected = "(ti:GPT OR abs:GPT) AND"  # noqa: E501
     assert query == expected, f"Expected: {expected}\nGot: {query}"
 
 
@@ -224,7 +224,7 @@ def test_only_operators_no_terms(provider_no_categories):
     """Test: Query with only operators"""
     query = provider_no_categories._build_structured_query("AND OR NOT")
 
-    expected = "AND OR NOT"   # noqa: E501
+    expected = "AND OR NOT"  # noqa: E501
     assert query == expected, f"Expected: {expected}\nGot: {query}"
 
 
@@ -234,7 +234,9 @@ def test_multiple_spaces(provider_no_categories):
         "GPT    AND     transformers"
     )
 
-    expected = "(ti:GPT OR abs:GPT) AND (ti:transformers OR abs:transformers)"   # noqa: E501
+    expected = (
+        "(ti:GPT OR abs:GPT) AND (ti:transformers OR abs:transformers)"  # noqa: E501
+    )
     assert query == expected, f"Expected: {expected}\nGot: {query}"
 
 

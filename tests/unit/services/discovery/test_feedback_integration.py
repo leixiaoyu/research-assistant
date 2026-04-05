@@ -37,8 +37,7 @@ class MockFeedbackService:
         return [
             e.paper_id
             for e in self.feedback_entries
-            if e.rating == rating
-            and (topic_slug is None or e.topic_slug == topic_slug)
+            if e.rating == rating and (topic_slug is None or e.topic_slug == topic_slug)
         ]
 
     async def get_positive_feedback(

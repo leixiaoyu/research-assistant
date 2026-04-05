@@ -45,7 +45,6 @@ from src.services.citation_explorer import CitationExplorer
 from src.services.result_aggregator import ResultAggregator
 from src.services.providers.paper_search_mcp import PaperSearchMCPProvider
 
-
 # =============================================================================
 # QueryExpander Tests
 # =============================================================================

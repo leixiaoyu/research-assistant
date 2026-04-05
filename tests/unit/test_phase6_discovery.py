@@ -30,7 +30,6 @@ from src.models.config import (
 )
 from src.models.paper import PaperMetadata, Author
 
-
 # =============================================================================
 # Discovery Data Models Tests
 # =============================================================================

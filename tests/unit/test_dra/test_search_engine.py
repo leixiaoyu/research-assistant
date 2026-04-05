@@ -105,6 +105,29 @@ class TestEmbeddingModel:
                 with pytest.raises(ImportError, match="transformers"):
                     model._load_model()
 
+    def test_approved_models_only(self):
+        """SR-8.5: Verify only approved embedding models are accepted."""
+        from src.services.dra.search_engine import APPROVED_EMBEDDING_MODELS
+
+        # All approved models should be accepted without raising
+        for model_name in APPROVED_EMBEDDING_MODELS:
+            model = EmbeddingModel(model_name=model_name)
+            assert model.model_name == model_name
+
+    def test_rejected_model_raises(self):
+        """SR-8.5: Verify unapproved embedding models are rejected."""
+        with pytest.raises(ValueError, match="Unapproved embedding model"):
+            EmbeddingModel(model_name="malicious/untrusted-model")
+
+    def test_rejected_model_detailed_message(self):
+        """SR-8.5: Verify rejection message includes allowed models."""
+        with pytest.raises(ValueError) as exc_info:
+            EmbeddingModel(model_name="random/fake-model")
+
+        error_message = str(exc_info.value)
+        assert "Unapproved embedding model" in error_message
+        assert "allenai/specter2" in error_message  # Should mention allowed models
+
 
 class TestBM25Index:
     """Tests for BM25Index class."""

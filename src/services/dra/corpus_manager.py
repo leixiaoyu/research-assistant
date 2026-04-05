@@ -8,7 +8,9 @@ This module provides:
 """
 
 import json
+import os
 import re
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
@@ -487,7 +489,10 @@ class CorpusManager:
         )
 
     def save(self, path: Optional[Path] = None) -> None:
-        """Save corpus state to disk.
+        """Save corpus state to disk with atomic writes.
+
+        Uses atomic write pattern (write to temp -> rename) to ensure
+        corpus integrity per SR-8.1 security requirement.
 
         Args:
             path: Directory to save (default from config)
@@ -495,23 +500,57 @@ class CorpusManager:
         save_path = path or self.corpus_dir
         save_path.mkdir(parents=True, exist_ok=True)
 
+        # SR-8.1: Restrict corpus directory permissions to 0700
+        try:
+            os.chmod(save_path, 0o700)
+        except OSError as e:
+            logger.warning("chmod_failed", path=str(save_path), error=str(e))
+
         # Save search engine
         self.search_engine.save(save_path)
 
-        # Save paper records
+        # SR-8.1: Atomic write for paper records
         papers_data = {pid: record.to_dict() for pid, record in self._papers.items()}
-        with open(save_path / "papers.json", "w") as f:
-            json.dump(papers_data, f, indent=2)
+        papers_path = save_path / "papers.json"
+        self._atomic_write_json(papers_path, papers_data)
 
-        # Save stats
-        with open(save_path / "stats.json", "w") as f:
-            json.dump(self._stats.to_dict(), f, indent=2)
+        # SR-8.1: Atomic write for stats
+        stats_path = save_path / "stats.json"
+        self._atomic_write_json(stats_path, self._stats.to_dict())
 
         logger.info(
             "corpus_saved",
             path=str(save_path),
             papers=len(self._papers),
         )
+
+    def _atomic_write_json(self, target_path: Path, data: dict) -> None:
+        """Write JSON data atomically using temp file + rename.
+
+        SR-8.1: Ensures corpus integrity by preventing partial writes.
+
+        Args:
+            target_path: Final destination path
+            data: Dictionary to serialize as JSON
+        """
+        # Write to temp file in same directory (required for atomic rename)
+        temp_fd, temp_path = tempfile.mkstemp(
+            dir=target_path.parent,
+            prefix=f".{target_path.name}.",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(temp_fd, "w") as f:
+                json.dump(data, f, indent=2)
+            # Atomic rename (POSIX guarantees atomicity on same filesystem)
+            Path(temp_path).rename(target_path)
+        except Exception:
+            # Clean up temp file on error
+            try:
+                Path(temp_path).unlink()
+            except OSError:
+                pass
+            raise
 
     def load(self, path: Optional[Path] = None) -> None:
         """Load corpus state from disk.

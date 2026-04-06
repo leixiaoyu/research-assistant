@@ -174,6 +174,7 @@ class QualityIntelligenceService:
 
     # Private scoring methods
     def _calculate_citation_score(self, paper: PaperMetadata) -> float: ...
+    def _calculate_influential_bonus(self, paper: PaperMetadata) -> float: ...
     def _calculate_venue_score(self, paper: PaperMetadata) -> float: ...
     def _calculate_recency_score(self, paper: PaperMetadata) -> float: ...
     def _calculate_engagement_score(self, paper: PaperMetadata) -> float: ...
@@ -188,8 +189,22 @@ class QualityIntelligenceService:
 
 **Reuses:**
 - `QualityWeights` model from `src/models/discovery.py`
-- `ScoredPaper` model from `src/models/discovery.py`
+- `ScoredPaper` model from `src/models/discovery.py` (ensure `frozen=True` for immutability)
 - Venue YAML structure from existing `venue_scores.yaml`
+
+**Design Note - Influential Citation Handling (SR Review #1):**
+> The "influential citation bonus" is a provider-specific signal. Only **Semantic Scholar** returns `influential_citation_count` in its API response. For papers from other providers (ArXiv, OpenAlex, HuggingFace), the influential citation count will be `0` or `None`.
+>
+> **Implementation Rule:** When `influential_citation_count` is `0`, `None`, or unavailable, the influential bonus SHALL be `0.0` (neutral). This ensures papers are not penalized or biased based on provider-specific metadata availability.
+>
+> ```python
+> def _calculate_influential_bonus(self, paper: PaperMetadata) -> float:
+>     """Calculate influential citation bonus (Semantic Scholar only)."""
+>     count = getattr(paper, 'influential_citation_count', 0) or 0
+>     if count <= 0:
+>         return 0.0  # Neutral for non-SS providers
+>     return min(0.1, count * 0.01)
+> ```
 
 ---
 
@@ -268,8 +283,27 @@ class QueryIntelligenceService:
         self, query: str, max_variants: int = 5
     ) -> List[EnhancedQuery]: ...
 
-    def _get_cache_key(self, query: str, strategy: str, max_queries: int) -> str: ...
+    def _get_cache_key(
+        self, query: str, strategy: str, max_queries: int, llm_model: str
+    ) -> str: ...
     def _evict_lru(self) -> None: ...
+```
+
+**Design Note - Cache Key Strategy (SR Review #2):**
+> The cache key MUST include the LLM model identifier to prevent stale expansions when the user changes LLM providers. If the LLM changes (e.g., from Claude to Gemini), cached query expansions from the previous model would be semantically different.
+>
+> **Cache Key Format:** `{normalized_query_hash}:{strategy}:{max_queries}:{llm_model}`
+>
+> ```python
+> def _get_cache_key(
+>     self, query: str, strategy: str, max_queries: int, llm_model: str
+> ) -> str:
+>     """Generate cache key including LLM model for consistency."""
+>     query_hash = hashlib.sha256(query.lower().strip().encode()).hexdigest()[:12]
+>     return f"{query_hash}:{strategy}:{max_queries}:{llm_model}"
+> ```
+>
+> When `llm_service` is `None` (graceful degradation), use `"none"` as the model identifier.
 ```
 
 **Dependencies:**
@@ -588,6 +622,18 @@ tests/
 2. Update `enhanced_search()` to route to `discover(STANDARD)` with deprecation warning
 3. Update `multi_source_search()` to route to `discover(DEEP)` with deprecation warning
 4. Update `DiscoveryPhase` to use `discover()`
+
+**Design Note - ArXiv Score Migration Audit (SR Review #3):**
+> **CRITICAL AUDIT REQUIREMENT:** The ArXiv venue score is changing from 0.60 (hardcoded in QualityFilterService) to 0.50 (YAML normalized). This affects the **STANDARD** discovery mode which previously used `enhanced_search()`.
+>
+> **Migration Checklist:**
+> - [ ] Audit all hardcoded `min_quality_score` thresholds in codebase that may have been tuned to the 0.60 ArXiv baseline
+> - [ ] Audit any config files or environment variables with quality thresholds
+> - [ ] Verify `DiscoveryPhase` default thresholds are appropriate for the new 0.50 ArXiv score
+> - [ ] Update any documentation referencing ArXiv quality scores
+> - [ ] Run comparative analysis: same queries through old vs new scoring to quantify ranking changes
+>
+> **Impact Assessment:** Papers from ArXiv will score ~17% lower on the venue component (0.50 vs 0.60). Since venue weight is 0.20, the overall score impact is approximately **-2%** (0.10 × 0.20 = 0.02). This is intentional—the previous 0.60 was considered too lenient compared to peer-reviewed venues.
 
 ### Phase 4: Cleanup (Breaking - Phase 9)
 1. Remove `QualityScorer` class

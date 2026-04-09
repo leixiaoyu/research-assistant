@@ -8,7 +8,9 @@ This module provides:
 """
 
 import json
+import os
 import re
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
@@ -29,6 +31,36 @@ from src.services.dra.utils import (
 VALID_PAPER_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_.-]+$")
 
 logger = structlog.get_logger()
+
+
+class FreshnessResult(BaseModel):
+    """Result of corpus freshness check.
+
+    Used to determine if corpus needs refresh before agent operations.
+
+    Attributes:
+        is_fresh: True if corpus is up-to-date with registry
+        corpus_updated: Last corpus update timestamp (None if no corpus)
+        registry_updated: Last registry update timestamp (None if no registry)
+        stale_by_seconds: How many seconds the corpus is behind (0 if fresh)
+        recommendation: Human-readable recommendation
+        papers_to_refresh: Number of papers that need refreshing (if known)
+    """
+
+    is_fresh: bool = Field(..., description="Whether corpus is fresh")
+    corpus_updated: Optional[datetime] = Field(
+        default=None, description="Corpus last update time"
+    )
+    registry_updated: Optional[datetime] = Field(
+        default=None, description="Registry last update time"
+    )
+    stale_by_seconds: float = Field(
+        default=0.0, ge=0.0, description="Seconds behind registry"
+    )
+    recommendation: str = Field(default="", description="Action recommendation")
+    papers_to_refresh: int = Field(
+        default=0, ge=0, description="Papers needing refresh"
+    )
 
 
 class CorpusStats(BaseModel):
@@ -487,7 +519,10 @@ class CorpusManager:
         )
 
     def save(self, path: Optional[Path] = None) -> None:
-        """Save corpus state to disk.
+        """Save corpus state to disk with atomic writes.
+
+        Uses atomic write pattern (write to temp -> rename) to ensure
+        corpus integrity per SR-8.1 security requirement.
 
         Args:
             path: Directory to save (default from config)
@@ -495,23 +530,57 @@ class CorpusManager:
         save_path = path or self.corpus_dir
         save_path.mkdir(parents=True, exist_ok=True)
 
+        # SR-8.1: Restrict corpus directory permissions to 0700
+        try:
+            os.chmod(save_path, 0o700)
+        except OSError as e:
+            logger.warning("chmod_failed", path=str(save_path), error=str(e))
+
         # Save search engine
         self.search_engine.save(save_path)
 
-        # Save paper records
+        # SR-8.1: Atomic write for paper records
         papers_data = {pid: record.to_dict() for pid, record in self._papers.items()}
-        with open(save_path / "papers.json", "w") as f:
-            json.dump(papers_data, f, indent=2)
+        papers_path = save_path / "papers.json"
+        self._atomic_write_json(papers_path, papers_data)
 
-        # Save stats
-        with open(save_path / "stats.json", "w") as f:
-            json.dump(self._stats.to_dict(), f, indent=2)
+        # SR-8.1: Atomic write for stats
+        stats_path = save_path / "stats.json"
+        self._atomic_write_json(stats_path, self._stats.to_dict())
 
         logger.info(
             "corpus_saved",
             path=str(save_path),
             papers=len(self._papers),
         )
+
+    def _atomic_write_json(self, target_path: Path, data: dict) -> None:
+        """Write JSON data atomically using temp file + rename.
+
+        SR-8.1: Ensures corpus integrity by preventing partial writes.
+
+        Args:
+            target_path: Final destination path
+            data: Dictionary to serialize as JSON
+        """
+        # Write to temp file in same directory (required for atomic rename)
+        temp_fd, temp_path = tempfile.mkstemp(
+            dir=target_path.parent,
+            prefix=f".{target_path.name}.",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(temp_fd, "w") as f:
+                json.dump(data, f, indent=2)
+            # Atomic rename (POSIX guarantees atomicity on same filesystem)
+            Path(temp_path).rename(target_path)
+        except Exception:
+            # Clean up temp file on error
+            try:
+                Path(temp_path).unlink()
+            except OSError:
+                pass
+            raise
 
     def load(self, path: Optional[Path] = None) -> None:
         """Load corpus state from disk.
@@ -582,3 +651,170 @@ class CorpusManager:
             "search_ready": self.search_engine.is_ready,
             "issues": issues,
         }
+
+    def check_freshness(self, registry_path: Path) -> FreshnessResult:
+        """Check if corpus is fresh relative to the registry.
+
+        Compares the corpus last_updated timestamp against the registry's
+        most recent modification time to determine if the corpus needs
+        refreshing before agent operations.
+
+        Args:
+            registry_path: Path to the registry directory
+
+        Returns:
+            FreshnessResult with freshness status and recommendation
+        """
+        papers_dir = registry_path / "papers"
+
+        # Check if registry exists
+        if not papers_dir.exists():
+            logger.warning("freshness_check_no_registry", path=str(registry_path))
+            return FreshnessResult(
+                is_fresh=True,  # No registry = nothing to refresh from
+                corpus_updated=self._stats.last_updated if self._papers else None,
+                registry_updated=None,
+                recommendation="Registry not found. No refresh needed.",
+            )
+
+        # Get registry last modification time (most recent paper directory)
+        registry_updated: Optional[datetime] = None
+        papers_to_refresh = 0
+
+        for paper_dir in papers_dir.iterdir():
+            if not paper_dir.is_dir():
+                continue
+
+            # Check metadata.json or content.md modification time
+            for check_file in ["metadata.json", "content.md"]:
+                file_path = paper_dir / check_file
+                if file_path.exists():
+                    mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=UTC)
+                    if registry_updated is None or mtime > registry_updated:
+                        registry_updated = mtime
+                    break
+
+            # Count papers not in corpus or modified since ingestion
+            paper_id = paper_dir.name
+            if paper_id not in self._papers:
+                papers_to_refresh += 1
+            else:
+                # Check if paper was modified after ingestion
+                paper_record = self._papers[paper_id]
+                content_path = paper_dir / "content.md"
+                if content_path.exists():
+                    content_mtime = datetime.fromtimestamp(
+                        content_path.stat().st_mtime, tz=UTC
+                    )
+                    if content_mtime > paper_record.ingested_at:
+                        papers_to_refresh += 1
+
+        # No papers in registry
+        if registry_updated is None:
+            return FreshnessResult(
+                is_fresh=True,
+                corpus_updated=self._stats.last_updated if self._papers else None,
+                registry_updated=None,
+                recommendation="Registry is empty. No refresh needed.",
+            )
+
+        # Corpus is empty - definitely stale if registry has papers
+        corpus_updated = self._stats.last_updated if self._papers else None
+        if corpus_updated is None:
+            stale_seconds = (datetime.now(UTC) - registry_updated).total_seconds()
+            return FreshnessResult(
+                is_fresh=False,
+                corpus_updated=None,
+                registry_updated=registry_updated,
+                stale_by_seconds=max(0.0, stale_seconds),
+                recommendation="Corpus is empty. Run ensure_fresh() to build corpus.",
+                papers_to_refresh=papers_to_refresh,
+            )
+
+        # Compare timestamps
+        if registry_updated > corpus_updated:
+            stale_seconds = (registry_updated - corpus_updated).total_seconds()
+            return FreshnessResult(
+                is_fresh=False,
+                corpus_updated=corpus_updated,
+                registry_updated=registry_updated,
+                stale_by_seconds=stale_seconds,
+                recommendation=f"Corpus is stale by {stale_seconds:.0f}s. "
+                f"{papers_to_refresh} paper(s) need refreshing.",
+                papers_to_refresh=papers_to_refresh,
+            )
+
+        # Corpus is fresh
+        return FreshnessResult(
+            is_fresh=True,
+            corpus_updated=corpus_updated,
+            registry_updated=registry_updated,
+            stale_by_seconds=0.0,
+            recommendation="Corpus is up-to-date with registry.",
+            papers_to_refresh=0,
+        )
+
+    def ensure_fresh(
+        self,
+        registry_path: Path,
+        auto_refresh: bool = True,
+        force: bool = False,
+    ) -> FreshnessResult:
+        """Ensure corpus is fresh before agent operations.
+
+        This is the main entry point for agent startup. It checks freshness
+        and optionally triggers an incremental refresh if the corpus is stale.
+
+        Args:
+            registry_path: Path to the registry directory
+            auto_refresh: If True, automatically refresh stale corpus
+            force: If True, refresh even if corpus appears fresh
+
+        Returns:
+            FreshnessResult with final freshness status
+        """
+        # Check current freshness
+        result = self.check_freshness(registry_path)
+
+        logger.info(
+            "freshness_check_result",
+            is_fresh=result.is_fresh,
+            stale_by_seconds=result.stale_by_seconds,
+            papers_to_refresh=result.papers_to_refresh,
+        )
+
+        # If fresh and not forced, return immediately
+        if result.is_fresh and not force:
+            return result
+
+        # If auto_refresh is disabled, just return the stale result
+        if not auto_refresh:
+            logger.warning(
+                "corpus_stale_no_auto_refresh",
+                stale_by_seconds=result.stale_by_seconds,
+                papers_to_refresh=result.papers_to_refresh,
+            )
+            return result
+
+        # Perform incremental refresh
+        logger.info(
+            "corpus_auto_refresh_starting",
+            papers_to_refresh=result.papers_to_refresh,
+        )
+
+        ingested = self.ingest_from_registry(registry_path, force=force)
+
+        logger.info(
+            "corpus_auto_refresh_complete",
+            papers_ingested=ingested,
+        )
+
+        # Return updated freshness result
+        return FreshnessResult(
+            is_fresh=True,
+            corpus_updated=self._stats.last_updated,
+            registry_updated=result.registry_updated,
+            stale_by_seconds=0.0,
+            recommendation=f"Corpus refreshed. {ingested} paper(s) ingested.",
+            papers_to_refresh=0,
+        )

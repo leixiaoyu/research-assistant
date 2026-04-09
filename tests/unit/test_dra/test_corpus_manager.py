@@ -10,6 +10,7 @@ from src.models.dra import ChunkType, CorpusChunk, CorpusConfig
 from src.services.dra.corpus_manager import (
     CorpusManager,
     CorpusStats,
+    FreshnessResult,
     PaperRecord,
 )
 
@@ -709,3 +710,294 @@ This is the introduction.
             assert manager._stats.chunks_by_section["abstract"] == 2
             assert manager._stats.chunks_by_section["methods"] == 1
             assert manager._stats.total_tokens == 300
+
+
+class TestFreshnessResult:
+    """Tests for FreshnessResult model."""
+
+    def test_fresh_result(self):
+        """Test creating a fresh result."""
+        result = FreshnessResult(
+            is_fresh=True,
+            corpus_updated=datetime.now(UTC),
+            registry_updated=datetime.now(UTC),
+            recommendation="Corpus is up-to-date.",
+        )
+        assert result.is_fresh is True
+        assert result.stale_by_seconds == 0.0
+        assert result.papers_to_refresh == 0
+
+    def test_stale_result(self):
+        """Test creating a stale result."""
+        result = FreshnessResult(
+            is_fresh=False,
+            stale_by_seconds=3600.0,
+            papers_to_refresh=5,
+            recommendation="Corpus is stale.",
+        )
+        assert result.is_fresh is False
+        assert result.stale_by_seconds == 3600.0
+        assert result.papers_to_refresh == 5
+
+
+class TestFreshnessCheck:
+    """Tests for corpus freshness checking."""
+
+    def test_check_freshness_no_registry(self):
+        """Test freshness check when registry doesn't exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir) / "nonexistent_registry"
+
+            manager = CorpusManager()
+            result = manager.check_freshness(registry_path)
+
+            assert result.is_fresh is True
+            assert result.registry_updated is None
+            assert "Registry not found" in result.recommendation
+
+    def test_check_freshness_empty_registry(self):
+        """Test freshness check with empty registry."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir)
+            papers_dir = registry_path / "papers"
+            papers_dir.mkdir()
+
+            manager = CorpusManager()
+            result = manager.check_freshness(registry_path)
+
+            assert result.is_fresh is True
+            assert "empty" in result.recommendation.lower()
+
+    def test_check_freshness_empty_corpus_with_registry(self):
+        """Test freshness check when corpus is empty but registry has papers."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir)
+            papers_dir = registry_path / "papers"
+            papers_dir.mkdir()
+
+            # Create a paper in registry
+            paper_dir = papers_dir / "paper1"
+            paper_dir.mkdir()
+            (paper_dir / "content.md").write_text("# Abstract\nTest content")
+            (paper_dir / "metadata.json").write_text('{"title": "Test Paper"}')
+
+            manager = CorpusManager()
+            result = manager.check_freshness(registry_path)
+
+            assert result.is_fresh is False
+            assert result.corpus_updated is None
+            assert result.registry_updated is not None
+            assert result.papers_to_refresh >= 1
+            assert "empty" in result.recommendation.lower()
+
+    def test_check_freshness_corpus_is_fresh(self):
+        """Test freshness check when corpus is up-to-date."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir)
+            papers_dir = registry_path / "papers"
+            papers_dir.mkdir()
+
+            # Create a paper in registry
+            paper_dir = papers_dir / "paper1"
+            paper_dir.mkdir()
+            (paper_dir / "content.md").write_text("# Abstract\nTest content")
+
+            # Create manager with paper already ingested
+            manager = CorpusManager()
+
+            # Mock that paper is already in corpus with recent timestamp
+            manager._papers["paper1"] = PaperRecord(
+                paper_id="paper1",
+                title="Test Paper",
+                checksum="abc123",
+                chunk_ids=["paper1:0"],
+                ingested_at=datetime.now(UTC),  # Just ingested
+            )
+            manager._stats = CorpusStats(
+                total_papers=1,
+                last_updated=datetime.now(UTC),
+            )
+
+            result = manager.check_freshness(registry_path)
+
+            assert result.is_fresh is True
+            assert result.stale_by_seconds == 0.0
+            assert result.papers_to_refresh == 0
+
+    def test_check_freshness_corpus_is_stale(self):
+        """Test freshness check when corpus is stale."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir)
+            papers_dir = registry_path / "papers"
+            papers_dir.mkdir()
+
+            # Create manager with old corpus timestamp
+            manager = CorpusManager()
+            old_time = datetime(2020, 1, 1, tzinfo=UTC)
+            manager._papers["old_paper"] = PaperRecord(
+                paper_id="old_paper",
+                title="Old Paper",
+                checksum="old",
+                chunk_ids=["old_paper:0"],
+                ingested_at=old_time,
+            )
+            manager._stats = CorpusStats(
+                total_papers=1,
+                last_updated=old_time,
+            )
+
+            # Create a NEW paper in registry (not in corpus)
+            paper_dir = papers_dir / "new_paper"
+            paper_dir.mkdir()
+            (paper_dir / "content.md").write_text("# Abstract\nNew content")
+
+            result = manager.check_freshness(registry_path)
+
+            assert result.is_fresh is False
+            assert result.stale_by_seconds > 0
+            assert result.papers_to_refresh >= 1
+
+    def test_check_freshness_detects_modified_paper(self):
+        """Test that freshness check detects papers modified after ingestion."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir)
+            papers_dir = registry_path / "papers"
+            papers_dir.mkdir()
+
+            # Create a paper in registry
+            paper_dir = papers_dir / "paper1"
+            paper_dir.mkdir()
+
+            # Set corpus as having ingested this paper a while ago
+            manager = CorpusManager()
+            old_time = datetime(2020, 1, 1, tzinfo=UTC)
+            manager._papers["paper1"] = PaperRecord(
+                paper_id="paper1",
+                title="Paper 1",
+                checksum="old_checksum",
+                chunk_ids=["paper1:0"],
+                ingested_at=old_time,
+            )
+            manager._stats = CorpusStats(
+                total_papers=1,
+                last_updated=old_time,
+            )
+
+            # Now write content (file mtime will be "now", after ingested_at)
+            (paper_dir / "content.md").write_text("# Updated content")
+
+            result = manager.check_freshness(registry_path)
+
+            # Paper was modified after ingestion, so needs refresh
+            assert result.papers_to_refresh >= 1
+
+
+class TestEnsureFresh:
+    """Tests for ensure_fresh method."""
+
+    @patch("src.services.dra.corpus_manager.HybridSearchEngine")
+    def test_ensure_fresh_already_fresh(self, mock_engine_class):
+        """Test ensure_fresh when corpus is already fresh."""
+        mock_engine = MagicMock()
+        mock_engine.corpus_size = 0
+        mock_engine_class.return_value = mock_engine
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir)
+            papers_dir = registry_path / "papers"
+            papers_dir.mkdir()
+
+            manager = CorpusManager()
+            result = manager.ensure_fresh(registry_path)
+
+            # Empty registry = fresh
+            assert result.is_fresh is True
+
+    @patch("src.services.dra.corpus_manager.HybridSearchEngine")
+    def test_ensure_fresh_auto_refresh_disabled(self, mock_engine_class):
+        """Test ensure_fresh with auto_refresh=False."""
+        mock_engine = MagicMock()
+        mock_engine.corpus_size = 0
+        mock_engine_class.return_value = mock_engine
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir)
+            papers_dir = registry_path / "papers"
+            papers_dir.mkdir()
+
+            # Add a paper to registry
+            paper_dir = papers_dir / "paper1"
+            paper_dir.mkdir()
+            (paper_dir / "content.md").write_text("# Test")
+
+            manager = CorpusManager()
+            result = manager.ensure_fresh(registry_path, auto_refresh=False)
+
+            # Stale but no auto-refresh
+            assert result.is_fresh is False
+            assert result.papers_to_refresh >= 1
+
+    @patch("src.services.dra.corpus_manager.HybridSearchEngine")
+    def test_ensure_fresh_triggers_refresh(self, mock_engine_class):
+        """Test that ensure_fresh triggers refresh when stale."""
+        mock_engine = MagicMock()
+        mock_engine.corpus_size = 0
+        mock_engine.get_chunk.return_value = None
+        mock_engine_class.return_value = mock_engine
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir)
+            papers_dir = registry_path / "papers"
+            papers_dir.mkdir()
+
+            # Add a paper to registry
+            paper_dir = papers_dir / "paper1"
+            paper_dir.mkdir()
+            (paper_dir / "content.md").write_text("# Abstract\nTest content here.")
+            (paper_dir / "metadata.json").write_text('{"title": "Test Paper"}')
+
+            manager = CorpusManager()
+            result = manager.ensure_fresh(registry_path, auto_refresh=True)
+
+            # After auto-refresh, should be fresh
+            assert result.is_fresh is True
+            assert "refreshed" in result.recommendation.lower()
+
+    @patch("src.services.dra.corpus_manager.HybridSearchEngine")
+    def test_ensure_fresh_force_refresh(self, mock_engine_class):
+        """Test ensure_fresh with force=True."""
+        mock_engine = MagicMock()
+        mock_engine.corpus_size = 1
+        mock_engine.get_chunk.return_value = None
+        mock_engine_class.return_value = mock_engine
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir)
+            papers_dir = registry_path / "papers"
+            papers_dir.mkdir()
+
+            # Add a paper to registry
+            paper_dir = papers_dir / "paper1"
+            paper_dir.mkdir()
+            (paper_dir / "content.md").write_text("# Abstract\nTest")
+            (paper_dir / "metadata.json").write_text('{"title": "Test"}')
+
+            # Create manager with paper already "ingested"
+            manager = CorpusManager()
+            manager._papers["paper1"] = PaperRecord(
+                paper_id="paper1",
+                title="Test",
+                checksum="abc",
+                chunk_ids=["paper1:0"],
+                ingested_at=datetime.now(UTC),
+            )
+            manager._stats = CorpusStats(
+                total_papers=1,
+                last_updated=datetime.now(UTC),
+            )
+
+            # Force refresh even though fresh
+            result = manager.ensure_fresh(registry_path, force=True)
+
+            assert result.is_fresh is True
+            assert "refreshed" in result.recommendation.lower()

@@ -228,10 +228,14 @@ class TestQualityScorerVenueScore:
         assert score == 1.0  # 30/30
 
     def test_preprint_arxiv(self, scorer):
-        """Test score for ArXiv (preprint)."""
+        """Test score for ArXiv (preprint).
+
+        Note: ArXiv score was updated from 10 to 15 to reflect its role as
+        the primary venue for cutting-edge AI/ML research.
+        """
         paper = self._make_paper(venue="ArXiv")
         score = scorer._venue_score(paper)
-        assert score == 10 / 30  # Lower score for preprint
+        assert score == 15 / 30  # ArXiv is respectable for AI/ML research
 
     def test_unknown_venue(self, scorer):
         """Test score for unknown venue."""

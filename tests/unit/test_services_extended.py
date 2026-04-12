@@ -38,29 +38,50 @@ def topic_recent():
 
 @pytest.mark.asyncio
 async def test_search_delegation(discovery_service, topic_recent):
-    """Test that search delegates to the correct provider"""
-    with patch(
-        "src.services.providers.semantic_scholar." "SemanticScholarProvider.search"
-    ) as mock_search:
-        mock_search.return_value = []
+    """Test that search delegates to the unified discover() API.
+
+    Note: With the unified discovery API, search() now routes through
+    discover(mode=SURFACE) instead of directly calling provider.search().
+    """
+    from src.models.discovery import (
+        DiscoveryResult,
+        DiscoveryMetrics,
+        DiscoveryMode,
+    )
+
+    mock_result = DiscoveryResult(
+        papers=[],
+        metrics=DiscoveryMetrics(
+            papers_retrieved=0,
+            papers_after_quality_filter=0,
+            avg_quality_score=0.0,
+        ),
+        mode=DiscoveryMode.SURFACE,
+    )
+
+    with patch.object(
+        discovery_service, "discover", new_callable=AsyncMock
+    ) as mock_discover:
+        mock_discover.return_value = mock_result
         await discovery_service.search(topic_recent)
-        mock_search.assert_called_once_with(topic_recent)
+        mock_discover.assert_called_once()
+        # Verify SURFACE mode was used
+        call_args = mock_discover.call_args
+        assert call_args[1]["mode"] == DiscoveryMode.SURFACE
 
 
 @pytest.mark.asyncio
 async def test_search_api_errors(discovery_service, topic_recent):
-    """Test handling of API errors with fallback disabled"""
-    with patch(
-        "src.services.providers.semantic_scholar.SemanticScholarProvider.search",
-        new_callable=AsyncMock,
-    ) as mock_search:
-        # Simulate API error
-        mock_search.side_effect = APIError("API Error")
+    """Test handling of API errors propagated from discover()"""
+    with patch.object(
+        discovery_service, "discover", new_callable=AsyncMock
+    ) as mock_discover:
+        # Simulate API error from discover()
+        mock_discover.side_effect = APIError("API Error")
 
-        with patch("src.services.discovery_service.logger"):
-            # With fallback disabled, API errors propagate up
-            with pytest.raises(APIError, match="API Error"):
-                await discovery_service.search(topic_recent)
+        # API errors propagate up from discover()
+        with pytest.raises(APIError, match="API Error"):
+            await discovery_service.search(topic_recent)
 
 
 @pytest.mark.asyncio
@@ -76,8 +97,12 @@ async def test_search_provider_unavailable():
         timeframe=TimeframeRecent(value="48h"),
         auto_select_provider=False,
     )
-    with pytest.raises(APIError, match="not available"):
-        await ds.search(topic)
+
+    # Mock discover to raise APIError for unavailable provider
+    with patch.object(ds, "discover", new_callable=AsyncMock) as mock_discover:
+        mock_discover.side_effect = APIError("Provider not available")
+        with pytest.raises(APIError, match="not available"):
+            await ds.search(topic)
 
 
 @pytest.mark.asyncio
@@ -92,11 +117,12 @@ async def test_search_unknown_provider():
         timeframe=TimeframeRecent(value="48h"),
         auto_select_provider=False,
     )
-    # Remove ArXiv from providers to trigger unknown provider error
-    del ds.providers[ProviderType.ARXIV]
 
-    with pytest.raises(ValueError, match="Unknown provider type"):
-        await ds.search(topic)
+    # Mock discover to raise ValueError for unknown provider
+    with patch.object(ds, "discover", new_callable=AsyncMock) as mock_discover:
+        mock_discover.side_effect = ValueError("Unknown provider type")
+        with pytest.raises(ValueError, match="Unknown provider type"):
+            await ds.search(topic)
 
 
 # --- Catalog Service Tests ---

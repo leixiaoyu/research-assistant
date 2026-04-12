@@ -12,18 +12,20 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 
 from src.models.config import (
     ResearchTopic,
-    TimeframeDateRange,
-    TimeframeType,
     QueryExpansionConfig,
     CitationExplorationConfig,
     AggregationConfig,
 )
-from src.models.discovery import DiscoveryStats
+from src.models.discovery import (
+    DiscoveryStats,
+    DiscoveryMode,
+    DiscoveryPipelineConfig,
+    ScoredPaper,
+)
 from src.models.paper import PaperMetadata
 from src.orchestration.phases.base import PipelinePhase
 from src.services.providers.base import APIError
 from src.utils.timeframe_resolver import TimeframeResolver
-from src.services.discovery_filter import DiscoveryFilter
 
 if TYPE_CHECKING:
     from src.orchestration.context import PipelineContext
@@ -217,104 +219,76 @@ class DiscoveryPhase(PipelinePhase[DiscoveryResult]):
                 multi_source=self.multi_source_enabled,
             )
 
-            # Execute discovery (Phase 7.2: multi-source or standard)
+            # Phase 8: Use unified discover() API based on configuration
+            # Determine discovery mode from config flags
             if self.multi_source_enabled:
-                papers = await self._multi_source_discover(topic, result)
-                result.papers = papers
+                mode = DiscoveryMode.DEEP
+            elif getattr(self.context.config.settings, "enhanced_enabled", False):
+                mode = DiscoveryMode.STANDARD
             else:
-                # Phase 7.1: Create modified topic with incremental timeframe
-                if resolved_timeframe is not None and resolved_timeframe.is_incremental:
-                    # Convert ResolvedTimeframe to TimeframeDateRange for provider
-                    incremental_timeframe = TimeframeDateRange(
-                        type=TimeframeType.DATE_RANGE,
-                        start_date=resolved_timeframe.start_date.date(),
-                        end_date=resolved_timeframe.end_date.date(),
-                    )
-                    search_topic = topic.model_copy(
-                        update={"timeframe": incremental_timeframe}
-                    )
-                    self.logger.info(
-                        "using_incremental_search",
-                        topic=topic.query,
-                        start_date=incremental_timeframe.start_date.isoformat(),
-                        end_date=incremental_timeframe.end_date.isoformat(),
-                    )
-                else:
-                    search_topic = topic
+                mode = DiscoveryMode.SURFACE
 
-                papers = await self.context.discovery_service.search(search_topic)
+            # Create pipeline config
+            max_papers_value = getattr(topic, "max_papers", None) or getattr(
+                self.context.config, "max_papers_per_topic", 50
+            )
+            # Ensure max_papers is an int
+            max_papers_int = (
+                int(max_papers_value) if max_papers_value is not None else 50
+            )
+            pipeline_config = DiscoveryPipelineConfig(
+                mode=mode,
+                max_papers=max_papers_int,
+            )
 
-                # Phase 7.1: Apply discovery filtering
-                filter_enabled = (
-                    self.context.config.settings.discovery_filter_settings.enabled
+            # Call unified discover() API
+            discovery_result = await self.context.discovery_service.discover(
+                topic=topic.query,
+                mode=mode,
+                config=pipeline_config,
+                llm_service=getattr(self.context, "llm_service", None),
+            )
+
+            # Convert ScoredPaper to PaperMetadata for backward compatibility
+            result.papers = self._convert_scored_to_metadata(discovery_result.papers)
+
+            # Store source breakdown for reporting (preserve Phase 7.2 behavior)
+            if self.multi_source_enabled and discovery_result.source_breakdown:
+                # Update Phase 7.2 stats with source breakdown
+                if result.phase72_stats is None:
+                    result.phase72_stats = Phase72Stats()
+                result.phase72_stats.source_breakdown = (
+                    discovery_result.source_breakdown
                 )
-                filter_settings = self.context.config.settings.discovery_filter_settings
-                register_at_discovery = filter_settings.register_at_discovery
+                result.phase72_stats.sources_queried = list(
+                    discovery_result.source_breakdown.keys()
+                )
+                result.phase72_stats.papers_after_dedup = len(result.papers)
 
-                if filter_enabled and self.context.registry_service is not None:
-                    # Initialize discovery filter
-                    discovery_filter = DiscoveryFilter(
-                        registry_service=self.context.registry_service,
-                        skip_filter=False,
-                    )
+            # Use DiscoveryResult.metrics directly for stats
+            result.discovery_stats = DiscoveryStats(
+                total_discovered=discovery_result.metrics.papers_retrieved,
+                new_count=len(result.papers),
+                filtered_count=discovery_result.metrics.papers_retrieved
+                - len(result.papers),
+                filter_breakdown={},
+                incremental_query=(
+                    resolved_timeframe.is_incremental if resolved_timeframe else False
+                ),
+                query_start_date=(
+                    resolved_timeframe.start_date if resolved_timeframe else None
+                ),
+            )
 
-                    # Filter papers
-                    filter_result = await discovery_filter.filter_papers(
-                        papers=papers,
-                        topic_slug=topic_slug,
-                        register_new=register_at_discovery,
-                    )
-
-                    # Update result with filtered papers
-                    result.papers = filter_result.new_papers
-
-                    # Update statistics
-                    filter_result.stats.incremental_query = (
-                        resolved_timeframe.is_incremental
-                        if resolved_timeframe
-                        else False
-                    )
-                    if resolved_timeframe and resolved_timeframe.is_incremental:
-                        filter_result.stats.query_start_date = (
-                            resolved_timeframe.start_date
-                        )
-
-                    result.discovery_stats = filter_result.stats
-
-                    self.logger.info(
-                        "discovery_filtering_applied",
-                        topic=topic.query,
-                        total_discovered=filter_result.stats.total_discovered,
-                        new_count=filter_result.stats.new_count,
-                        filtered_count=filter_result.stats.filtered_count,
-                    )
-                else:
-                    # No filtering - use all papers
-                    result.papers = papers
-
-                    # Create basic stats
-                    result.discovery_stats = DiscoveryStats(
-                        total_discovered=len(papers),
-                        new_count=len(papers),
-                        filtered_count=0,
-                        filter_breakdown={},
-                        incremental_query=(
-                            resolved_timeframe.is_incremental
-                            if resolved_timeframe
-                            else False
-                        ),
-                        query_start_date=(
-                            resolved_timeframe.start_date
-                            if resolved_timeframe
-                            else None
-                        ),
-                    )
-
-                    self.logger.info(
-                        "discovery_filtering_skipped",
-                        topic=topic.query,
-                        reason="filtering_disabled_or_no_registry",
-                    )
+            self.logger.info(
+                "discovery_completed_via_unified_api",
+                topic=topic.query,
+                mode=mode.value,
+                papers_retrieved=discovery_result.metrics.papers_retrieved,
+                papers_after_filters=len(result.papers),
+                providers_queried=discovery_result.metrics.providers_queried,
+                duration_ms=discovery_result.metrics.pipeline_duration_ms,
+            )
 
             result.success = True
 
@@ -350,65 +324,58 @@ class DiscoveryPhase(PipelinePhase[DiscoveryResult]):
         result.duration_seconds = time.time() - start_time
         return result
 
-    async def _multi_source_discover(
-        self,
-        topic: ResearchTopic,
-        result: TopicDiscoveryResult,
+    def _convert_scored_to_metadata(
+        self, scored_papers: List[ScoredPaper]
     ) -> List[PaperMetadata]:
-        """Execute Phase 7.2 multi-source discovery.
-
-        Uses query expansion, multiple providers, citation exploration,
-        and result aggregation for comprehensive paper discovery.
+        """Convert ScoredPaper objects to PaperMetadata for backward compatibility.
 
         Args:
-            topic: Research topic to process
-            result: TopicDiscoveryResult to update with stats
+            scored_papers: List of ScoredPaper from discover()
 
         Returns:
-            List of discovered papers
+            List of PaperMetadata objects
         """
-        assert self.context.discovery_service is not None
+        from src.models.paper import Author
+        from pydantic import HttpUrl
 
-        # Initialize Phase 7.2 stats
-        stats = Phase72Stats()
+        metadata_papers = []
+        for sp in scored_papers:
+            # Convert authors to Author objects
+            author_objects = (
+                [Author(name=name) for name in sp.authors] if sp.authors else []
+            )
 
-        # Use multi_source_search from DiscoveryService
-        papers = await self.context.discovery_service.multi_source_search(
-            topic=topic,
-            llm_service=getattr(self.context, "llm_service", None),
-            registry_service=getattr(self.context, "registry_service", None),
-            query_expansion_config=self.query_expansion_config,
-            citation_config=self.citation_config,
-            aggregation_config=self.aggregation_config,
-        )
+            # Parse publication_date if string
+            pub_date = None
+            if sp.publication_date:
+                if isinstance(sp.publication_date, str):
+                    from datetime import datetime
 
-        # Track source breakdown from papers
-        for paper in papers:
-            source = paper.discovery_source or "unknown"
-            stats.source_breakdown[source] = stats.source_breakdown.get(source, 0) + 1
-            if source not in stats.sources_queried:
-                stats.sources_queried.append(source)
+                    try:
+                        pub_date = datetime.fromisoformat(
+                            sp.publication_date.replace("Z", "+00:00")
+                        )
+                    except (ValueError, AttributeError):
+                        pub_date = None
 
-            # Track citation discovery
-            if paper.discovery_method == "forward_citation":
-                stats.forward_citations_found += 1
-            elif paper.discovery_method == "backward_citation":
-                stats.backward_citations_found += 1
-
-        stats.papers_after_dedup = len(papers)
-        result.phase72_stats = stats
-
-        self.logger.info(
-            "multi_source_discovery_complete",
-            topic=topic.query,
-            papers_found=len(papers),
-            sources_queried=stats.sources_queried,
-            source_breakdown=stats.source_breakdown,
-            forward_citations=stats.forward_citations_found,
-            backward_citations=stats.backward_citations_found,
-        )
-
-        return papers
+            # Create PaperMetadata from ScoredPaper fields
+            paper = PaperMetadata(
+                paper_id=sp.paper_id,
+                title=sp.title,
+                abstract=sp.abstract,
+                doi=sp.doi,
+                url=HttpUrl(sp.url) if sp.url else HttpUrl("https://example.com"),
+                open_access_pdf=(
+                    HttpUrl(sp.open_access_pdf) if sp.open_access_pdf else None
+                ),
+                authors=author_objects,
+                publication_date=pub_date,
+                venue=sp.venue,
+                citation_count=sp.citation_count,
+                discovery_source=sp.source,
+            )
+            metadata_papers.append(paper)
+        return metadata_papers
 
     def _get_default_result(self) -> DiscoveryResult:
         """Get default result when phase is skipped."""

@@ -116,39 +116,41 @@ class TestDiscoveryServiceDependencyInjection:
         assert result.paper_count == 1
 
     @pytest.mark.asyncio
-    async def test_enhanced_search_creates_service_when_not_injected(
+    async def test_enhanced_search_routes_to_discover_when_not_injected(
         self, sample_topic
     ):
-        """Test that enhanced_search creates service internally when not injected."""
+        """Test that enhanced_search routes to discover() when no service injected.
+
+        Note: With the unified discovery API, enhanced_search now routes to the
+        internal discover() method instead of creating an EnhancedDiscoveryService.
+        """
         service = DiscoveryService()
 
-        # Mock the internal service creation (local import in enhanced_search)
-        with patch(
-            "src.services.enhanced_discovery_service.EnhancedDiscoveryService"
-        ) as MockEnhanced:
-            mock_instance = AsyncMock()
-            mock_instance.discover = AsyncMock(
-                return_value=DiscoveryResult(
-                    papers=[],
-                    metrics=DiscoveryMetrics(
-                        papers_retrieved=0,
-                        papers_after_quality_filter=0,
-                        papers_after_relevance_filter=0,
-                        avg_quality_score=0.0,
-                        avg_relevance_score=0.0,
-                    ),
-                    queries_used=[],
-                )
-            )
-            MockEnhanced.return_value = mock_instance
+        # Mock the internal discover method
+        mock_result = DiscoveryResult(
+            papers=[],
+            metrics=DiscoveryMetrics(
+                papers_retrieved=0,
+                papers_after_quality_filter=0,
+                papers_after_relevance_filter=0,
+                avg_quality_score=0.0,
+                avg_relevance_score=0.0,
+            ),
+            queries_used=[],
+        )
 
-            with patch("src.services.query_decomposer.QueryDecomposer"):
-                with patch("src.services.quality_filter_service.QualityFilterService"):
-                    with patch("src.services.relevance_ranker.RelevanceRanker"):
-                        await service.enhanced_search(sample_topic)
+        with patch.object(service, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.return_value = mock_result
 
-            # Verify internal service was created
-            MockEnhanced.assert_called_once()
+            await service.enhanced_search(sample_topic)
+
+            # Verify discover was called with STANDARD mode
+            mock_discover.assert_called_once()
+            call_args = mock_discover.call_args
+            assert call_args[1]["topic"] == sample_topic.query
+            from src.models.discovery import DiscoveryMode
+
+            assert call_args[1]["mode"] == DiscoveryMode.STANDARD
 
     @pytest.mark.asyncio
     async def test_enhanced_search_ignores_params_when_service_injected(

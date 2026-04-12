@@ -84,7 +84,7 @@ venues:
   # ---------------------------------------------------------------------------
   # Preprint Servers (lower quality signal - not peer-reviewed)
   # ---------------------------------------------------------------------------
-  arxiv: 10
+  arxiv: 15
   biorxiv: 10
   medrxiv: 10
   ssrn: 10

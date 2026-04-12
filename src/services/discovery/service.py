@@ -5,7 +5,7 @@ from typing import List, Dict, Optional, Tuple, TYPE_CHECKING
 
 import structlog
 
-from src.services.providers.base import DiscoveryProvider, APIError
+from src.services.providers.base import DiscoveryProvider
 from src.services.providers.semantic_scholar import SemanticScholarProvider
 from src.services.providers.arxiv import ArxivProvider
 from src.services.providers.huggingface import HuggingFaceProvider
@@ -14,7 +14,6 @@ from src.models.config import (
     ResearchTopic,
     ProviderType,
     ProviderSelectionConfig,
-    PDFStrategy,
     EnhancedDiscoveryConfig,
     CitationExplorationConfig,
     QueryExpansionConfig,
@@ -23,7 +22,14 @@ from src.models.config import (
 )
 from src.models.paper import PaperMetadata
 from src.models.provider import ProviderMetrics, ProviderComparison
-from src.models.discovery import DiscoveryResult
+from src.models.discovery import (
+    DiscoveryResult,
+    DiscoveryMode,
+    DiscoveryPipelineConfig,
+    ScoredPaper,
+)
+from src.services.quality_intelligence_service import QualityIntelligenceService
+from src.services.query_intelligence_service import QueryIntelligenceService
 from src.utils.provider_selector import ProviderSelector
 from src.services.quality_scorer import QualityScorer
 
@@ -150,6 +156,54 @@ class DiscoveryService:
     # Backward Compatibility: Delegate to internal components
     # =========================================================================
 
+    def _scored_to_metadata(self, scored: "ScoredPaper") -> PaperMetadata:
+        """Convert ScoredPaper back to PaperMetadata for legacy callers.
+
+        Args:
+            scored: ScoredPaper with quality and relevance scores.
+
+        Returns:
+            PaperMetadata with quality_score set.
+        """
+        from datetime import datetime
+        from pydantic import HttpUrl
+        from src.models.paper import Author
+
+        # Convert author strings back to Author objects
+        authors = [Author(name=name) for name in scored.authors]
+
+        # Convert URL string to HttpUrl (required field, use placeholder if missing)
+        url = (
+            HttpUrl(scored.url) if scored.url else HttpUrl("https://example.com/paper")
+        )
+
+        # Convert publication_date string to datetime if available
+        pub_date = None
+        if scored.publication_date:
+            try:
+                pub_date = datetime.fromisoformat(scored.publication_date)
+            except (ValueError, AttributeError):
+                # If parsing fails, leave as None
+                pass
+
+        # Create PaperMetadata
+        paper = PaperMetadata(
+            paper_id=scored.paper_id,
+            title=scored.title,
+            abstract=scored.abstract,
+            doi=scored.doi,
+            url=url,
+            authors=authors,
+            publication_date=pub_date,
+            venue=scored.venue,
+            citation_count=scored.citation_count,
+        )
+
+        # Set quality_score on the mutable metadata (0-100 scale)
+        paper.quality_score = scored.quality_score * 100
+
+        return paper
+
     def _is_duplicate(
         self,
         paper: PaperMetadata,
@@ -245,11 +299,21 @@ class DiscoveryService:
         """
         self._enhanced_service = service
 
-    async def search(self, topic: ResearchTopic) -> List[PaperMetadata]:
-        """Search for papers using intelligent provider selection.
+    async def search(
+        self,
+        topic: ResearchTopic,
+        max_papers: int = 50,
+        providers: Optional[List[ProviderType]] = None,
+    ) -> List[PaperMetadata]:
+        """[DEPRECATED] Search for papers using intelligent provider selection.
+
+        This method is deprecated. Use discover(mode=DiscoveryMode.SURFACE) instead
+        for fast surface-level discovery.
 
         Args:
             topic: Research topic with query and settings.
+            max_papers: Maximum papers to return (default: 50).
+            providers: Optional list of providers to use.
 
         Returns:
             List of paper metadata.
@@ -258,59 +322,42 @@ class DiscoveryService:
             APIError: If provider is unavailable or request fails.
             ValueError: If unknown provider type requested.
         """
-        # Check for benchmark mode
-        if topic.benchmark or self.config.benchmark_mode:
-            return await self._result_merger.benchmark_search(topic, self.providers)
+        logger.warning(
+            "search_method_deprecated",
+            message=(
+                "search() is deprecated, use "
+                "discover(mode=DiscoveryMode.SURFACE) instead"
+            ),
+            migration_guide=(
+                "Replace search(topic) with "
+                "discover(topic.query, mode=DiscoveryMode.SURFACE)"
+            ),
+        )
 
-        # Auto-select provider if enabled
-        if self.config.auto_select and topic.auto_select_provider:
-            selected_provider = self._selector.select_provider(
-                topic=topic,
-                available_providers=self.available_providers,
-                min_citations=topic.min_citations,
-            )
+        # Import discovery models
+        from src.models.discovery import DiscoveryMode, DiscoveryPipelineConfig
+
+        # Build provider list for config
+        provider_names = []
+        if providers:
+            provider_names = [p.value for p in providers]
         else:
-            selected_provider = topic.provider
+            # Use all available providers
+            provider_names = [p.value for p in self.providers.keys()]
 
-        # Validate provider availability
-        if selected_provider not in self.providers:
-            if selected_provider == ProviderType.SEMANTIC_SCHOLAR:
-                logger.error(
-                    "provider_unavailable",
-                    provider=selected_provider,
-                    reason="missing_api_key",
-                )
-                raise APIError(
-                    f"Provider {selected_provider} is not available "
-                    "(missing API key). Check .env file."
-                )
-            else:
-                raise ValueError(f"Unknown provider type: {selected_provider}")
+        # Route to discover with SURFACE mode
+        result = await self.discover(
+            topic=topic.query,
+            mode=DiscoveryMode.SURFACE,
+            config=DiscoveryPipelineConfig(
+                mode=DiscoveryMode.SURFACE,
+                max_papers=max_papers,
+                providers=provider_names,
+            ),
+        )
 
-        provider = self.providers[selected_provider]
-
-        # Execute search with fallback if enabled
-        if self.config.fallback_enabled and len(self.providers) > 1:
-            papers = await self._search_with_fallback(
-                topic, provider, selected_provider
-            )
-        else:
-            papers = await provider.search(topic)
-
-        # Phase 3.4: Handle ArXiv supplement strategy
-        if topic.pdf_strategy == PDFStrategy.ARXIV_SUPPLEMENT:
-            papers = await self._result_merger.apply_arxiv_supplement(
-                topic, papers, self.providers
-            )
-
-        # Phase 3.4: Apply quality ranking if enabled
-        if topic.quality_ranking and papers:
-            papers = self._quality_scorer.rank_papers(
-                papers, min_score=topic.min_quality_score
-            )
-            self._metrics_collector.log_quality_stats(papers)
-
-        return papers
+        # Convert ScoredPaper back to PaperMetadata for backward compatibility
+        return [self._scored_to_metadata(sp) for sp in result.papers]
 
     async def _search_with_fallback(
         self,
@@ -467,116 +514,51 @@ class DiscoveryService:
         llm_service: Optional["LLMService"] = None,
         config: Optional[EnhancedDiscoveryConfig] = None,
     ) -> DiscoveryResult:
-        """Search using the Phase 6 enhanced discovery pipeline.
+        """[DEPRECATED] Search using the Phase 6 enhanced discovery pipeline.
 
-        This method implements the 4-stage discovery enhancement:
-        1. Query Decomposition: Break broad queries into focused sub-queries
-        2. Multi-Source Retrieval: Query multiple providers with smart routing
-        3. Quality Filtering: Score papers on multiple quality signals
-        4. Relevance Ranking: LLM-based semantic relevance scoring
+        This method is deprecated. Use discover(mode=DiscoveryMode.STANDARD) instead
+        for balanced discovery with query decomposition.
 
-        The enhanced pipeline can be customized via dependency injection:
-        - Pass enhanced_discovery_service to __init__ for full control
-        - Or let this method create one internally (backward compatible)
+        Note: If an EnhancedDiscoveryService was injected via constructor or
+        enhanced_service property setter, it will be used for backward compatibility.
+        Otherwise, this delegates to the unified discover() API.
 
         Args:
             topic: Research topic with query and settings.
             llm_service: Optional LLM service for query decomposition and
-                relevance ranking. If not provided, these stages are skipped.
-                Note: Ignored if enhanced_discovery_service was injected.
+                relevance ranking. Ignored if an EnhancedDiscoveryService is
+                injected (uses the injected service's configuration instead).
             config: Optional enhanced discovery configuration.
-                Note: Ignored if enhanced_discovery_service was injected.
 
         Returns:
             DiscoveryResult with scored and ranked papers, metrics, and queries.
-
-        Note:
-            If llm_service is not provided, the pipeline runs in degraded mode:
-            - Query decomposition returns only the original query
-            - Relevance ranking uses quality score only
         """
-        # Use injected service if available (dependency injection pattern)
+        logger.warning(
+            "enhanced_search_deprecated",
+            message=(
+                "enhanced_search() is deprecated, use "
+                "discover(mode=DiscoveryMode.STANDARD) instead"
+            ),
+            migration_guide=(
+                "Replace enhanced_search(topic, llm) with "
+                "discover(topic.query, mode=DiscoveryMode.STANDARD, "
+                "llm_service=llm)"
+            ),
+        )
+
+        # Backward compatibility: use injected EnhancedDiscoveryService if available
         if self._enhanced_service is not None:
-            # Warn if caller provided parameters that will be ignored
-            if llm_service is not None or config is not None:
-                logger.warning(
-                    "enhanced_search_params_ignored",
-                    reason="using_injected_service",
-                    llm_service_provided=llm_service is not None,
-                    config_provided=config is not None,
-                )
-            logger.info(
-                "enhanced_search_starting",
-                query=topic.query[:50],
-                providers=list(self.providers.keys()),
-                mode="injected_service",
-            )
-            result = await self._enhanced_service.discover(topic)
-            logger.info(
-                "enhanced_search_completed",
-                query=topic.query[:50],
-                papers_found=result.paper_count,
-                avg_quality=result.metrics.avg_quality_score,
-                avg_relevance=result.metrics.avg_relevance_score,
-            )
-            return result
+            return await self._enhanced_service.discover(topic)
 
-        # Backward compatible: Create service internally if not injected
-        # Import here to avoid circular dependencies
-        from src.services.enhanced_discovery_service import EnhancedDiscoveryService
-        from src.services.query_decomposer import QueryDecomposer
-        from src.services.quality_filter_service import QualityFilterService
-        from src.services.relevance_ranker import RelevanceRanker
+        # Import discovery models
+        from src.models.discovery import DiscoveryMode
 
-        effective_config = config or EnhancedDiscoveryConfig()  # type: ignore[call-arg]
-
-        # Create Phase 6 components
-        query_decomposer = QueryDecomposer(
+        # Route to discover with STANDARD mode
+        return await self.discover(
+            topic=topic.query,
+            mode=DiscoveryMode.STANDARD,
             llm_service=llm_service,
-            enable_cache=True,
         )
-
-        quality_filter = QualityFilterService(
-            min_citations=0,
-            min_quality_score=effective_config.min_quality_score,
-        )
-
-        relevance_ranker = RelevanceRanker(
-            llm_service=llm_service,
-            min_relevance_score=effective_config.min_relevance_score,
-            batch_size=10,
-            enable_cache=True,
-        )
-
-        # Create enhanced discovery service
-        enhanced_service = EnhancedDiscoveryService(
-            providers=self.providers,
-            query_decomposer=query_decomposer,
-            quality_filter=quality_filter,
-            relevance_ranker=relevance_ranker,
-            config=effective_config,
-        )
-
-        logger.info(
-            "enhanced_search_starting",
-            query=topic.query[:50],
-            providers=list(self.providers.keys()),
-            llm_enabled=llm_service is not None,
-            mode="internal_creation",
-        )
-
-        # Run enhanced discovery
-        result = await enhanced_service.discover(topic)
-
-        logger.info(
-            "enhanced_search_completed",
-            query=topic.query[:50],
-            papers_found=result.paper_count,
-            avg_quality=result.metrics.avg_quality_score,
-            avg_relevance=result.metrics.avg_relevance_score,
-        )
-
-        return result
 
     # =========================================================================
     # Phase 7.2: Multi-Source Discovery with Citation Exploration
@@ -591,13 +573,10 @@ class DiscoveryService:
         citation_config: Optional[CitationExplorationConfig] = None,
         aggregation_config: Optional[AggregationConfig] = None,
     ) -> List[PaperMetadata]:
-        """Search using Phase 7.2 multi-source discovery with citation exploration.
+        """[DEPRECATED] Search using Phase 7.2 multi-source discovery.
 
-        This method implements comprehensive discovery:
-        1. Query Expansion: LLM-generated query variants
-        2. Multi-Source Search: Query all configured providers concurrently
-        3. Citation Exploration: Forward/backward citation discovery
-        4. Result Aggregation: Deduplication and ranking
+        This method is deprecated. Use discover(mode=DiscoveryMode.DEEP)
+        instead for comprehensive discovery with citations.
 
         Args:
             topic: Research topic with query and settings.
@@ -610,32 +589,302 @@ class DiscoveryService:
         Returns:
             List of deduplicated, ranked papers from all sources.
         """
-        from src.utils.query_expander import QueryExpander
-        from src.services.citation_explorer import CitationExplorer
-        from src.services.result_aggregator import ResultAggregator
+        logger.warning(
+            "multi_source_search_deprecated",
+            message=(
+                "multi_source_search() is deprecated, use "
+                "discover(mode=DiscoveryMode.DEEP) instead"
+            ),
+            migration_guide=(
+                "Replace multi_source_search(topic, llm) with "
+                "discover(topic.query, mode=DiscoveryMode.DEEP, "
+                "llm_service=llm)"
+            ),
+        )
 
-        # Initialize configurations with defaults
-        qe_config = query_expansion_config or QueryExpansionConfig()
-        cite_config = citation_config or CitationExplorationConfig()
-        agg_config = aggregation_config or AggregationConfig()
+        # Import discovery models
+        from src.models.discovery import DiscoveryMode
 
-        # Step 1: Query Expansion (if enabled and LLM available)
-        queries = [topic.query]
-        if qe_config.enabled and llm_service is not None:
-            expander = QueryExpander(llm_service=llm_service, config=qe_config)
-            queries = await expander.expand(topic.query)
-            logger.info(
-                "phase72_query_expansion",
-                original=topic.query[:50],
-                expanded_count=len(queries),
+        # Route to discover with DEEP mode
+        result = await self.discover(
+            topic=topic.query,
+            mode=DiscoveryMode.DEEP,
+            llm_service=llm_service,
+        )
+
+        # Convert ScoredPaper back to PaperMetadata for backward compatibility
+        return [self._scored_to_metadata(sp) for sp in result.papers]
+
+    # =========================================================================
+    # Phase 8: Unified Discovery API with Tiered Complexity
+    # =========================================================================
+
+    async def discover(
+        self,
+        topic: str,
+        mode: Optional["DiscoveryMode"] = None,
+        config: Optional["DiscoveryPipelineConfig"] = None,
+        llm_service: Optional["LLMService"] = None,
+    ) -> "DiscoveryResult":
+        """Unified discovery API with tiered complexity modes.
+
+        This method consolidates search(), enhanced_search(), and
+        multi_source_search() into a single interface with three operational
+        modes:
+
+        - SURFACE: Fast (<5s), single provider, no query enhancement
+        - STANDARD: Balanced (<30s), query decomposition, all providers
+        - DEEP: Comprehensive (<120s), hybrid enhancement, citations
+
+        Args:
+            topic: Research topic string (will be converted to ResearchTopic)
+            mode: Discovery mode (defaults to STANDARD if not in config)
+            config: Optional pipeline configuration
+            llm_service: Optional LLM service for query enhancement and
+                relevance ranking
+
+        Returns:
+            DiscoveryResult with scored papers, metrics, and source breakdown
+
+        Example:
+            # Fast surface discovery
+            result = await service.discover(
+                "GPT-4 applications", mode=DiscoveryMode.SURFACE
             )
 
-        # Step 2: Multi-Source Concurrent Search
-        source_results: Dict[str, List[PaperMetadata]] = {}
+            # Standard discovery with query decomposition
+            result = await service.discover("transformer optimization")
 
-        for query in queries:
-            # Create topic with current query
-            search_topic = topic.model_copy(update={"query": query})
+            # Deep discovery with citations
+            result = await service.discover(
+                "reinforcement learning robotics",
+                mode=DiscoveryMode.DEEP,
+                llm_service=llm
+            )
+        """
+        import time
+        from src.services.venue_repository import YamlVenueRepository
+
+        start_time = time.time()
+
+        # Use default config if not provided
+        if config is None:
+            effective_mode = mode or DiscoveryMode.STANDARD
+            config = DiscoveryPipelineConfig(mode=effective_mode)
+        else:
+            effective_mode = config.mode
+
+        # Override mode if explicitly provided
+        if mode is not None:
+            effective_mode = mode
+
+        # Convert topic string to ResearchTopic with default timeframe
+        from src.models.config.core import TimeframeRecent, TimeframeType
+
+        research_topic = ResearchTopic(
+            query=topic,
+            max_papers=config.max_papers,
+            timeframe=TimeframeRecent(type=TimeframeType.RECENT, value="30d"),
+        )
+
+        # Initialize services
+        venue_repo = YamlVenueRepository()
+        quality_service = QualityIntelligenceService(
+            venue_repository=venue_repo,
+            min_citations=config.min_citations,
+        )
+        query_service = (
+            QueryIntelligenceService(llm_service=llm_service) if llm_service else None
+        )
+
+        logger.info(
+            "discover_starting",
+            query=topic[:50],
+            mode=effective_mode.value,
+            providers=list(self.providers.keys()),
+            llm_enabled=llm_service is not None,
+        )
+
+        # Route based on mode
+        if effective_mode == DiscoveryMode.SURFACE:
+            result = await self._discover_surface(
+                research_topic, config, quality_service, start_time
+            )
+        elif effective_mode == DiscoveryMode.STANDARD:
+            result = await self._discover_standard(
+                research_topic, config, quality_service, query_service, start_time
+            )
+        else:  # DEEP
+            result = await self._discover_deep(
+                research_topic,
+                config,
+                quality_service,
+                query_service,
+                llm_service,
+                start_time,
+            )
+
+        logger.info(
+            "discover_completed",
+            query=topic[:50],
+            mode=effective_mode.value,
+            papers_found=result.paper_count,
+            duration_ms=result.metrics.pipeline_duration_ms,
+        )
+
+        return result
+
+    async def _discover_surface(
+        self,
+        topic: "ResearchTopic",
+        config: "DiscoveryPipelineConfig",
+        quality_service: "QualityIntelligenceService",
+        start_time: float,
+    ) -> "DiscoveryResult":
+        """SURFACE mode: Fast discovery with single provider.
+
+        Target: <5s
+        - Single best provider (use first available)
+        - No query enhancement
+        - Basic quality scoring
+        - Return quickly with minimal processing
+        """
+        import time
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+        )
+
+        # Select single provider (first available or ArXiv as fallback)
+        selected_provider = None
+        if self.providers:
+            # Use first provider in available list
+            selected_provider = list(self.providers.keys())[0]
+        else:
+            # No providers available
+            logger.error("discover_surface_no_providers")
+            return DiscoveryResult(
+                papers=[],
+                metrics=DiscoveryMetrics(
+                    pipeline_duration_ms=int((time.time() - start_time) * 1000),
+                    duration_ms=int((time.time() - start_time) * 1000),
+                ),
+                mode=DiscoveryMode.SURFACE,
+            )
+
+        logger.info(
+            "discover_surface_provider_selected", provider=selected_provider.value
+        )
+
+        # Query single provider
+        provider = self.providers[selected_provider]
+        papers = await provider.search(topic)
+
+        # Apply basic quality scoring
+        scored_papers = [quality_service.score_paper(paper) for paper in papers]
+
+        # Sort by quality score and limit
+        scored_papers.sort(key=lambda p: p.quality_score, reverse=True)
+        scored_papers = scored_papers[: config.max_papers]
+
+        # Build source breakdown
+        source_breakdown = {selected_provider.value: len(scored_papers)}
+
+        # Calculate metrics
+        duration_ms = int((time.time() - start_time) * 1000)
+        avg_quality = (
+            sum(p.quality_score for p in scored_papers) / len(scored_papers)
+            if scored_papers
+            else 0.0
+        )
+
+        metrics = DiscoveryMetrics(
+            papers_retrieved=len(papers),
+            papers_after_dedup=len(scored_papers),
+            papers_after_quality_filter=len(scored_papers),
+            providers_queried=[selected_provider.value],
+            avg_quality_score=avg_quality,
+            pipeline_duration_ms=duration_ms,
+            duration_ms=duration_ms,
+        )
+
+        return DiscoveryResult(
+            papers=scored_papers,
+            metrics=metrics,
+            source_breakdown=source_breakdown,
+            mode=DiscoveryMode.SURFACE,
+        )
+
+    async def _discover_standard(
+        self,
+        topic: "ResearchTopic",
+        config: "DiscoveryPipelineConfig",
+        quality_service: "QualityIntelligenceService",
+        query_service: Optional["QueryIntelligenceService"],
+        start_time: float,
+    ) -> "DiscoveryResult":
+        """STANDARD mode: Balanced discovery with query decomposition.
+
+        Target: <30s
+        - Query decomposition (if LLM available)
+        - All providers queried concurrently
+        - Quality filtering
+        - Deduplication
+        """
+        import time
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+            DecomposedQuery,
+            QueryFocus,
+        )
+        from src.models.query import QueryStrategy
+
+        # Step 1: Query enhancement (if available)
+        queries_used = []
+        if query_service:
+            enhanced_queries = await query_service.enhance(
+                topic.query,
+                strategy=QueryStrategy.DECOMPOSE,
+                max_queries=config.query_enhancement.max_queries,
+                include_original=config.query_enhancement.include_original,
+            )
+            # Convert EnhancedQuery to DecomposedQuery for backward compatibility
+            for eq in enhanced_queries:
+                # Map query.QueryFocus to discovery.QueryFocus by value
+                focus_value = eq.focus.value if eq.focus else "methodology"
+                discovery_focus = QueryFocus(focus_value)
+                queries_used.append(
+                    DecomposedQuery(
+                        query=eq.query,
+                        focus=discovery_focus,
+                        weight=eq.weight,
+                    )
+                )
+        else:
+            # No LLM - use original query only
+            queries_used = [
+                DecomposedQuery(
+                    query=topic.query,
+                    focus=QueryFocus.METHODOLOGY,
+                    weight=1.0,
+                )
+            ]
+
+        logger.info(
+            "discover_standard_queries_generated",
+            original=topic.query[:50],
+            count=len(queries_used),
+        )
+
+        # Step 2: Query all providers concurrently for each query
+        all_papers = []
+        source_breakdown: dict = {}
+
+        for decomposed_query in queries_used:
+            search_topic = topic.model_copy(update={"query": decomposed_query.query})
 
             # Query all providers concurrently
             tasks = []
@@ -649,82 +898,311 @@ class DiscoveryService:
             for provider_name, result in zip(provider_names, results):
                 if isinstance(result, BaseException):
                     logger.warning(
-                        "phase72_provider_error",
+                        "discover_standard_provider_error",
                         provider=provider_name,
                         error=str(result),
                     )
                     continue
 
-                # Add discovery_source to papers
-                for paper in result:
-                    if not paper.discovery_source:
-                        paper = paper.model_copy(
-                            update={
-                                "discovery_source": provider_name,
-                                "discovery_method": "keyword",
-                            }
-                        )
+                # Track source
+                source_breakdown[provider_name] = source_breakdown.get(
+                    provider_name, 0
+                ) + len(result)
+                all_papers.extend(result)
 
-                if provider_name not in source_results:
-                    source_results[provider_name] = []
-                source_results[provider_name].extend(result)
+        papers_retrieved = len(all_papers)
 
-        logger.info(
-            "phase72_multi_source_search",
-            providers_queried=len(self.providers),
-            total_papers=sum(len(p) for p in source_results.values()),
+        # Step 3: Deduplication
+        deduplicated_papers: List[PaperMetadata] = []
+        seen_ids: set[str] = set()
+        for paper in all_papers:
+            if not self._result_merger.is_duplicate(
+                paper, deduplicated_papers, seen_ids
+            ):
+                deduplicated_papers.append(paper)
+                if paper.doi:
+                    seen_ids.add(paper.doi)
+                if paper.paper_id:
+                    seen_ids.add(paper.paper_id)
+
+        # Step 4: Quality filtering and scoring
+        scored_papers = quality_service.filter_by_quality(
+            deduplicated_papers,
+            min_score=config.min_quality_score,
         )
 
-        # Step 3: Citation Exploration (if enabled and SS available)
-        if cite_config.enabled and self._api_key:
+        # Sort by quality score and limit
+        scored_papers.sort(key=lambda p: p.quality_score, reverse=True)
+        scored_papers = scored_papers[: config.max_papers]
+
+        # Calculate metrics
+        duration_ms = int((time.time() - start_time) * 1000)
+        avg_quality = (
+            sum(p.quality_score for p in scored_papers) / len(scored_papers)
+            if scored_papers
+            else 0.0
+        )
+
+        metrics = DiscoveryMetrics(
+            queries_generated=len(queries_used),
+            papers_retrieved=papers_retrieved,
+            papers_after_dedup=len(deduplicated_papers),
+            papers_after_quality_filter=len(scored_papers),
+            providers_queried=list(self.providers.keys()),
+            avg_quality_score=avg_quality,
+            pipeline_duration_ms=duration_ms,
+            duration_ms=duration_ms,
+        )
+
+        return DiscoveryResult(
+            papers=scored_papers,
+            metrics=metrics,
+            queries_used=queries_used,
+            source_breakdown=source_breakdown,
+            mode=DiscoveryMode.STANDARD,
+        )
+
+    async def _discover_deep(
+        self,
+        topic: "ResearchTopic",
+        config: "DiscoveryPipelineConfig",
+        quality_service: "QualityIntelligenceService",
+        query_service: Optional["QueryIntelligenceService"],
+        llm_service: Optional["LLMService"],
+        start_time: float,
+    ) -> "DiscoveryResult":
+        """DEEP mode: Comprehensive discovery with citations and relevance ranking.
+
+        Target: <120s
+        - Hybrid query enhancement (decompose + expand)
+        - All providers queried concurrently
+        - Citation exploration (forward + backward)
+        - Quality filtering
+        - Relevance ranking (LLM-based)
+        """
+        import time
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+            DecomposedQuery,
+            QueryFocus,
+        )
+        from src.models.query import QueryStrategy
+
+        # Step 1: Hybrid query enhancement (if available)
+        queries_used = []
+        if query_service:
+            enhanced_queries = await query_service.enhance(
+                topic.query,
+                strategy=QueryStrategy.HYBRID,
+                max_queries=config.query_enhancement.max_queries
+                * 2,  # More queries for deep mode
+                include_original=config.query_enhancement.include_original,
+            )
+            # Convert EnhancedQuery to DecomposedQuery
+            for eq in enhanced_queries:
+                # Map query.QueryFocus to discovery.QueryFocus by value
+                focus_value = eq.focus.value if eq.focus else "methodology"
+                discovery_focus = QueryFocus(focus_value)
+                queries_used.append(
+                    DecomposedQuery(
+                        query=eq.query,
+                        focus=discovery_focus,
+                        weight=eq.weight,
+                    )
+                )
+        else:
+            # No LLM - use original query only
+            queries_used = [
+                DecomposedQuery(
+                    query=topic.query,
+                    focus=QueryFocus.METHODOLOGY,
+                    weight=1.0,
+                )
+            ]
+
+        logger.info(
+            "discover_deep_queries_generated",
+            original=topic.query[:50],
+            count=len(queries_used),
+        )
+
+        # Step 2: Query all providers concurrently for each query
+        all_papers = []
+        source_breakdown: dict = {}
+
+        for decomposed_query in queries_used:
+            search_topic = topic.model_copy(update={"query": decomposed_query.query})
+
+            # Query all providers concurrently
+            tasks = []
+            provider_names = []
+            for provider_type, provider in self.providers.items():
+                tasks.append(provider.search(search_topic))
+                provider_names.append(provider_type.value)
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for provider_name, result in zip(provider_names, results):
+                if isinstance(result, BaseException):
+                    logger.warning(
+                        "discover_deep_provider_error",
+                        provider=provider_name,
+                        error=str(result),
+                    )
+                    continue
+
+                # Track source
+                source_breakdown[provider_name] = source_breakdown.get(
+                    provider_name, 0
+                ) + len(result)
+                all_papers.extend(result)
+
+        papers_retrieved = len(all_papers)
+
+        # Step 3: Citation exploration (if enabled and SS available)
+        forward_citations_found = 0
+        backward_citations_found = 0
+
+        if config.citation_exploration.enabled and self._api_key and all_papers:
+            from src.services.citation_explorer import CitationExplorer
+            from src.models.config import CitationExplorationConfig
+
             explorer = CitationExplorer(
                 api_key=self._api_key,
-                registry_service=registry_service,  # type: ignore[arg-type]
-                config=cite_config,
+                config=CitationExplorationConfig(
+                    enabled=True,
+                    forward=config.citation_exploration.forward_citations,
+                    backward=config.citation_exploration.backward_citations,
+                    max_citation_depth=config.citation_exploration.max_depth,
+                    max_forward_per_paper=(
+                        config.citation_exploration.max_papers_per_direction
+                    ),
+                    max_backward_per_paper=(
+                        config.citation_exploration.max_papers_per_direction
+                    ),
+                ),
             )
 
-            # Get seed papers from initial results
-            all_initial = []
-            for papers in source_results.values():
-                all_initial.extend(papers)
-
             # Limit seed papers to avoid excessive API calls
-            seed_papers = all_initial[:20]
+            seed_papers = all_papers[:10]
 
-            if seed_papers:
-                citation_result = await explorer.explore(
-                    seed_papers=seed_papers,
-                    topic_slug=topic.slug,
-                )
+            citation_result = await explorer.explore(
+                seed_papers=seed_papers,
+                topic_slug=topic.slug,
+            )
 
-                # Add citation papers to results
-                if citation_result.forward_papers:
-                    source_results["forward_citations"] = citation_result.forward_papers
-                if citation_result.backward_papers:
-                    source_results["backward_citations"] = (
-                        citation_result.backward_papers
-                    )
+            # Add citation papers to results
+            if citation_result.forward_papers:
+                forward_citations_found = len(citation_result.forward_papers)
+                source_breakdown["forward_citations"] = forward_citations_found
+                all_papers.extend(citation_result.forward_papers)
 
-                logger.info(
-                    "phase72_citation_exploration",
-                    forward=citation_result.stats.forward_discovered,
-                    backward=citation_result.stats.backward_discovered,
-                )
+            if citation_result.backward_papers:
+                backward_citations_found = len(citation_result.backward_papers)
+                source_breakdown["backward_citations"] = backward_citations_found
+                all_papers.extend(citation_result.backward_papers)
 
-        # Step 4: Aggregation (deduplication + ranking)
-        aggregator = ResultAggregator(
-            registry_service=registry_service,  # type: ignore[arg-type]
-            config=agg_config,
+            logger.info(
+                "discover_deep_citation_exploration",
+                forward=forward_citations_found,
+                backward=backward_citations_found,
+            )
+
+        # Step 4: Deduplication
+        deduplicated_papers: List[PaperMetadata] = []
+        seen_ids: set[str] = set()
+        for paper in all_papers:
+            if not self._result_merger.is_duplicate(
+                paper, deduplicated_papers, seen_ids
+            ):
+                deduplicated_papers.append(paper)
+                if paper.doi:
+                    seen_ids.add(paper.doi)
+                if paper.paper_id:
+                    seen_ids.add(paper.paper_id)
+
+        # Step 5: Quality filtering and scoring
+        scored_papers = quality_service.filter_by_quality(
+            deduplicated_papers,
+            min_score=config.min_quality_score,
         )
 
-        aggregation_result = await aggregator.aggregate(source_results)
+        papers_after_quality = len(scored_papers)
 
-        logger.info(
-            "phase72_aggregation_complete",
-            total_raw=aggregation_result.total_raw,
-            after_dedup=aggregation_result.total_after_dedup,
-            final_count=len(aggregation_result.papers),
-            source_breakdown=aggregation_result.source_breakdown,
+        # Step 6: Relevance ranking (if enabled and LLM available)
+        if config.enable_relevance_ranking and llm_service:
+            from src.services.relevance_ranker import RelevanceRanker
+
+            ranker = RelevanceRanker(
+                llm_service=llm_service,
+                min_relevance_score=config.min_relevance_score,
+                batch_size=10,
+                enable_cache=True,
+            )
+
+            # Rank papers
+            ranked_papers = await ranker.rank(
+                papers=scored_papers,
+                query=topic.query,
+            )
+
+            # Filter by relevance threshold
+            scored_papers = [
+                p
+                for p in ranked_papers
+                if p.relevance_score is not None
+                and p.relevance_score >= config.min_relevance_score
+            ]
+
+            logger.info(
+                "discover_deep_relevance_ranking",
+                before=papers_after_quality,
+                after=len(scored_papers),
+            )
+
+        # Sort by final score and limit
+        scored_papers.sort(key=lambda p: p.final_score, reverse=True)
+        scored_papers = scored_papers[: config.max_papers]
+
+        # Calculate metrics
+        duration_ms = int((time.time() - start_time) * 1000)
+        avg_quality = (
+            sum(p.quality_score for p in scored_papers) / len(scored_papers)
+            if scored_papers
+            else 0.0
+        )
+        avg_relevance = (
+            sum(
+                p.relevance_score
+                for p in scored_papers
+                if p.relevance_score is not None
+            )
+            / len([p for p in scored_papers if p.relevance_score is not None])
+            if any(p.relevance_score is not None for p in scored_papers)
+            else 0.0
         )
 
-        return aggregation_result.papers
+        metrics = DiscoveryMetrics(
+            queries_generated=len(queries_used),
+            papers_retrieved=papers_retrieved,
+            papers_after_dedup=len(deduplicated_papers),
+            papers_after_quality_filter=papers_after_quality,
+            papers_after_relevance_filter=len(scored_papers),
+            providers_queried=list(self.providers.keys()),
+            avg_quality_score=avg_quality,
+            avg_relevance_score=avg_relevance,
+            pipeline_duration_ms=duration_ms,
+            duration_ms=duration_ms,
+            forward_citations_found=forward_citations_found,
+            backward_citations_found=backward_citations_found,
+        )
+
+        return DiscoveryResult(
+            papers=scored_papers,
+            metrics=metrics,
+            queries_used=queries_used,
+            source_breakdown=source_breakdown,
+            mode=DiscoveryMode.DEEP,
+        )

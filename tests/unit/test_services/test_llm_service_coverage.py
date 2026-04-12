@@ -122,6 +122,9 @@ class TestLLMServiceCoverage:
             with patch("google.genai.types"):
                 service = LLMService(llm_config, cost_limits)
 
+                # Reset circuit breakers to ensure clean state (handles test isolation)
+                service.reset_circuit_breakers()
+
                 # Mock _call_google_raw for backward compatibility
                 service._call_google_raw = AsyncMock(return_value=mock_response)
 

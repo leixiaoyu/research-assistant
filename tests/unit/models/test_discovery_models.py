@@ -4,7 +4,7 @@ Tests for new discovery models added in Task 2.1:
 - DiscoveryMode enum
 - QualityTierConfig
 - QueryEnhancementConfig
-- CitationExplorationConfig
+- DiscoveryCitationConfig
 - DiscoveryPipelineConfig
 - Extended DiscoveryResult
 - Extended DiscoveryMetrics
@@ -17,7 +17,7 @@ from src.models.discovery import (
     DiscoveryMode,
     QualityTierConfig,
     QueryEnhancementConfig,
-    CitationExplorationConfig,
+    DiscoveryCitationConfig,
     DiscoveryPipelineConfig,
     DiscoveryResult,
     DiscoveryMetrics,
@@ -160,12 +160,12 @@ class TestQueryEnhancementConfig:
             QueryEnhancementConfig(max_queries=21)
 
 
-class TestCitationExplorationConfig:
-    """Tests for CitationExplorationConfig model."""
+class TestDiscoveryCitationConfig:
+    """Tests for DiscoveryCitationConfig model."""
 
     def test_citation_exploration_config_defaults(self):
-        """Test CitationExplorationConfig has correct default values."""
-        config = CitationExplorationConfig()
+        """Test DiscoveryCitationConfig has correct default values."""
+        config = DiscoveryCitationConfig()
         assert config.enabled is True
         assert config.forward_citations is True
         assert config.backward_citations is True
@@ -173,14 +173,14 @@ class TestCitationExplorationConfig:
         assert config.max_papers_per_direction == 10
 
     def test_citation_exploration_config_frozen(self):
-        """Test CitationExplorationConfig is immutable."""
-        config = CitationExplorationConfig()
+        """Test DiscoveryCitationConfig is immutable."""
+        config = DiscoveryCitationConfig()
         with pytest.raises(ValidationError):
             config.enabled = False  # type: ignore[misc]
 
     def test_citation_exploration_config_custom_values(self):
-        """Test CitationExplorationConfig accepts custom values."""
-        config = CitationExplorationConfig(
+        """Test DiscoveryCitationConfig accepts custom values."""
+        config = DiscoveryCitationConfig(
             enabled=False,
             forward_citations=False,
             backward_citations=False,
@@ -194,38 +194,38 @@ class TestCitationExplorationConfig:
         assert config.max_papers_per_direction == 20
 
     def test_citation_exploration_config_validates_max_depth(self):
-        """Test CitationExplorationConfig validates max_depth in [1, 3]."""
+        """Test DiscoveryCitationConfig validates max_depth in [1, 3]."""
         # Valid boundaries
-        config_min = CitationExplorationConfig(max_depth=1)
+        config_min = DiscoveryCitationConfig(max_depth=1)
         assert config_min.max_depth == 1
 
-        config_max = CitationExplorationConfig(max_depth=3)
+        config_max = DiscoveryCitationConfig(max_depth=3)
         assert config_max.max_depth == 3
 
         # Invalid: below 1
         with pytest.raises(ValidationError):
-            CitationExplorationConfig(max_depth=0)
+            DiscoveryCitationConfig(max_depth=0)
 
         # Invalid: above 3
         with pytest.raises(ValidationError):
-            CitationExplorationConfig(max_depth=4)
+            DiscoveryCitationConfig(max_depth=4)
 
     def test_citation_exploration_config_validates_max_papers(self):
-        """Test CitationExplorationConfig validates max_papers_per_direction."""
+        """Test DiscoveryCitationConfig validates max_papers_per_direction."""
         # Valid boundaries
-        config_min = CitationExplorationConfig(max_papers_per_direction=1)
+        config_min = DiscoveryCitationConfig(max_papers_per_direction=1)
         assert config_min.max_papers_per_direction == 1
 
-        config_max = CitationExplorationConfig(max_papers_per_direction=50)
+        config_max = DiscoveryCitationConfig(max_papers_per_direction=50)
         assert config_max.max_papers_per_direction == 50
 
         # Invalid: below 1
         with pytest.raises(ValidationError):
-            CitationExplorationConfig(max_papers_per_direction=0)
+            DiscoveryCitationConfig(max_papers_per_direction=0)
 
         # Invalid: above 50
         with pytest.raises(ValidationError):
-            CitationExplorationConfig(max_papers_per_direction=51)
+            DiscoveryCitationConfig(max_papers_per_direction=51)
 
 
 class TestDiscoveryPipelineConfig:
@@ -253,7 +253,7 @@ class TestDiscoveryPipelineConfig:
         assert config.query_enhancement.strategy == "decompose"
 
         # Citation exploration
-        assert isinstance(config.citation_exploration, CitationExplorationConfig)
+        assert isinstance(config.citation_exploration, DiscoveryCitationConfig)
         assert config.citation_exploration.enabled is True
 
         # Quality filtering
@@ -372,7 +372,7 @@ class TestDiscoveryPipelineConfig:
     def test_discovery_pipeline_config_nested_configs(self):
         """Test DiscoveryPipelineConfig accepts custom nested configs."""
         custom_enhancement = QueryEnhancementConfig(strategy="hybrid", max_queries=10)
-        custom_citation = CitationExplorationConfig(max_depth=2)
+        custom_citation = DiscoveryCitationConfig(max_depth=2)
         custom_quality = QualityWeights(citation=0.5, venue=0.3, recency=0.2)
         custom_tiers = QualityTierConfig(excellent=0.9, good=0.7, fair=0.5)
 

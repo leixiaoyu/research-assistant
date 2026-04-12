@@ -107,15 +107,23 @@ def topic_no_ranking():
 class TestDiscoveryServicePhase34Init:
     """Tests for Phase 3.4 initialization."""
 
-    def test_quality_scorer_default_init(self):
-        """Test that quality scorer is initialized by default."""
+    def test_discovery_service_init_without_quality_scorer(self):
+        """Test that DiscoveryService initializes without quality_scorer param.
+
+        Note: QualityScorer is deprecated and replaced by QualityIntelligenceService.
+        The service no longer stores _quality_scorer attribute.
+        """
         with patch("src.services.discovery_service.ArxivProvider"):
             service = DiscoveryService()
-            assert service._quality_scorer is not None
-            assert isinstance(service._quality_scorer, QualityScorer)
+            # Verify service initializes correctly without quality_scorer
+            assert service is not None
+            assert service.providers is not None
 
-    def test_quality_scorer_custom_init(self):
-        """Test that custom quality scorer can be provided."""
+    def test_quality_scorer_deprecated_warning(self, capsys):
+        """Test that passing quality_scorer emits deprecation warning.
+
+        Note: quality_scorer parameter is deprecated. Use QualityIntelligenceService.
+        """
         custom_scorer = QualityScorer(
             citation_weight=0.5,
             venue_weight=0.2,
@@ -124,7 +132,12 @@ class TestDiscoveryServicePhase34Init:
         )
         with patch("src.services.discovery_service.ArxivProvider"):
             service = DiscoveryService(quality_scorer=custom_scorer)
-            assert service._quality_scorer is custom_scorer
+            # Service should still initialize
+            assert service is not None
+        # Verify deprecation warning was logged to stdout (structlog output)
+        captured = capsys.readouterr()
+        assert "quality_scorer_deprecated" in captured.out
+        assert "deprecated" in captured.out.lower()
 
 
 class TestDiscoveryServiceQualityRanking:

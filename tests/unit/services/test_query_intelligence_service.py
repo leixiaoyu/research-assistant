@@ -1205,3 +1205,33 @@ async def test_expand_invalid_format_not_list(service_with_llm, mock_llm_service
 
     # Should return empty when parsed JSON is not a list
     assert len(result) == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_decompose_raises_without_llm(service_no_llm):
+    """Test _execute_decompose raises RuntimeError when LLM is None.
+
+    This tests the defensive RuntimeError path that guards against
+    calling internal decomposition without LLM service configured.
+    """
+    with pytest.raises(RuntimeError, match="LLM service required for decomposition"):
+        await service_no_llm._execute_decompose(
+            query="test query",
+            max_subqueries=5,
+            include_original=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_execute_expand_raises_without_llm(service_no_llm):
+    """Test _execute_expand raises RuntimeError when LLM is None.
+
+    This tests the defensive RuntimeError path that guards against
+    calling internal expansion without LLM service configured.
+    """
+    with pytest.raises(RuntimeError, match="LLM service required for expansion"):
+        await service_no_llm._execute_expand(
+            query="test query",
+            max_variants=5,
+            include_original=True,
+        )

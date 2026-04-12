@@ -14,7 +14,6 @@ from pydantic import TypeAdapter, HttpUrl
 
 from src.models.paper import PaperMetadata, Author
 
-
 # Type adapters for Pydantic strict types
 _url_adapter = TypeAdapter(HttpUrl)
 

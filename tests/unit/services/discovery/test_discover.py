@@ -473,11 +473,11 @@ class TestDiscoverDeepMode:
             discovery_service.providers[ProviderType.ARXIV] = mock_provider
 
             # Execute DEEP discovery with citations enabled
-            from src.models.discovery import CitationExplorationConfig
+            from src.models.discovery import DiscoveryCitationConfig
 
             config = DiscoveryPipelineConfig(
                 mode=DiscoveryMode.DEEP,
-                citation_exploration=CitationExplorationConfig(
+                citation_exploration=DiscoveryCitationConfig(
                     enabled=True,
                     forward_citations=True,
                     backward_citations=True,

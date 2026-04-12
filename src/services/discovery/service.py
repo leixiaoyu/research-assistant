@@ -145,8 +145,17 @@ class DiscoveryService:
             preference_order=self.config.preference_order,
         )
 
-        # Phase 3.4: Initialize quality scorer
-        self._quality_scorer = quality_scorer or QualityScorer()
+        # Phase 3.4: QualityScorer is deprecated, replaced by QualityIntelligenceService
+        # Keep parameter for backward compatibility but warn if used
+        if quality_scorer is not None:
+            logger.warning(
+                "quality_scorer_deprecated",
+                message=(
+                    "quality_scorer parameter is deprecated. "
+                    "Use QualityIntelligenceService instead."
+                ),
+            )
+        # Note: _quality_scorer attribute removed - use QualityIntelligenceService
 
         # Initialize internal components
         self._metrics_collector = MetricsCollector()

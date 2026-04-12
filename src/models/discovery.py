@@ -29,28 +29,17 @@ from pydantic import BaseModel, Field, ConfigDict, computed_field, model_validat
 
 import structlog
 
+# Import QueryFocus from canonical location to avoid duplication (DRY)
+from src.models.query import QueryFocus
+
 if TYPE_CHECKING:
     from src.models.paper import PaperMetadata
 
 logger = structlog.get_logger()
 
 
-class QueryFocus(str, Enum):
-    """Focus area for decomposed queries.
-
-    Categorizes sub-queries by their research perspective:
-    - METHODOLOGY: Focus on techniques, algorithms, approaches
-    - APPLICATION: Focus on use cases, domains, implementations
-    - COMPARISON: Focus on comparisons, benchmarks, evaluations
-    - RELATED: Focus on related concepts, synonyms, variations
-    - INTERSECTION: Focus on cross-disciplinary aspects
-    """
-
-    METHODOLOGY = "methodology"
-    APPLICATION = "application"
-    COMPARISON = "comparison"
-    RELATED = "related"
-    INTERSECTION = "intersection"
+# Re-export QueryFocus for backward compatibility
+__all__ = ["QueryFocus"]
 
 
 class ProviderCategory(str, Enum):
@@ -95,8 +84,16 @@ class QueryEnhancementConfig(BaseModel):
     cache_enabled: bool = Field(True, description="Enable query cache")
 
 
-class CitationExplorationConfig(BaseModel):
-    """Configuration for citation exploration in DEEP mode."""
+class DiscoveryCitationConfig(BaseModel):
+    """Simplified citation config for DiscoveryPipelineConfig.
+
+    This is a lightweight config for the unified discover() API.
+    For detailed citation exploration, use CitationExplorationConfig
+    from src.models.config.phase7.
+
+    Note: Renamed from CitationExplorationConfig to avoid collision
+    with the more detailed config in src.models.config.phase7.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -246,8 +243,8 @@ class DiscoveryPipelineConfig(BaseModel):
     )
 
     # Citation exploration (DEEP mode only)
-    citation_exploration: CitationExplorationConfig = Field(
-        default_factory=CitationExplorationConfig
+    citation_exploration: DiscoveryCitationConfig = Field(
+        default_factory=DiscoveryCitationConfig
     )
 
     # Quality filtering

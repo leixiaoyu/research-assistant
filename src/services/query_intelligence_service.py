@@ -300,8 +300,12 @@ class QueryIntelligenceService:
 
         Returns:
             List of EnhancedQuery objects with focus areas
+
+        Raises:
+            RuntimeError: If LLM service is not configured.
         """
-        assert self._llm_service is not None, "LLM service required for decomposition"
+        if self._llm_service is None:
+            raise RuntimeError("LLM service required for decomposition")
 
         # Generate prompt
         prompt = DECOMPOSITION_PROMPT.format(
@@ -352,8 +356,12 @@ class QueryIntelligenceService:
 
         Returns:
             List of EnhancedQuery objects with variants
+
+        Raises:
+            RuntimeError: If LLM service is not configured.
         """
-        assert self._llm_service is not None, "LLM service required for expansion"
+        if self._llm_service is None:
+            raise RuntimeError("LLM service required for expansion")
 
         # Generate prompt
         prompt = EXPANSION_PROMPT.format(

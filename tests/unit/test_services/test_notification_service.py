@@ -7,6 +7,7 @@ Tests Slack message building and notification delivery with:
 """
 
 import pytest
+from typing import Any, Dict
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from src.services.notification_service import (
@@ -20,6 +21,7 @@ from src.models.notification import (
     KeyLearning,
     DeduplicationResult,
 )
+from tests.conftest_types import make_url
 
 
 class TestSlackMessageBuilder:
@@ -310,7 +312,7 @@ class TestNotificationService:
         settings = NotificationSettings(
             slack=SlackConfig(
                 enabled=True,
-                webhook_url="https://hooks.slack.com/services/T00/B00/XXX",
+                webhook_url=make_url("https://hooks.slack.com/services/T00/B00/XXX"),
             )
         )
         return NotificationService(settings)
@@ -382,7 +384,7 @@ class TestNotificationService:
         result = await service.send_pipeline_summary(summary)
 
         assert result.success is False
-        assert "not configured" in result.error
+        assert result.error is not None and "not configured" in result.error
 
     @pytest.mark.asyncio
     async def test_send_condition_not_met(self) -> None:
@@ -390,7 +392,7 @@ class TestNotificationService:
         settings = NotificationSettings(
             slack=SlackConfig(
                 enabled=True,
-                webhook_url="https://hooks.slack.com/test",
+                webhook_url=make_url("https://hooks.slack.com/test"),
                 notify_on_success=False,  # Disabled for success
             )
         )
@@ -404,7 +406,7 @@ class TestNotificationService:
         result = await service.send_pipeline_summary(summary)
 
         assert result.success is True
-        assert "condition not met" in result.error
+        assert result.error is not None and "condition not met" in result.error
 
     @pytest.mark.asyncio
     async def test_send_successful(self, enabled_service: NotificationService) -> None:
@@ -457,7 +459,7 @@ class TestNotificationService:
 
         assert result.success is False
         assert result.response_status == 500
-        assert "500" in result.error
+        assert result.error is not None and "500" in result.error
 
     @pytest.mark.asyncio
     async def test_send_client_error(
@@ -480,7 +482,7 @@ class TestNotificationService:
             result = await enabled_service.send_pipeline_summary(summary)
 
         assert result.success is False
-        assert "HTTP error" in result.error
+        assert result.error is not None and "HTTP error" in result.error
 
     @pytest.mark.asyncio
     async def test_send_unexpected_error(
@@ -496,7 +498,7 @@ class TestNotificationService:
 
         # Should not raise, should return failure result
         assert result.success is False
-        assert "Unexpected error" in result.error
+        assert result.error is not None and "Unexpected error" in result.error
 
 
 class TestCreateSummaryFromResult:
@@ -504,7 +506,7 @@ class TestCreateSummaryFromResult:
 
     def test_basic_conversion(self) -> None:
         """Test basic result dict conversion."""
-        result = {
+        result: Dict[str, Any] = {
             "topics_processed": 3,
             "topics_failed": 0,
             "papers_discovered": 45,
@@ -541,7 +543,7 @@ class TestCreateSummaryFromResult:
 
     def test_missing_fields_use_defaults(self) -> None:
         """Test missing fields use default values."""
-        result = {}
+        result: Dict[str, Any] = {}
 
         summary = NotificationService.create_summary_from_result(result)
 
@@ -553,7 +555,7 @@ class TestCreateSummaryFromResult:
 
     def test_date_is_set(self) -> None:
         """Test date is set to current time."""
-        result = {}
+        result: Dict[str, Any] = {}
 
         summary = NotificationService.create_summary_from_result(result)
 

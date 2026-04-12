@@ -35,10 +35,14 @@ class TestProviderManager:
                 model="gemini-1.5-pro",
                 api_key="test-fallback-key",
             )
+        # Validate provider is one of the allowed literals
+        if provider not in ("anthropic", "google"):
+            provider = "anthropic"  # Default to anthropic for invalid providers
+
         # Use appropriate model for provider
         model = "gemini-1.5-pro" if provider == "google" else "claude-3-sonnet"
         return LLMConfig(
-            provider=provider,
+            provider=provider,  # type: ignore[arg-type]
             api_key="test-api-key",
             model=model,
             max_tokens=4096,

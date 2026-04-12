@@ -24,6 +24,7 @@ from src.utils.exceptions import (
     LLMAPIError,
     JSONParseError,
 )
+from tests.conftest_types import make_url
 
 
 @pytest.fixture
@@ -36,15 +37,15 @@ def llm_config() -> LLMConfig:
         max_tokens=4096,
         temperature=0.0,
         retry=RetryConfig(
-            max_retries=3,
-            base_delay=0.01,  # Fast for testing
-            max_delay=0.1,
-            exponential_base=2.0,
+            max_attempts=3,
+            base_delay_seconds=0.01,  # Fast for testing
+            max_delay_seconds=0.1,
+            jitter_factor=0.1,
         ),
         circuit_breaker=CircuitBreakerConfig(
             enabled=True,
             failure_threshold=5,
-            recovery_timeout=30.0,
+            cooldown_seconds=30.0,
         ),
     )
 
@@ -81,8 +82,8 @@ def paper_metadata() -> PaperMetadata:
         abstract="Test abstract",
         authors=[],
         publication_date=datetime(2024, 1, 15),
-        source="test",
-        url="https://example.com/paper/123",
+        discovery_source="test",
+        url=make_url("https://example.com/paper/123"),
     )
 
 
@@ -208,7 +209,10 @@ class TestDailyStatsReset:
             service._provider_health["anthropic"] = ProviderHealth(provider="anthropic")
 
             # Mock cost tracker to trigger daily reset
-            service._cost_tracker.should_reset_daily = MagicMock(return_value=True)
+            mock_cost_tracker = MagicMock()
+            mock_cost_tracker.should_reset_daily.return_value = True
+            mock_cost_tracker.check_limits.return_value = None
+            service._cost_tracker = mock_cost_tracker
 
             result = await service.extract(
                 markdown_content="# Test",
@@ -238,11 +242,11 @@ class TestCircuitBreakerIntegration:
             model="claude-3-5-sonnet-20241022",
             max_tokens=4096,
             temperature=0.0,
-            retry=RetryConfig(max_retries=0),  # No retries
+            retry=RetryConfig(max_attempts=1),  # No retries
             circuit_breaker=CircuitBreakerConfig(
                 enabled=True,
                 failure_threshold=1,
-                recovery_timeout=30.0,
+                cooldown_seconds=30.0,
             ),
         )
 
@@ -306,11 +310,11 @@ class TestCircuitBreakerIntegration:
             model="claude-3-5-sonnet-20241022",
             max_tokens=4096,
             temperature=0.0,
-            retry=RetryConfig(max_retries=0),  # No retries
+            retry=RetryConfig(max_attempts=1),  # No retries
             circuit_breaker=CircuitBreakerConfig(
                 enabled=True,
                 failure_threshold=5,
-                recovery_timeout=30.0,
+                cooldown_seconds=30.0,
             ),
         )
 
@@ -362,10 +366,10 @@ class TestRetryCallback:
             max_tokens=4096,
             temperature=0.0,
             retry=RetryConfig(
-                max_retries=2,
-                base_delay=0.001,  # Very fast for testing
-                max_delay=0.01,
-                exponential_base=2.0,
+                max_attempts=2,
+                base_delay_seconds=0.001,  # Very fast for testing
+                max_delay_seconds=0.01,
+                jitter_factor=0.1,
             ),
             circuit_breaker=CircuitBreakerConfig(enabled=False),
         )
@@ -590,7 +594,7 @@ class TestFallbackFailureRecording:
             model="claude-3-5-sonnet-20241022",
             max_tokens=4096,
             temperature=0.0,
-            retry=RetryConfig(max_retries=0),
+            retry=RetryConfig(max_attempts=1),
             circuit_breaker=CircuitBreakerConfig(enabled=False),
             fallback=FallbackProviderConfig(
                 enabled=True,

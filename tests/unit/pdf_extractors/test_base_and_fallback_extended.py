@@ -98,14 +98,14 @@ async def test_base_abstract_methods_raise_not_implemented():
         def name(self) -> PDFBackend:
             # Call base implementation to trigger NotImplementedError (line 59)
             try:
-                return super().name
+                return super().name  # type: ignore[safe-super]
             except NotImplementedError:
                 return PDFBackend.TEXT_ONLY
 
         async def extract(self, pdf_path: Path) -> PDFExtractionResult:
             # Call base implementation to trigger NotImplementedError (line 43)
             try:
-                return await super().extract(pdf_path)
+                return await super().extract(pdf_path)  # type: ignore[safe-super]
             except NotImplementedError:
                 return PDFExtractionResult(
                     success=True, metadata=ExtractionMetadata(backend=self.name)
@@ -114,7 +114,7 @@ async def test_base_abstract_methods_raise_not_implemented():
         def validate_setup(self) -> bool:
             # Call base implementation to trigger NotImplementedError (line 53)
             try:
-                return super().validate_setup()
+                return super().validate_setup()  # type: ignore[safe-super]
             except NotImplementedError:
                 return True
 

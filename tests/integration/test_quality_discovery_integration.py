@@ -8,6 +8,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from typing import List
 
+from tests.conftest_types import make_url
 from src.services.discovery.service import DiscoveryService
 from src.services.quality_intelligence_service import QualityIntelligenceService
 from src.services.venue_repository import YamlVenueRepository
@@ -56,6 +57,8 @@ def mock_llm_service():
 @pytest.fixture
 def mock_papers() -> List[PaperMetadata]:
     """Provide realistic mock papers with varying quality signals."""
+    from datetime import datetime, timezone
+
     return [
         # High quality: Top venue, many citations, recent
         PaperMetadata(
@@ -66,12 +69,12 @@ def mock_papers() -> List[PaperMetadata]:
                 "entirely on attention mechanisms."
             ),
             authors=[Author(name="Vaswani"), Author(name="Shazeer")],
-            url="https://arxiv.org/abs/2301.00001",
-            open_access_pdf="https://arxiv.org/pdf/2301.00001.pdf",
+            url=make_url("https://arxiv.org/abs/2301.00001"),
+            open_access_pdf=make_url("https://arxiv.org/pdf/2301.00001.pdf"),
             venue="NeurIPS",
-            publication_date="2023",
+            publication_date=datetime(2023, 1, 1, tzinfo=timezone.utc),
             citation_count=1000,
-            source=ProviderType.ARXIV,
+            discovery_source="arxiv",
         ),
         # Good quality: Good venue, moderate citations
         PaperMetadata(
@@ -79,12 +82,12 @@ def mock_papers() -> List[PaperMetadata]:
             title="BERT: Pre-training of Deep Bidirectional Transformers",
             abstract="We introduce BERT, a new language representation model.",
             authors=[Author(name="Devlin"), Author(name="Chang")],
-            url="https://arxiv.org/abs/2301.00002",
-            open_access_pdf="https://arxiv.org/pdf/2301.00002.pdf",
+            url=make_url("https://arxiv.org/abs/2301.00002"),
+            open_access_pdf=make_url("https://arxiv.org/pdf/2301.00002.pdf"),
             venue="ACL",
-            publication_date="2022",
+            publication_date=datetime(2022, 1, 1, tzinfo=timezone.utc),
             citation_count=500,
-            source=ProviderType.ARXIV,
+            discovery_source="arxiv",
         ),
         # Fair quality: Medium venue, low citations
         PaperMetadata(
@@ -95,11 +98,11 @@ def mock_papers() -> List[PaperMetadata]:
                 "task performance."
             ),
             authors=[Author(name="Brown"), Author(name="Mann")],
-            url="https://arxiv.org/abs/2301.00003",
+            url=make_url("https://arxiv.org/abs/2301.00003"),
             venue="EMNLP",
-            publication_date="2021",
+            publication_date=datetime(2021, 1, 1, tzinfo=timezone.utc),
             citation_count=50,
-            source=ProviderType.ARXIV,
+            discovery_source="arxiv",
         ),
         # Low quality: No venue, few citations, old
         PaperMetadata(
@@ -107,10 +110,10 @@ def mock_papers() -> List[PaperMetadata]:
             title="A Simple Neural Network Approach",
             abstract="We present a basic neural network for text processing.",
             authors=[Author(name="Smith")],
-            url="https://arxiv.org/abs/2301.00004",
-            publication_date="2015",
+            url=make_url("https://arxiv.org/abs/2301.00004"),
+            publication_date=datetime(2015, 1, 1, tzinfo=timezone.utc),
             citation_count=5,
-            source=ProviderType.ARXIV,
+            discovery_source="arxiv",
         ),
     ]
 

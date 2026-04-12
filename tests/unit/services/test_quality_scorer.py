@@ -9,6 +9,7 @@ from src.services.quality_scorer import (
     load_venue_scores,
 )
 from src.models.paper import PaperMetadata, Author
+from tests.conftest_types import make_paper_metadata
 
 
 class TestLoadVenueScores:
@@ -197,15 +198,13 @@ class TestQualityScorerCitationScore:
     @staticmethod
     def _make_paper(**kwargs) -> PaperMetadata:
         """Helper to create paper with defaults."""
-        defaults = {
-            "paper_id": "test123",
-            "title": "Test Paper",
-            "url": "https://example.com/paper",
-            "citation_count": 0,
-            "influential_citation_count": 0,
-        }
-        defaults.update(kwargs)
-        return PaperMetadata(**defaults)
+        return make_paper_metadata(
+            paper_id=kwargs.get("paper_id", "test123"),
+            title=kwargs.get("title", "Test Paper"),
+            url=kwargs.get("url", "https://example.com/paper"),
+            citation_count=kwargs.get("citation_count", 0),
+            influential_citation_count=kwargs.get("influential_citation_count", 0),
+        )
 
 
 class TestQualityScorerVenueScore:
@@ -273,13 +272,12 @@ class TestQualityScorerVenueScore:
     @staticmethod
     def _make_paper(**kwargs) -> PaperMetadata:
         """Helper to create paper with defaults."""
-        defaults = {
-            "paper_id": "test123",
-            "title": "Test Paper",
-            "url": "https://example.com/paper",
-        }
-        defaults.update(kwargs)
-        return PaperMetadata(**defaults)
+        return make_paper_metadata(
+            paper_id=kwargs.get("paper_id", "test123"),
+            title=kwargs.get("title", "Test Paper"),
+            url=kwargs.get("url", "https://example.com/paper"),
+            venue=kwargs.get("venue"),
+        )
 
 
 class TestQualityScorerRecencyScore:
@@ -342,13 +340,12 @@ class TestQualityScorerRecencyScore:
     @staticmethod
     def _make_paper(**kwargs) -> PaperMetadata:
         """Helper to create paper with defaults."""
-        defaults = {
-            "paper_id": "test123",
-            "title": "Test Paper",
-            "url": "https://example.com/paper",
-        }
-        defaults.update(kwargs)
-        return PaperMetadata(**defaults)
+        return make_paper_metadata(
+            paper_id=kwargs.get("paper_id", "test123"),
+            title=kwargs.get("title", "Test Paper"),
+            url=kwargs.get("url", "https://example.com/paper"),
+            publication_date=kwargs.get("publication_date"),
+        )
 
 
 class TestQualityScorerCompletenessScore:
@@ -431,16 +428,14 @@ class TestQualityScorerCompletenessScore:
     @staticmethod
     def _make_paper(**kwargs) -> PaperMetadata:
         """Helper to create paper with defaults."""
-        defaults = {
-            "paper_id": "test123",
-            "title": "Test Paper",
-            "url": "https://example.com/paper",
-            "abstract": None,
-            "authors": [],
-            "doi": None,
-        }
-        defaults.update(kwargs)
-        return PaperMetadata(**defaults)
+        return make_paper_metadata(
+            paper_id=kwargs.get("paper_id", "test123"),
+            title=kwargs.get("title", "Test Paper"),
+            url=kwargs.get("url", "https://example.com/paper"),
+            abstract=kwargs.get("abstract"),
+            authors=kwargs.get("authors", []),
+            doi=kwargs.get("doi"),
+        )
 
 
 class TestQualityScorerCompositeScore:
@@ -513,13 +508,17 @@ class TestQualityScorerCompositeScore:
     @staticmethod
     def _make_paper(**kwargs) -> PaperMetadata:
         """Helper to create paper with defaults."""
-        defaults = {
-            "paper_id": "test123",
-            "title": "Test Paper",
-            "url": "https://example.com/paper",
-        }
-        defaults.update(kwargs)
-        return PaperMetadata(**defaults)
+        return make_paper_metadata(
+            paper_id=kwargs.get("paper_id", "test123"),
+            title=kwargs.get("title", "Test Paper"),
+            url=kwargs.get("url", "https://example.com/paper"),
+            citation_count=kwargs.get("citation_count", 0),
+            venue=kwargs.get("venue"),
+            publication_date=kwargs.get("publication_date"),
+            abstract=kwargs.get("abstract"),
+            authors=kwargs.get("authors", []),
+            doi=kwargs.get("doi"),
+        )
 
 
 class TestQualityScorerRankPapers:
@@ -595,13 +594,17 @@ class TestQualityScorerRankPapers:
     @staticmethod
     def _make_paper(**kwargs) -> PaperMetadata:
         """Helper to create paper with defaults."""
-        defaults = {
-            "paper_id": "test123",
-            "title": "Test Paper",
-            "url": "https://example.com/paper",
-        }
-        defaults.update(kwargs)
-        return PaperMetadata(**defaults)
+        return make_paper_metadata(
+            paper_id=kwargs.get("paper_id", "test123"),
+            title=kwargs.get("title", "Test Paper"),
+            url=kwargs.get("url", "https://example.com/paper"),
+            citation_count=kwargs.get("citation_count", 0),
+            venue=kwargs.get("venue"),
+            publication_date=kwargs.get("publication_date"),
+            abstract=kwargs.get("abstract"),
+            authors=kwargs.get("authors", []),
+            doi=kwargs.get("doi"),
+        )
 
 
 class TestQualityScorerGetQualityTier:

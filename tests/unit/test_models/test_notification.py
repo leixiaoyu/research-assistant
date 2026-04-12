@@ -19,6 +19,7 @@ from src.models.notification import (
     PipelineSummary,
     DeduplicationResult,
 )
+from tests.conftest_types import make_url
 
 
 class TestSlackConfig:
@@ -44,7 +45,7 @@ class TestSlackConfig:
         """Test SlackConfig with valid webhook URL."""
         config = SlackConfig(
             enabled=True,
-            webhook_url="https://hooks.slack.com/services/T00/B00/XXX",
+            webhook_url=make_url("https://hooks.slack.com/services/T00/B00/XXX"),
         )
 
         assert config.enabled is True
@@ -57,12 +58,12 @@ class TestSlackConfig:
 
     def test_webhook_url_validation_empty_string(self) -> None:
         """Test empty string becomes None."""
-        config = SlackConfig(webhook_url="")
+        config = SlackConfig(webhook_url="")  # type: ignore
         assert config.webhook_url is None
 
     def test_webhook_url_validation_env_var_placeholder(self) -> None:
         """Test env var placeholder becomes None."""
-        config = SlackConfig(webhook_url="${SLACK_WEBHOOK_URL}")
+        config = SlackConfig(webhook_url="${SLACK_WEBHOOK_URL}")  # type: ignore
         assert config.webhook_url is None
 
     def test_channel_override_with_hash(self) -> None:
@@ -208,8 +209,11 @@ class TestKeyLearning:
 
         # Test with list - validator passes through, Pydantic rejects
         with pytest.raises(ValidationError):
-            # type: ignore
-            KeyLearning(paper_title="test", topic="test", summary=["a", "b"])
+            KeyLearning(
+                paper_title="test",
+                topic="test",
+                summary=["a", "b"],  # type: ignore[arg-type]
+            )
 
 
 class TestNotificationSettings:
@@ -228,7 +232,7 @@ class TestNotificationSettings:
         settings = NotificationSettings(
             slack=SlackConfig(
                 enabled=True,
-                webhook_url="https://hooks.slack.com/services/T00/B00/XXX",
+                webhook_url=make_url("https://hooks.slack.com/services/T00/B00/XXX"),
             )
         )
 

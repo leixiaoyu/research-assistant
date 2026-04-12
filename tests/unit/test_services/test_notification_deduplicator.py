@@ -18,6 +18,7 @@ from src.services.notification.deduplicator import NotificationDeduplicator
 from src.models.notification import DeduplicationResult
 from src.models.paper import PaperMetadata
 from src.models.registry import IdentityMatch, RegistryEntry
+from tests.conftest_types import make_url
 
 
 class TestNotificationDeduplicator:
@@ -44,21 +45,21 @@ class TestNotificationDeduplicator:
                 title="Paper 1",
                 doi="10.1234/paper1",
                 abstract="Abstract 1",
-                url="https://example.com/paper1",
+                url=make_url("https://example.com/paper1"),
             ),
             PaperMetadata(
                 paper_id="paper-2-id",
                 title="Paper 2",
                 doi="10.1234/paper2",
                 abstract="Abstract 2",
-                url="https://example.com/paper2",
+                url=make_url("https://example.com/paper2"),
             ),
             PaperMetadata(
                 paper_id="paper-3-id",
                 title="Paper 3",
                 doi="10.1234/paper3",
                 abstract="Abstract 3",
-                url="https://example.com/paper3",
+                url=make_url("https://example.com/paper3"),
             ),
         ]
 
@@ -238,7 +239,7 @@ class TestNotificationDeduplicator:
             title="Test Paper",
             doi="10.1234/test",
             abstract="Test abstract",
-            url="https://example.com/test",
+            url=make_url("https://example.com/test"),
         )
         mock_registry_service.resolve_identity.return_value = IdentityMatch(
             matched=False
@@ -285,7 +286,7 @@ class TestNotificationDeduplicator:
             title="Duplicate Paper",
             doi="10.1234/dup",
             abstract="Already processed",
-            url="https://example.com/dup",
+            url=make_url("https://example.com/dup"),
         )
         mock_entry = MagicMock(spec=RegistryEntry)
         mock_registry_service.resolve_identity.return_value = IdentityMatch(

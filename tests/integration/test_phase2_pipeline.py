@@ -13,6 +13,7 @@ from src.models.extraction import (
     ExtractedPaper,
 )
 from typing import List
+from tests.conftest_types import make_url
 
 
 @pytest.fixture
@@ -24,8 +25,8 @@ def mock_papers() -> List[PaperMetadata]:
             title="Attention is All You Need",
             abstract="We propose a new simple network architecture, the Transformer...",
             authors=[Author(name="Ashish Vaswani"), Author(name="Noam Shazeer")],
-            url="https://arxiv.org/abs/2301.12345",
-            open_access_pdf="https://arxiv.org/pdf/2301.12345.pdf",
+            url=make_url("https://arxiv.org/abs/2301.12345"),
+            open_access_pdf=make_url("https://arxiv.org/pdf/2301.12345.pdf"),
             year=2017,
             citation_count=100000,
         ),
@@ -36,8 +37,8 @@ def mock_papers() -> List[PaperMetadata]:
                 "We introduce a new language representation model " "called BERT..."
             ),
             authors=[Author(name="Jacob Devlin"), Author(name="Ming-Wei Chang")],
-            url="https://arxiv.org/abs/2301.67890",
-            open_access_pdf="https://arxiv.org/pdf/2301.67890.pdf",
+            url=make_url("https://arxiv.org/abs/2301.67890"),
+            open_access_pdf=make_url("https://arxiv.org/pdf/2301.67890.pdf"),
             year=2018,
             citation_count=50000,
         ),
@@ -53,8 +54,8 @@ def mock_papers() -> List[PaperMetadata]:
                 Author(name="Nick Ryder"),
                 Author(name="Melanie Subbiah"),
             ],
-            url="https://arxiv.org/abs/2302.11111",
-            open_access_pdf="https://arxiv.org/pdf/2302.11111.pdf",
+            url=make_url("https://arxiv.org/abs/2302.11111"),
+            open_access_pdf=make_url("https://arxiv.org/pdf/2302.11111.pdf"),
             year=2020,
             citation_count=20000,
         ),
@@ -66,7 +67,7 @@ def mock_topic() -> ResearchTopic:
     """Provide a mock research topic for testing"""
     return ResearchTopic(
         query="transformer models",
-        timeframe=TimeframeRecent(type="recent", value="7d"),
+        timeframe=TimeframeRecent(value="7d"),
         max_papers=5,
         extraction_targets=[
             ExtractionTarget(
@@ -295,9 +296,7 @@ class TestPhase2PipelineIntegration:
 
         markdown = generator.generate_enhanced(
             extracted_papers=[extracted],
-            topic=ResearchTopic(
-                query="test", timeframe=TimeframeRecent(type="recent", value="1d")
-            ),
+            topic=ResearchTopic(query="test", timeframe=TimeframeRecent(value="1d")),
             run_id="test",
         )
 

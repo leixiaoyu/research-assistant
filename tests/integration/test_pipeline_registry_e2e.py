@@ -46,6 +46,7 @@ from src.models.extraction import (
     PaperExtraction,
     ExtractionResult,
 )
+from tests.conftest_types import make_url
 
 
 @pytest.fixture
@@ -65,7 +66,7 @@ def mock_config(temp_output_dir) -> ResearchConfig:
         research_topics=[
             ResearchTopic(
                 query="test topic for integration",
-                timeframe=TimeframeRecent(type="recent", value="7d"),
+                timeframe=TimeframeRecent(value="7d"),
                 max_papers=5,
                 extraction_targets=[
                     ExtractionTarget(
@@ -114,8 +115,8 @@ def sample_papers() -> List[PaperMetadata]:
             title="Attention Mechanisms in Neural Networks",
             abstract="This paper explores attention mechanisms...",
             authors=[Author(name="Test Author A")],
-            url="https://arxiv.org/abs/2301.00001",
-            open_access_pdf="https://arxiv.org/pdf/2301.00001.pdf",
+            url=make_url("https://arxiv.org/abs/2301.00001"),
+            open_access_pdf=make_url("https://arxiv.org/pdf/2301.00001.pdf"),
             doi="10.1234/test.001",
             year=2023,
             citation_count=100,
@@ -125,8 +126,8 @@ def sample_papers() -> List[PaperMetadata]:
             title="Transformer Architectures for NLP",
             abstract="We present novel transformer architectures...",
             authors=[Author(name="Test Author B")],
-            url="https://arxiv.org/abs/2301.00002",
-            open_access_pdf="https://arxiv.org/pdf/2301.00002.pdf",
+            url=make_url("https://arxiv.org/abs/2301.00002"),
+            open_access_pdf=make_url("https://arxiv.org/pdf/2301.00002.pdf"),
             doi="10.1234/test.002",
             year=2023,
             citation_count=50,
@@ -136,7 +137,7 @@ def sample_papers() -> List[PaperMetadata]:
             title="Few-Shot Learning with Language Models",
             abstract="This work demonstrates few-shot learning...",
             authors=[Author(name="Test Author C"), Author(name="Test Author D")],
-            url="https://arxiv.org/abs/2301.00003",
+            url=make_url("https://arxiv.org/abs/2301.00003"),
             open_access_pdf=None,  # No PDF available
             year=2024,
             citation_count=25,
@@ -189,7 +190,7 @@ def create_mock_config_manager(config: ResearchConfig, output_dir: Path):
 
 
 def create_mock_discovery_result(
-    papers: List[PaperMetadata] = None,
+    papers: Optional[List[PaperMetadata]] = None,
     mode: DiscoveryMode = DiscoveryMode.SURFACE,
 ) -> DiscoveryResultModel:
     """Create a mock DiscoveryResult for unified API testing.

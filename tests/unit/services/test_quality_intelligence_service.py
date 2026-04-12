@@ -21,6 +21,7 @@ from src.models.discovery import QualityWeights, ScoredPaper
 from src.models.paper import PaperMetadata, Author
 from src.services.quality_intelligence_service import QualityIntelligenceService
 from src.services.venue_repository import VenueRepository
+from tests.conftest_types import make_url
 
 # ============================================================================
 # Fixtures
@@ -28,17 +29,17 @@ from src.services.venue_repository import VenueRepository
 
 
 @pytest.fixture
-def mock_venue_repository() -> VenueRepository:
+def mock_venue_repository() -> MagicMock:
     """Mock venue repository for testing."""
     repo = MagicMock(spec=VenueRepository)
     repo.get_default_score.return_value = 0.5
     repo.get_score.return_value = 0.8  # Default mock return
-    return repo
+    return repo  # type: ignore[return-value]
 
 
 @pytest.fixture
 def default_service(
-    mock_venue_repository: VenueRepository,
+    mock_venue_repository: MagicMock,
 ) -> QualityIntelligenceService:
     """Service with default weights and mocked venue repository."""
     return QualityIntelligenceService(venue_repository=mock_venue_repository)
@@ -56,8 +57,8 @@ def sample_paper() -> PaperMetadata:
             "multiple sentences and provides detailed information."
         ),
         doi="10.1234/sample.2023",
-        url="https://arxiv.org/abs/2301.12345",
-        open_access_pdf="https://arxiv.org/pdf/2301.12345.pdf",
+        url=make_url("https://arxiv.org/abs/2301.12345"),
+        open_access_pdf=make_url("https://arxiv.org/pdf/2301.12345.pdf"),
         authors=[Author(name="Alice Researcher"), Author(name="Bob Scientist")],
         publication_date=datetime(2023, 1, 15, tzinfo=timezone.utc),
         venue="NeurIPS 2023",
@@ -70,7 +71,7 @@ def sample_paper() -> PaperMetadata:
 # ============================================================================
 
 
-def test_init_with_defaults(mock_venue_repository: VenueRepository) -> None:
+def test_init_with_defaults(mock_venue_repository: MagicMock) -> None:
     """Test initialization with default weights."""
     service = QualityIntelligenceService(venue_repository=mock_venue_repository)
 
@@ -84,7 +85,7 @@ def test_init_with_defaults(mock_venue_repository: VenueRepository) -> None:
     assert service.venue_repository == mock_venue_repository
 
 
-def test_init_with_custom_weights(mock_venue_repository: VenueRepository) -> None:
+def test_init_with_custom_weights(mock_venue_repository: MagicMock) -> None:
     """Test initialization with custom weights."""
     weights = QualityWeights(
         citation=0.3,
@@ -105,7 +106,7 @@ def test_init_with_custom_weights(mock_venue_repository: VenueRepository) -> Non
     assert service.min_citations == 5
 
 
-def test_init_with_invalid_weights(mock_venue_repository: VenueRepository) -> None:
+def test_init_with_invalid_weights(mock_venue_repository: MagicMock) -> None:
     """Test initialization fails with weights that don't sum to 1.0."""
     invalid_weights = QualityWeights(
         citation=0.5,
@@ -135,7 +136,7 @@ def test_citation_score_zero_citations(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         citation_count=0,
     )
 
@@ -150,7 +151,7 @@ def test_citation_score_no_citation_count(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         citation_count=0,  # citation_count has default of 0, not None
     )
 
@@ -172,7 +173,7 @@ def test_citation_score_log_normalization(
         paper = PaperMetadata(
             paper_id="test",
             title="Test",
-            url="https://example.com",
+            url=make_url("https://example.com"),
             citation_count=citations,
         )
         score = default_service._calculate_citation_score(paper)
@@ -186,7 +187,7 @@ def test_citation_score_with_influential_bonus(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         citation_count=100,
         influential_citation_count=5,  # Semantic Scholar provides this field
     )
@@ -208,7 +209,7 @@ def test_citation_score_influential_bonus_cap(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         citation_count=100,
         influential_citation_count=50,  # High influential count
     )
@@ -229,7 +230,7 @@ def test_citation_score_no_influential_data(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         citation_count=100,
     )
     # No influential_citation_count attribute (ArXiv, OpenAlex, etc.)
@@ -248,7 +249,7 @@ def test_citation_score_capped_at_one(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         citation_count=100000,  # Very high citation count
     )
 
@@ -262,7 +263,7 @@ def test_citation_score_capped_at_one(
 
 
 def test_venue_score_delegates_to_repository(
-    mock_venue_repository: VenueRepository,
+    mock_venue_repository: MagicMock,
 ) -> None:
     """Test venue score delegates to injected repository."""
     mock_venue_repository.get_score.return_value = 0.95
@@ -271,7 +272,7 @@ def test_venue_score_delegates_to_repository(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         venue="NeurIPS 2023",
     )
 
@@ -281,7 +282,7 @@ def test_venue_score_delegates_to_repository(
     assert score == 0.95
 
 
-def test_venue_score_missing_venue(mock_venue_repository: VenueRepository) -> None:
+def test_venue_score_missing_venue(mock_venue_repository: MagicMock) -> None:
     """Test venue score with missing venue."""
     mock_venue_repository.get_default_score.return_value = 0.5
 
@@ -289,7 +290,7 @@ def test_venue_score_missing_venue(mock_venue_repository: VenueRepository) -> No
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         venue=None,
     )
 
@@ -299,7 +300,7 @@ def test_venue_score_missing_venue(mock_venue_repository: VenueRepository) -> No
     assert score == 0.5
 
 
-def test_venue_score_empty_venue(mock_venue_repository: VenueRepository) -> None:
+def test_venue_score_empty_venue(mock_venue_repository: MagicMock) -> None:
     """Test venue score with empty venue string."""
     mock_venue_repository.get_default_score.return_value = 0.5
 
@@ -307,7 +308,7 @@ def test_venue_score_empty_venue(mock_venue_repository: VenueRepository) -> None
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         venue="",
     )
 
@@ -330,7 +331,7 @@ def test_recency_score_current_year(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         publication_date=datetime(current_year, 1, 1, tzinfo=timezone.utc),
     )
 
@@ -346,7 +347,7 @@ def test_recency_score_one_year_old(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         publication_date=datetime(current_year - 1, 1, 1, tzinfo=timezone.utc),
     )
 
@@ -363,7 +364,7 @@ def test_recency_score_five_years_old(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         publication_date=datetime(current_year - 5, 1, 1, tzinfo=timezone.utc),
     )
 
@@ -378,7 +379,7 @@ def test_recency_score_floor(default_service: QualityIntelligenceService) -> Non
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         publication_date=datetime(current_year - 50, 1, 1, tzinfo=timezone.utc),
     )
 
@@ -394,7 +395,7 @@ def test_recency_score_full_date_string(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         publication_date=datetime(current_year - 2, 6, 15, tzinfo=timezone.utc),
     )
 
@@ -413,7 +414,7 @@ def test_recency_score_datetime_object(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         publication_date=pub_date,
     )
 
@@ -429,7 +430,7 @@ def test_recency_score_missing_date(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         publication_date=None,
     )
 
@@ -444,7 +445,7 @@ def test_recency_score_invalid_date_format(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         publication_date=None,
     )
 
@@ -460,7 +461,7 @@ def test_recency_score_string_year_only(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
     )
     # Bypass Pydantic validation to test string handling
     object.__setattr__(paper, "publication_date", str(current_year - 2))
@@ -478,7 +479,7 @@ def test_recency_score_string_year_month(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
     )
     # Bypass Pydantic validation to test string handling
     object.__setattr__(paper, "publication_date", f"{current_year - 1}-06")
@@ -495,7 +496,7 @@ def test_recency_score_string_too_short(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
     )
     # Bypass Pydantic validation to test error handling
     object.__setattr__(paper, "publication_date", "202")  # Too short
@@ -511,7 +512,7 @@ def test_recency_score_string_invalid_year(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
     )
     # Bypass Pydantic validation to test error handling
     object.__setattr__(paper, "publication_date", "abcd")
@@ -532,7 +533,7 @@ def test_engagement_score_zero_upvotes(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
     )
     # Dynamically add upvotes attribute (simulating HuggingFace paper)
     # Use object.__setattr__ to bypass Pydantic validation
@@ -549,7 +550,7 @@ def test_engagement_score_missing_upvotes(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
     )
     # No upvotes attribute (non-HuggingFace paper)
 
@@ -571,7 +572,7 @@ def test_engagement_score_log_normalization(
         paper = PaperMetadata(
             paper_id="test",
             title="Test",
-            url="https://example.com",
+            url=make_url("https://example.com"),
         )
         object.__setattr__(paper, "upvotes", upvotes)
 
@@ -586,7 +587,7 @@ def test_engagement_score_capped_at_one(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
     )
     object.__setattr__(paper, "upvotes", 100000)
 
@@ -606,13 +607,13 @@ def test_completeness_score_all_fields_present(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         abstract=(
             "A sufficiently long abstract with more than fifty " "characters in total."
         ),
         authors=[Author(name="Author One"), Author(name="Author Two")],
         venue="NeurIPS 2023",
-        open_access_pdf="https://example.com/paper.pdf",
+        open_access_pdf=make_url("https://example.com/paper.pdf"),
         doi="10.1234/test",
     )
 
@@ -627,11 +628,11 @@ def test_completeness_score_missing_abstract(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         abstract=None,
         authors=[Author(name="Author")],
         venue="NeurIPS",
-        open_access_pdf="https://example.com/paper.pdf",
+        open_access_pdf=make_url("https://example.com/paper.pdf"),
         doi="10.1234/test",
     )
 
@@ -647,11 +648,11 @@ def test_completeness_score_short_abstract(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         abstract="Short",  # Less than MIN_ABSTRACT_LENGTH
         authors=[Author(name="Author")],
         venue="NeurIPS",
-        open_access_pdf="https://example.com/paper.pdf",
+        open_access_pdf=make_url("https://example.com/paper.pdf"),
         doi="10.1234/test",
     )
 
@@ -667,13 +668,13 @@ def test_completeness_score_missing_authors(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         abstract=(
             "A sufficiently long abstract with more than fifty " "characters in total."
         ),
         authors=[],
         venue="NeurIPS",
-        open_access_pdf="https://example.com/paper.pdf",
+        open_access_pdf=make_url("https://example.com/paper.pdf"),
         doi="10.1234/test",
     )
 
@@ -689,13 +690,13 @@ def test_completeness_score_missing_venue(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         abstract=(
             "A sufficiently long abstract with more than fifty " "characters in total."
         ),
         authors=[Author(name="Author")],
         venue=None,
-        open_access_pdf="https://example.com/paper.pdf",
+        open_access_pdf=make_url("https://example.com/paper.pdf"),
         doi="10.1234/test",
     )
 
@@ -711,7 +712,7 @@ def test_completeness_score_missing_pdf(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         abstract=(
             "A sufficiently long abstract with more than fifty " "characters in total."
         ),
@@ -733,13 +734,13 @@ def test_completeness_score_missing_doi(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         abstract=(
             "A sufficiently long abstract with more than fifty " "characters in total."
         ),
         authors=[Author(name="Author")],
         venue="NeurIPS",
-        open_access_pdf="https://example.com/paper.pdf",
+        open_access_pdf=make_url("https://example.com/paper.pdf"),
         doi=None,
     )
 
@@ -755,7 +756,7 @@ def test_completeness_score_all_fields_missing(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         abstract=None,
         authors=[],
         venue=None,
@@ -779,7 +780,7 @@ def test_author_score_returns_default(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
     )
 
     score = default_service._calculate_author_score(paper)
@@ -805,7 +806,7 @@ def test_score_paper_returns_scored_paper(
 
 
 def test_score_paper_uses_weights(
-    mock_venue_repository: VenueRepository,
+    mock_venue_repository: MagicMock,
     sample_paper: PaperMetadata,
 ) -> None:
     """Test score_paper applies configured weights."""
@@ -867,27 +868,27 @@ def test_score_papers_empty_list(
 
 def test_filter_by_quality_applies_threshold(
     default_service: QualityIntelligenceService,
-    mock_venue_repository: VenueRepository,
+    mock_venue_repository: MagicMock,
 ) -> None:
     """Test filter_by_quality filters papers below threshold."""
     # Create papers with varying quality
     high_quality = PaperMetadata(
         paper_id="high",
         title="High Quality Paper",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         abstract="A sufficiently long abstract with more than fifty characters.",
         authors=[Author(name="Author")],
         venue="NeurIPS",
         citation_count=500,
         publication_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
         doi="10.1234/high",
-        open_access_pdf="https://example.com/high.pdf",
+        open_access_pdf=make_url("https://example.com/high.pdf"),
     )
 
     low_quality = PaperMetadata(
         paper_id="low",
         title="Low Quality Paper",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         citation_count=0,
         publication_date=datetime(1990, 1, 1, tzinfo=timezone.utc),
         abstract=None,
@@ -907,7 +908,7 @@ def test_filter_by_quality_applies_threshold(
 
 
 def test_filter_by_quality_applies_min_citations(
-    mock_venue_repository: VenueRepository,
+    mock_venue_repository: MagicMock,
     sample_paper: PaperMetadata,
 ) -> None:
     """Test filter_by_quality pre-filters by citation count."""
@@ -919,14 +920,14 @@ def test_filter_by_quality_applies_min_citations(
     low_citation_paper = PaperMetadata(
         paper_id="low",
         title="Low Citation Paper",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         citation_count=10,
     )
 
     high_citation_paper = PaperMetadata(
         paper_id="high",
         title="High Citation Paper",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         citation_count=100,
     )
 
@@ -993,7 +994,7 @@ def test_score_paper_with_minimal_metadata(
     minimal_paper = PaperMetadata(
         paper_id="minimal",
         title="Minimal Paper",
-        url="https://example.com",
+        url=make_url("https://example.com"),
     )
 
     scored = default_service.score_paper(minimal_paper)
@@ -1009,7 +1010,7 @@ def test_score_paper_with_zero_citation_count(
     paper = PaperMetadata(
         paper_id="test",
         title="Test",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         citation_count=0,  # Default value, not None
     )
 
@@ -1092,33 +1093,33 @@ def test_score_legacy_warning_only_once(
 
 def test_rank_papers_legacy_returns_sorted_papers(
     default_service: QualityIntelligenceService,
-    mock_venue_repository: VenueRepository,
+    mock_venue_repository: MagicMock,
 ) -> None:
     """Test rank_papers_legacy returns papers sorted by quality_score."""
     # Create papers with different quality
     high_quality = PaperMetadata(
         paper_id="high",
         title="High",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         citation_count=500,
         abstract="A sufficiently long abstract with more than fifty characters.",
         authors=[Author(name="Author")],
         venue="NeurIPS",
         doi="10.1234/high",
-        open_access_pdf="https://example.com/high.pdf",
+        open_access_pdf=make_url("https://example.com/high.pdf"),
     )
 
     medium_quality = PaperMetadata(
         paper_id="medium",
         title="Medium",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         citation_count=100,
     )
 
     low_quality = PaperMetadata(
         paper_id="low",
         title="Low",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         citation_count=10,
     )
 
@@ -1149,26 +1150,26 @@ def test_rank_papers_legacy_mutates_quality_score(
 
 def test_rank_papers_legacy_filters_by_min_score(
     default_service: QualityIntelligenceService,
-    mock_venue_repository: VenueRepository,
+    mock_venue_repository: MagicMock,
 ) -> None:
     """Test rank_papers_legacy filters papers below min_score."""
     high_quality = PaperMetadata(
         paper_id="high",
         title="High",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         citation_count=500,
         abstract="A sufficiently long abstract with more than fifty characters.",
         authors=[Author(name="Author")],
         venue="NeurIPS",
         doi="10.1234/high",
-        open_access_pdf="https://example.com/high.pdf",
+        open_access_pdf=make_url("https://example.com/high.pdf"),
         publication_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
     )
 
     low_quality = PaperMetadata(
         paper_id="low",
         title="Low",
-        url="https://example.com",
+        url=make_url("https://example.com"),
         citation_count=0,
     )
 
@@ -1317,7 +1318,7 @@ def test_filter_and_score_empty_list(
 
 def test_legacy_methods_integration(
     default_service: QualityIntelligenceService,
-    mock_venue_repository: VenueRepository,
+    mock_venue_repository: MagicMock,
 ) -> None:
     """Integration test: All legacy methods work together."""
     # Create test papers
@@ -1325,7 +1326,7 @@ def test_legacy_methods_integration(
         PaperMetadata(
             paper_id=f"paper_{i}",
             title=f"Paper {i}",
-            url="https://example.com",
+            url=make_url("https://example.com"),
             citation_count=i * 100,
             abstract="A sufficiently long abstract with more than fifty characters.",
             authors=[Author(name="Author")],

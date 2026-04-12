@@ -9,6 +9,7 @@ import json
 from src.services.llm.prompt_builder import PromptBuilder
 from src.models.extraction import ExtractionTarget
 from src.models.paper import PaperMetadata, Author
+from tests.conftest_types import make_url
 
 
 class TestPromptBuilder:
@@ -31,7 +32,7 @@ class TestPromptBuilder:
             ],
             year=2024,
             abstract="Test abstract",
-            url="https://example.com/paper",
+            url=make_url("https://example.com/paper"),
         )
 
     @pytest.fixture
@@ -136,7 +137,7 @@ class TestPromptBuilder:
             authors=[],
             year=2024,
             abstract="Abstract",
-            url="https://example.com",
+            url=make_url("https://example.com"),
         )
 
         prompt = builder.build(
@@ -159,7 +160,7 @@ class TestPromptBuilder:
             authors=[],
             year=None,
             abstract="Abstract",
-            url="https://example.com",
+            url=make_url("https://example.com"),
         )
 
         prompt = builder.build(
@@ -194,7 +195,7 @@ class TestPromptBuilderBehavioralEquivalence:
             authors=[Author(name="Test Author", author_id="a1")],
             year=2024,
             abstract="Test abstract",
-            url="https://example.com",
+            url=make_url("https://example.com"),
         )
         targets = [
             ExtractionTarget(
@@ -232,7 +233,7 @@ class TestPromptBuilderBehavioralEquivalence:
             authors=[],
             year=2024,
             abstract="Test",
-            url="https://example.com",
+            url=make_url("https://example.com"),
         )
         targets = [
             ExtractionTarget(

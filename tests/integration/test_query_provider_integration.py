@@ -14,6 +14,7 @@ from src.models.discovery import DiscoveryMode, DiscoveryPipelineConfig
 from src.models.paper import PaperMetadata, Author
 from src.models.config import ProviderType
 from src.models.query import QueryStrategy, QueryFocus
+from tests.conftest_types import make_url
 
 
 @pytest.fixture
@@ -65,23 +66,23 @@ def mock_papers() -> List[PaperMetadata]:
             title="Attention is All You Need",
             abstract="We propose the Transformer architecture.",
             authors=[Author(name="Vaswani")],
-            url="https://arxiv.org/abs/2301.00001",
-            open_access_pdf="https://arxiv.org/pdf/2301.00001.pdf",
+            url=make_url("https://arxiv.org/abs/2301.00001"),
+            open_access_pdf=make_url("https://arxiv.org/pdf/2301.00001.pdf"),
             venue="NeurIPS",
-            publication_date="2023",
+            year=2023,
             citation_count=1000,
-            source=ProviderType.ARXIV,
+            discovery_source="arxiv",
         ),
         PaperMetadata(
             paper_id="arxiv:2301.00002",
             title="BERT: Pre-training Transformers",
             abstract="We introduce BERT for language understanding.",
             authors=[Author(name="Devlin")],
-            url="https://arxiv.org/abs/2301.00002",
+            url=make_url("https://arxiv.org/abs/2301.00002"),
             venue="ACL",
-            publication_date="2022",
+            year=2022,
             citation_count=500,
-            source=ProviderType.ARXIV,
+            discovery_source="arxiv",
         ),
     ]
 
@@ -205,12 +206,12 @@ async def test_result_deduplication_across_queries(discovery_service, mock_llm_s
         title="Attention is All You Need",
         abstract="We propose the Transformer architecture.",
         authors=[Author(name="Vaswani")],
-        url="https://arxiv.org/abs/2301.00001",
+        url=make_url("https://arxiv.org/abs/2301.00001"),
         doi="10.1000/test.2301.00001",
         venue="NeurIPS",
-        publication_date="2023",
+        year=2023,
         citation_count=1000,
-        source=ProviderType.ARXIV,
+        discovery_source="arxiv",
     )
 
     # Mock provider returns duplicate for every query

@@ -4,6 +4,7 @@ Phase 5.1: Tests for provider abstraction and implementations.
 """
 
 import pytest
+from typing import Generator
 from unittest.mock import MagicMock, patch
 
 from src.services.llm.providers.base import LLMResponse, ProviderHealth
@@ -140,7 +141,7 @@ class TestAnthropicProvider:
     """Tests for AnthropicProvider."""
 
     @pytest.fixture
-    def mock_anthropic(self) -> MagicMock:
+    def mock_anthropic(self) -> Generator[None, None, None]:
         """Create mock for Anthropic client."""
         with patch.dict(
             "sys.modules",
@@ -204,7 +205,7 @@ class TestGoogleProvider:
     """Tests for GoogleProvider."""
 
     @pytest.fixture
-    def mock_google(self) -> MagicMock:
+    def mock_google(self) -> Generator[None, None, None]:
         """Create mock for Google client."""
         mock_genai = MagicMock()
         with patch.dict(
@@ -279,7 +280,7 @@ class TestCostCalculationEquivalence:
     ORIGINAL_GEMINI_OUTPUT = 5.00
 
     @pytest.fixture
-    def mock_providers(self) -> None:
+    def mock_providers(self) -> Generator[None, None, None]:
         """Mock both provider dependencies."""
         with patch.dict(
             "sys.modules",

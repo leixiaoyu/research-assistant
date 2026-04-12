@@ -162,6 +162,7 @@ class TestResponseParser:
 
         summary_result = next(r for r in results if r.target_name == "summary")
         assert summary_result.success is False
+        assert summary_result.error is not None
         assert "not found" in summary_result.error.lower()
 
     def test_parse_ignores_unknown_targets(

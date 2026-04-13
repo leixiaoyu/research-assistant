@@ -17,6 +17,7 @@ from src.utils.exceptions import (
     AllProvidersFailedError,
     CostLimitExceeded,
 )
+from tests.conftest_types import make_url
 
 
 @pytest.fixture
@@ -29,15 +30,15 @@ def llm_config() -> LLMConfig:
         max_tokens=4096,
         temperature=0.0,
         retry=RetryConfig(
-            max_retries=3,
-            base_delay=1.0,
-            max_delay=60.0,
-            exponential_base=2.0,
+            max_attempts=3,
+            base_delay_seconds=1.0,
+            max_delay_seconds=60.0,
+            jitter_factor=0.1,
         ),
         circuit_breaker=CircuitBreakerConfig(
             enabled=True,
             failure_threshold=5,
-            recovery_timeout=30.0,
+            cooldown_seconds=30.0,
         ),
     )
 
@@ -74,8 +75,8 @@ def paper_metadata() -> PaperMetadata:
         abstract="Test abstract",
         authors=[],
         publication_date=datetime(2024, 1, 15),
-        source="test",
-        url="https://example.com/paper/123",
+        discovery_source="test",
+        url=make_url("https://example.com/paper/123"),
     )
 
 
@@ -243,10 +244,8 @@ class TestLLMServiceExtraction:
             # Mock the provider's generate method
             mock_provider = MagicMock()
             mock_provider.generate = AsyncMock(return_value=mock_response)
-            mock_provider.calculate_cost = MagicMock(return_value=0.05)
-            mock_provider.get_health = MagicMock(
-                return_value=ProviderHealth(provider="anthropic")
-            )
+            mock_provider.calculate_cost.return_value = 0.05
+            mock_provider.get_health.return_value = ProviderHealth(provider="anthropic")
             service._providers["anthropic"] = mock_provider
             service._provider_health["anthropic"] = ProviderHealth(provider="anthropic")
 
@@ -306,9 +305,7 @@ class TestLLMServiceExtraction:
             mock_provider.generate = AsyncMock(
                 side_effect=LLMProviderError("API error", provider="anthropic")
             )
-            mock_provider.get_health = MagicMock(
-                return_value=ProviderHealth(provider="anthropic")
-            )
+            mock_provider.get_health.return_value = ProviderHealth(provider="anthropic")
             service._providers["anthropic"] = mock_provider
             service._provider_health["anthropic"] = ProviderHealth(provider="anthropic")
 
@@ -342,7 +339,9 @@ class TestLLMServiceComplete:
         )
 
         provider = service._providers["anthropic"]
-        provider.generate = AsyncMock(return_value=mock_response)
+        provider.generate = AsyncMock(  # type: ignore[method-assign]
+            return_value=mock_response
+        )
 
         response = await service.complete(
             prompt="What is machine learning?",
@@ -375,7 +374,9 @@ class TestLLMServiceComplete:
         )
 
         provider = service._providers["anthropic"]
-        provider.generate = AsyncMock(return_value=mock_response)
+        provider.generate = AsyncMock(  # type: ignore[method-assign]
+            return_value=mock_response
+        )
 
         response = await service.complete(prompt="Hello")
 
@@ -414,7 +415,9 @@ class TestLLMServiceComplete:
 
         # Primary fails
         primary_provider = service._providers["anthropic"]
-        primary_provider.generate = AsyncMock(side_effect=LLMAPIError("Primary failed"))
+        primary_provider.generate = AsyncMock(  # type: ignore[method-assign]
+            side_effect=LLMAPIError("Primary failed")
+        )
 
         # Fallback succeeds
         fallback_response = LLMResponse(
@@ -426,7 +429,9 @@ class TestLLMServiceComplete:
             latency_ms=50.0,
         )
         fallback_provider = service._providers["google"]
-        fallback_provider.generate = AsyncMock(return_value=fallback_response)
+        fallback_provider.generate = AsyncMock(  # type: ignore[method-assign]
+            return_value=fallback_response
+        )
 
         response = await service.complete(prompt="Test prompt")
 
@@ -443,7 +448,9 @@ class TestLLMServiceComplete:
         service = LLMService(config=llm_config, cost_limits=cost_limits)
 
         provider = service._providers["anthropic"]
-        provider.generate = AsyncMock(side_effect=LLMAPIError("Provider failed"))
+        provider.generate = AsyncMock(  # type: ignore[method-assign]
+            side_effect=LLMAPIError("Provider failed")
+        )
 
         with pytest.raises(AllProvidersFailedError):
             await service.complete(prompt="Test prompt")
@@ -688,8 +695,8 @@ class TestLLMServiceFallback:
             mock_anthropic.generate = AsyncMock(
                 side_effect=LLMProviderError("Primary failed", provider="anthropic")
             )
-            mock_anthropic.get_health = MagicMock(
-                return_value=ProviderHealth(provider="anthropic")
+            mock_anthropic.get_health.return_value = ProviderHealth(
+                provider="anthropic"
             )
             service._providers["anthropic"] = mock_anthropic
             service._provider_health["anthropic"] = ProviderHealth(provider="anthropic")
@@ -697,10 +704,8 @@ class TestLLMServiceFallback:
             # Mock fallback to succeed
             mock_google = MagicMock()
             mock_google.generate = AsyncMock(return_value=mock_response)
-            mock_google.calculate_cost = MagicMock(return_value=0.02)
-            mock_google.get_health = MagicMock(
-                return_value=ProviderHealth(provider="google")
-            )
+            mock_google.calculate_cost.return_value = 0.02
+            mock_google.get_health.return_value = ProviderHealth(provider="google")
             service._providers["google"] = mock_google
             service._provider_health["google"] = ProviderHealth(provider="google")
 

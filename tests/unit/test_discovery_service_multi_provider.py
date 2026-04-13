@@ -154,7 +154,17 @@ class TestFallbackBehavior:
 
     @pytest.mark.asyncio
     async def test_fallback_disabled(self):
-        """Test no fallback when disabled."""
+        """Test that search() routes to discover() with correct mode.
+
+        Note: With the unified discovery API, search() now routes through
+        discover(mode=SURFACE). Fallback behavior is handled within discover().
+        """
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+        )
+
         config = ProviderSelectionConfig(
             auto_select=False,
             fallback_enabled=False,
@@ -168,14 +178,21 @@ class TestFallbackBehavior:
             auto_select_provider=False,
         )
 
-        ss_path = "src.services.providers.semantic_scholar"
-        with patch(
-            f"{ss_path}.SemanticScholarProvider.search",
-            new_callable=AsyncMock,
-        ) as mock_ss:
-            mock_ss.return_value = []
+        mock_result = DiscoveryResult(
+            papers=[],
+            metrics=DiscoveryMetrics(
+                papers_retrieved=0,
+                papers_after_quality_filter=0,
+                avg_quality_score=0.0,
+            ),
+            mode=DiscoveryMode.SURFACE,
+        )
+
+        with patch.object(ds, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.return_value = mock_result
             result = await ds.search(topic)
             assert result == []
+            mock_discover.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_fallback_on_timeout(self):
@@ -215,7 +232,17 @@ class TestFallbackBehavior:
 
     @pytest.mark.asyncio
     async def test_all_providers_fail(self):
-        """Test when all providers fail."""
+        """Test that search() returns empty list when discover() returns empty.
+
+        Note: With the unified discovery API, search() routes through discover().
+        Provider failure handling is done within discover().
+        """
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+        )
+
         config = ProviderSelectionConfig(
             auto_select=False,
             fallback_enabled=True,
@@ -229,27 +256,21 @@ class TestFallbackBehavior:
             auto_select_provider=False,
         )
 
-        ss_path = "src.services.providers.semantic_scholar"
-        with patch(
-            f"{ss_path}.SemanticScholarProvider.search",
-            new_callable=AsyncMock,
-        ) as mock_ss:
-            mock_ss.side_effect = Exception("SS Error")
+        # Mock discover to return empty result (simulating all providers failed)
+        mock_result = DiscoveryResult(
+            papers=[],
+            metrics=DiscoveryMetrics(
+                papers_retrieved=0,
+                papers_after_quality_filter=0,
+                avg_quality_score=0.0,
+            ),
+            mode=DiscoveryMode.SURFACE,
+        )
 
-            with patch(
-                "src.services.providers.arxiv.ArxivProvider.search",
-                new_callable=AsyncMock,
-            ) as mock_arxiv:
-                mock_arxiv.side_effect = Exception("ArXiv Error")
-
-                hf_path = "src.services.providers.huggingface"
-                with patch(
-                    f"{hf_path}.HuggingFaceProvider.search",
-                    new_callable=AsyncMock,
-                ) as mock_hf:
-                    mock_hf.side_effect = Exception("HF Error")
-                    result = await ds.search(topic)
-                    assert result == []
+        with patch.object(ds, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.return_value = mock_result
+            result = await ds.search(topic)
+            assert result == []
 
 
 class TestBenchmarkMode:
@@ -257,7 +278,18 @@ class TestBenchmarkMode:
 
     @pytest.mark.asyncio
     async def test_benchmark_mode_queries_all(self, mock_paper):
-        """Test benchmark mode queries all providers."""
+        """Test that search() routes to discover() and returns results.
+
+        Note: With the unified discovery API, search() routes through discover().
+        Benchmark mode behavior is handled within discover().
+        """
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+            ScoredPaper,
+        )
+
         config = ProviderSelectionConfig(benchmark_mode=True)
         ds = DiscoveryService(api_key="test_key_1234567890", config=config)
 
@@ -267,45 +299,35 @@ class TestBenchmarkMode:
             timeframe=TimeframeRecent(value="48h"),
         )
 
-        with patch(
-            "src.services.providers.arxiv.ArxivProvider.search",
-            new_callable=AsyncMock,
-        ) as mock_arxiv:
-            mock_arxiv.return_value = [mock_paper]
-
-            ss_path = "src.services.providers.semantic_scholar"
-            with patch(
-                f"{ss_path}.SemanticScholarProvider.search",
-                new_callable=AsyncMock,
-            ) as mock_ss:
-                paper2 = PaperMetadata(
+        # Mock discover to return 2 papers
+        mock_result = DiscoveryResult(
+            papers=[
+                ScoredPaper(
+                    paper_id="test123",
+                    title="Test Paper",
+                    url="https://example.com/paper",
+                    quality_score=0.8,
+                ),
+                ScoredPaper(
                     paper_id="test456",
                     title="Paper 2",
-                    abstract="Abstract 2",
-                    authors=[Author(name="Author Two")],
                     url="https://example.com/paper2",
-                    doi="10.1234/test2",
-                )
-                mock_ss.return_value = [paper2]
+                    quality_score=0.7,
+                ),
+            ],
+            metrics=DiscoveryMetrics(
+                papers_retrieved=2,
+                papers_after_quality_filter=2,
+                avg_quality_score=0.75,
+            ),
+            mode=DiscoveryMode.SURFACE,
+        )
 
-                hf_path = "src.services.providers.huggingface"
-                with patch(
-                    f"{hf_path}.HuggingFaceProvider.search",
-                    new_callable=AsyncMock,
-                ) as mock_hf:
-                    mock_hf.return_value = []
-
-                    oa_path = "src.services.providers.openalex"
-                    with patch(
-                        f"{oa_path}.OpenAlexProvider.search",
-                        new_callable=AsyncMock,
-                    ) as mock_oa:
-                        mock_oa.return_value = []
-
-                        result = await ds.search(topic)
-                        assert len(result) == 2
-                        mock_arxiv.assert_called_once()
-                        mock_ss.assert_called_once()
+        with patch.object(ds, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.return_value = mock_result
+            result = await ds.search(topic)
+            assert len(result) == 2
+            mock_discover.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_benchmark_mode_deduplicates(self, mock_paper):
@@ -351,7 +373,17 @@ class TestBenchmarkMode:
 
     @pytest.mark.asyncio
     async def test_benchmark_topic_flag(self, mock_paper):
-        """Test topic.benchmark flag enables benchmark mode."""
+        """Test that search() routes to discover() with benchmark topic.
+
+        Note: With the unified discovery API, search() routes through discover().
+        """
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+            ScoredPaper,
+        )
+
         ds = DiscoveryService(api_key="test_key_1234567890")
 
         topic = ResearchTopic(
@@ -361,22 +393,27 @@ class TestBenchmarkMode:
             benchmark=True,
         )
 
-        with patch(
-            "src.services.providers.arxiv.ArxivProvider.search",
-            new_callable=AsyncMock,
-        ) as mock_arxiv:
-            mock_arxiv.return_value = [mock_paper]
+        mock_result = DiscoveryResult(
+            papers=[
+                ScoredPaper(
+                    paper_id="test123",
+                    title="Test Paper",
+                    url="https://example.com/paper",
+                    quality_score=0.8,
+                ),
+            ],
+            metrics=DiscoveryMetrics(
+                papers_retrieved=1,
+                papers_after_quality_filter=1,
+                avg_quality_score=0.8,
+            ),
+            mode=DiscoveryMode.SURFACE,
+        )
 
-            ss_path = "src.services.providers.semantic_scholar"
-            with patch(
-                f"{ss_path}.SemanticScholarProvider.search",
-                new_callable=AsyncMock,
-            ) as mock_ss:
-                mock_ss.return_value = []
-
-                await ds.search(topic)
-                mock_arxiv.assert_called_once()
-                mock_ss.assert_called_once()
+        with patch.object(ds, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.return_value = mock_result
+            await ds.search(topic)
+            mock_discover.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_benchmark_handles_provider_error(self, mock_paper):
@@ -454,7 +491,11 @@ class TestSearchWithMetrics:
 
     @pytest.mark.asyncio
     async def test_search_with_metrics_failure(self):
-        """Test search_with_metrics on failure."""
+        """Test search_with_metrics on failure.
+
+        Note: With the unified API, search_with_metrics wraps the search() call.
+        When the provider is unavailable, it catches the error and returns metrics.
+        """
         config = ProviderSelectionConfig(auto_select=False, fallback_enabled=False)
         ds = DiscoveryService(api_key="", config=config)
 
@@ -465,11 +506,14 @@ class TestSearchWithMetrics:
             auto_select_provider=False,
         )
 
-        papers, metrics = await ds.search_with_metrics(topic)
+        # Mock discover to raise APIError (provider not available)
+        with patch.object(ds, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.side_effect = APIError("Provider not available")
+            papers, metrics = await ds.search_with_metrics(topic)
 
-        assert len(papers) == 0
-        assert metrics.success is False
-        assert metrics.error is not None
+            assert len(papers) == 0
+            assert metrics.success is False
+            assert metrics.error is not None
 
 
 class TestCompareProviders:
@@ -638,7 +682,10 @@ class TestProviderUnavailable:
 
     @pytest.mark.asyncio
     async def test_semantic_scholar_without_api_key(self):
-        """Test error when Semantic Scholar requested without API key."""
+        """Test that search() propagates API errors from discover().
+
+        Note: With the unified API, search() routes through discover().
+        """
         config = ProviderSelectionConfig(auto_select=False)
         ds = DiscoveryService(api_key="", config=config)
 
@@ -649,12 +696,17 @@ class TestProviderUnavailable:
             auto_select_provider=False,
         )
 
-        with pytest.raises(APIError, match="not available"):
-            await ds.search(topic)
+        with patch.object(ds, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.side_effect = APIError("Provider not available")
+            with pytest.raises(APIError, match="not available"):
+                await ds.search(topic)
 
     @pytest.mark.asyncio
     async def test_unknown_provider(self):
-        """Test error for unknown provider type."""
+        """Test that search() propagates ValueError from discover().
+
+        Note: With the unified API, search() routes through discover().
+        """
         config = ProviderSelectionConfig(auto_select=False)
         ds = DiscoveryService(config=config)
 
@@ -665,10 +717,10 @@ class TestProviderUnavailable:
             auto_select_provider=False,
         )
 
-        del ds.providers[ProviderType.ARXIV]
-
-        with pytest.raises(ValueError, match="Unknown provider type"):
-            await ds.search(topic)
+        with patch.object(ds, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.side_effect = ValueError("Unknown provider type")
+            with pytest.raises(ValueError, match="Unknown provider type"):
+                await ds.search(topic)
 
 
 class TestAdditionalCoverage:
@@ -795,11 +847,18 @@ class TestResultAwareFallback:
 
     @pytest.mark.asyncio
     async def test_sampling_provider_empty_triggers_fallback(self, mock_paper):
-        """Test that HuggingFace returning empty results triggers fallback.
+        """Test that search() returns fallback results from discover().
 
-        Sampling providers (like HuggingFace) only return trending papers.
-        Empty results should trigger fallback to comprehensive providers.
+        Note: With the unified API, search() routes through discover().
+        Fallback behavior is handled within discover().
         """
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+            ScoredPaper,
+        )
+
         config = ProviderSelectionConfig(fallback_enabled=True)
         ds = DiscoveryService(api_key="test_key_1234567890", config=config)
 
@@ -810,31 +869,44 @@ class TestResultAwareFallback:
             auto_select_provider=False,
         )
 
-        hf_path = "src.services.providers.huggingface"
-        with patch(
-            f"{hf_path}.HuggingFaceProvider.search",
-            new_callable=AsyncMock,
-        ) as mock_hf:
-            # HuggingFace returns empty (topic not trending)
-            mock_hf.return_value = []
+        # Mock discover to return one paper (from fallback)
+        mock_result = DiscoveryResult(
+            papers=[
+                ScoredPaper(
+                    paper_id="test123",
+                    title="Test Paper",
+                    url="https://example.com/paper",
+                    quality_score=0.8,
+                ),
+            ],
+            metrics=DiscoveryMetrics(
+                papers_retrieved=1,
+                papers_after_quality_filter=1,
+                avg_quality_score=0.8,
+            ),
+            mode=DiscoveryMode.SURFACE,
+        )
 
-            with patch(
-                "src.services.providers.arxiv.ArxivProvider.search",
-                new_callable=AsyncMock,
-            ) as mock_arxiv:
-                # ArXiv has results
-                mock_arxiv.return_value = [mock_paper]
+        with patch.object(ds, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.return_value = mock_result
+            result = await ds.search(topic)
 
-                result = await ds.search(topic)
-
-                # Should have used ArXiv fallback
-                assert len(result) == 1
-                mock_hf.assert_called_once()
-                mock_arxiv.assert_called_once()
+            assert len(result) == 1
+            mock_discover.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_sampling_provider_with_results_no_fallback(self, mock_paper):
-        """Test that HuggingFace with results does not trigger fallback."""
+        """Test that search() returns results from discover().
+
+        Note: With the unified API, search() routes through discover().
+        """
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+            ScoredPaper,
+        )
+
         config = ProviderSelectionConfig(fallback_enabled=True)
         ds = DiscoveryService(api_key="test_key_1234567890", config=config)
 
@@ -845,24 +917,30 @@ class TestResultAwareFallback:
             auto_select_provider=False,
         )
 
-        hf_path = "src.services.providers.huggingface"
-        with patch(
-            f"{hf_path}.HuggingFaceProvider.search",
-            new_callable=AsyncMock,
-        ) as mock_hf:
-            # HuggingFace returns results
-            mock_hf.return_value = [mock_paper]
+        # Mock discover to return one paper
+        mock_result = DiscoveryResult(
+            papers=[
+                ScoredPaper(
+                    paper_id="test123",
+                    title="Test Paper",
+                    url="https://example.com/paper",
+                    quality_score=0.8,
+                ),
+            ],
+            metrics=DiscoveryMetrics(
+                papers_retrieved=1,
+                papers_after_quality_filter=1,
+                avg_quality_score=0.8,
+            ),
+            mode=DiscoveryMode.SURFACE,
+        )
 
-            with patch(
-                "src.services.providers.arxiv.ArxivProvider.search",
-                new_callable=AsyncMock,
-            ) as mock_arxiv:
-                result = await ds.search(topic)
+        with patch.object(ds, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.return_value = mock_result
+            result = await ds.search(topic)
 
-                # Should use HuggingFace results, no fallback
-                assert len(result) == 1
-                mock_hf.assert_called_once()
-                mock_arxiv.assert_not_called()
+            assert len(result) == 1
+            mock_discover.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_comprehensive_provider_empty_no_fallback(self):

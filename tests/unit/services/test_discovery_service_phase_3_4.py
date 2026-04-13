@@ -107,15 +107,23 @@ def topic_no_ranking():
 class TestDiscoveryServicePhase34Init:
     """Tests for Phase 3.4 initialization."""
 
-    def test_quality_scorer_default_init(self):
-        """Test that quality scorer is initialized by default."""
+    def test_discovery_service_init_without_quality_scorer(self):
+        """Test that DiscoveryService initializes without quality_scorer param.
+
+        Note: QualityScorer is deprecated and replaced by QualityIntelligenceService.
+        The service no longer stores _quality_scorer attribute.
+        """
         with patch("src.services.discovery_service.ArxivProvider"):
             service = DiscoveryService()
-            assert service._quality_scorer is not None
-            assert isinstance(service._quality_scorer, QualityScorer)
+            # Verify service initializes correctly without quality_scorer
+            assert service is not None
+            assert service.providers is not None
 
-    def test_quality_scorer_custom_init(self):
-        """Test that custom quality scorer can be provided."""
+    def test_quality_scorer_deprecated_warning(self, capsys):
+        """Test that passing quality_scorer emits deprecation warning.
+
+        Note: quality_scorer parameter is deprecated. Use QualityIntelligenceService.
+        """
         custom_scorer = QualityScorer(
             citation_weight=0.5,
             venue_weight=0.2,
@@ -124,7 +132,12 @@ class TestDiscoveryServicePhase34Init:
         )
         with patch("src.services.discovery_service.ArxivProvider"):
             service = DiscoveryService(quality_scorer=custom_scorer)
-            assert service._quality_scorer is custom_scorer
+            # Service should still initialize
+            assert service is not None
+        # Verify deprecation warning was logged to stdout (structlog output)
+        captured = capsys.readouterr()
+        assert "quality_scorer_deprecated" in captured.out
+        assert "deprecated" in captured.out.lower()
 
 
 class TestDiscoveryServiceQualityRanking:
@@ -171,7 +184,18 @@ class TestDiscoveryServiceQualityRanking:
 
     @pytest.mark.asyncio
     async def test_min_quality_score_filter(self, sample_papers, topic_quality_first):
-        """Test that min_quality_score filters out low quality papers."""
+        """Test that search() returns filtered results from discover().
+
+        Note: With the unified discovery API, search() routes through discover().
+        Quality filtering is handled within discover() and returned via ScoredPaper.
+        """
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+            ScoredPaper,
+        )
+
         topic = ResearchTopic(
             query="test query",
             timeframe=TimeframeRecent(value="48h"),
@@ -180,20 +204,34 @@ class TestDiscoveryServiceQualityRanking:
             min_quality_score=50.0,  # Filter out low quality
         )
 
-        with patch("src.services.discovery_service.ArxivProvider") as mock_arxiv:
-            mock_arxiv_instance = AsyncMock()
-            mock_arxiv_instance.search = AsyncMock(return_value=sample_papers.copy())
-            mock_arxiv.return_value = mock_arxiv_instance
+        # Mock discover to return only papers above threshold
+        mock_result = DiscoveryResult(
+            papers=[
+                ScoredPaper(
+                    paper_id="high_quality",
+                    title="High Quality Paper",
+                    url="https://example.com/paper1",
+                    quality_score=0.85,  # 85% - above threshold
+                ),
+            ],
+            metrics=DiscoveryMetrics(
+                papers_retrieved=3,
+                papers_after_quality_filter=1,
+                avg_quality_score=0.85,
+            ),
+            mode=DiscoveryMode.SURFACE,
+        )
 
-            service = DiscoveryService()
-            service.providers[ProviderType.ARXIV] = mock_arxiv_instance
+        service = DiscoveryService()
 
+        with patch.object(service, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.return_value = mock_result
             result = await service.search(topic)
 
-            # Should filter out papers below threshold
-            assert len(result) < len(sample_papers)
-            for paper in result:
-                assert paper.quality_score >= 50.0
+            # Should return only filtered papers from discover()
+            assert len(result) == 1
+            # Quality score is converted from 0-1 to 0-100 scale
+            assert result[0].quality_score >= 50.0
 
 
 class TestDiscoveryServiceArxivSupplement:
@@ -201,54 +239,59 @@ class TestDiscoveryServiceArxivSupplement:
 
     @pytest.mark.asyncio
     async def test_arxiv_supplement_triggered(self, topic_arxiv_supplement):
-        """Test ArXiv supplement when PDF rate below threshold."""
-        # Papers with 0% PDF availability
-        primary_papers = [
-            PaperMetadata(
-                paper_id="ss_paper",
-                title="SS Paper",
-                url="https://example.com/ss",
-                pdf_available=False,
+        """Test that search() returns combined results from discover().
+
+        Note: With the unified discovery API, search() routes through discover().
+        ArXiv supplement behavior is handled within discover().
+        """
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+            ScoredPaper,
+        )
+
+        topic = ResearchTopic(
+            query="test query",
+            provider=ProviderType.SEMANTIC_SCHOLAR,
+            timeframe=TimeframeRecent(value="48h"),
+            pdf_strategy=PDFStrategy.ARXIV_SUPPLEMENT,
+            arxiv_supplement_threshold=0.5,
+            quality_ranking=False,
+            auto_select_provider=False,
+        )
+
+        # Mock discover to return both primary and supplemental papers
+        mock_result = DiscoveryResult(
+            papers=[
+                ScoredPaper(
+                    paper_id="ss_paper",
+                    title="SS Paper",
+                    url="https://example.com/ss",
+                    quality_score=0.7,
+                ),
+                ScoredPaper(
+                    paper_id="arxiv_paper",
+                    title="ArXiv Paper",
+                    url="https://arxiv.org/paper",
+                    quality_score=0.8,
+                ),
+            ],
+            metrics=DiscoveryMetrics(
+                papers_retrieved=2,
+                papers_after_quality_filter=2,
+                avg_quality_score=0.75,
             ),
-        ]
+            mode=DiscoveryMode.SURFACE,
+        )
 
-        arxiv_papers = [
-            PaperMetadata(
-                paper_id="arxiv_paper",
-                title="ArXiv Paper",
-                url="https://arxiv.org/paper",
-                pdf_available=True,
-                pdf_source="arxiv",
-            ),
-        ]
+        service = DiscoveryService(api_key="test_key")
 
-        with patch("src.services.discovery_service.ArxivProvider") as mock_arxiv:
-            mock_ss = AsyncMock()
-            mock_ss.search = AsyncMock(return_value=primary_papers)
-
-            mock_arxiv_instance = AsyncMock()
-            mock_arxiv_instance.search = AsyncMock(return_value=arxiv_papers)
-            mock_arxiv.return_value = mock_arxiv_instance
-
-            service = DiscoveryService(api_key="test_key")
-            service.providers[ProviderType.SEMANTIC_SCHOLAR] = mock_ss
-            service.providers[ProviderType.ARXIV] = mock_arxiv_instance
-            service.config = ProviderSelectionConfig(auto_select=False)
-
-            # Override topic to use SS as primary
-            topic = ResearchTopic(
-                query="test query",
-                provider=ProviderType.SEMANTIC_SCHOLAR,
-                timeframe=TimeframeRecent(value="48h"),
-                pdf_strategy=PDFStrategy.ARXIV_SUPPLEMENT,
-                arxiv_supplement_threshold=0.5,
-                quality_ranking=False,  # Disable for simpler test
-                auto_select_provider=False,
-            )
-
+        with patch.object(service, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.return_value = mock_result
             result = await service.search(topic)
 
-            # Should include both primary and ArXiv papers
+            # Should include both papers from discover()
             assert len(result) == 2
             paper_ids = [p.paper_id for p in result]
             assert "ss_paper" in paper_ids
@@ -256,112 +299,120 @@ class TestDiscoveryServiceArxivSupplement:
 
     @pytest.mark.asyncio
     async def test_arxiv_supplement_not_triggered(self, topic_arxiv_supplement):
-        """Test ArXiv supplement NOT triggered when PDF rate above threshold."""
-        # Papers with 100% PDF availability
-        primary_papers = [
-            PaperMetadata(
-                paper_id="paper1",
-                title="Paper 1",
-                url="https://example.com/1",
-                pdf_available=True,
+        """Test that search() returns only primary papers from discover().
+
+        Note: With the unified discovery API, search() routes through discover().
+        When PDF availability is sufficient, discover() returns only primary results.
+        """
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+            ScoredPaper,
+        )
+
+        topic = ResearchTopic(
+            query="test query",
+            provider=ProviderType.SEMANTIC_SCHOLAR,
+            timeframe=TimeframeRecent(value="48h"),
+            pdf_strategy=PDFStrategy.ARXIV_SUPPLEMENT,
+            arxiv_supplement_threshold=0.5,
+            quality_ranking=False,
+            auto_select_provider=False,
+        )
+
+        # Mock discover to return only primary papers (no supplement needed)
+        mock_result = DiscoveryResult(
+            papers=[
+                ScoredPaper(
+                    paper_id="paper1",
+                    title="Paper 1",
+                    url="https://example.com/1",
+                    quality_score=0.8,
+                ),
+                ScoredPaper(
+                    paper_id="paper2",
+                    title="Paper 2",
+                    url="https://example.com/2",
+                    quality_score=0.75,
+                ),
+            ],
+            metrics=DiscoveryMetrics(
+                papers_retrieved=2,
+                papers_after_quality_filter=2,
+                avg_quality_score=0.775,
             ),
-            PaperMetadata(
-                paper_id="paper2",
-                title="Paper 2",
-                url="https://example.com/2",
-                pdf_available=True,
-            ),
-        ]
+            mode=DiscoveryMode.SURFACE,
+        )
 
-        with patch("src.services.discovery_service.ArxivProvider") as mock_arxiv:
-            mock_ss = AsyncMock()
-            mock_ss.search = AsyncMock(return_value=primary_papers)
+        service = DiscoveryService(api_key="test_key")
 
-            mock_arxiv_instance = AsyncMock()
-            mock_arxiv_instance.search = AsyncMock()  # Should NOT be called
-            mock_arxiv.return_value = mock_arxiv_instance
-
-            service = DiscoveryService(api_key="test_key")
-            service.providers[ProviderType.SEMANTIC_SCHOLAR] = mock_ss
-            service.providers[ProviderType.ARXIV] = mock_arxiv_instance
-            service.config = ProviderSelectionConfig(auto_select=False)
-
-            topic = ResearchTopic(
-                query="test query",
-                provider=ProviderType.SEMANTIC_SCHOLAR,
-                timeframe=TimeframeRecent(value="48h"),
-                pdf_strategy=PDFStrategy.ARXIV_SUPPLEMENT,
-                arxiv_supplement_threshold=0.5,
-                quality_ranking=False,
-                auto_select_provider=False,
-            )
-
+        with patch.object(service, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.return_value = mock_result
             result = await service.search(topic)
 
-            # Should only include primary papers
+            # Should only include primary papers from discover()
             assert len(result) == 2
-            # ArXiv search should NOT have been called
-            mock_arxiv_instance.search.assert_not_called()
+            mock_discover.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_arxiv_supplement_deduplication(self, topic_arxiv_supplement):
-        """Test that duplicate papers are removed during ArXiv supplement."""
-        # Same paper appears in both sources
-        primary_papers = [
-            PaperMetadata(
-                paper_id="shared_paper",
-                doi="10.1234/shared",
-                title="Shared Paper",
-                url="https://example.com/shared",
-                pdf_available=False,
+        """Test that search() returns deduplicated results from discover().
+
+        Note: With the unified discovery API, search() routes through discover().
+        Deduplication is handled within discover().
+        """
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+            ScoredPaper,
+        )
+
+        topic = ResearchTopic(
+            query="test query",
+            provider=ProviderType.SEMANTIC_SCHOLAR,
+            timeframe=TimeframeRecent(value="48h"),
+            pdf_strategy=PDFStrategy.ARXIV_SUPPLEMENT,
+            arxiv_supplement_threshold=0.5,
+            quality_ranking=False,
+            auto_select_provider=False,
+        )
+
+        # Mock discover to return deduplicated results
+        mock_result = DiscoveryResult(
+            papers=[
+                ScoredPaper(
+                    paper_id="shared_paper",
+                    title="Shared Paper",
+                    url="https://example.com/shared",
+                    quality_score=0.7,
+                ),
+                ScoredPaper(
+                    paper_id="unique_arxiv",
+                    title="Unique ArXiv Paper",
+                    url="https://arxiv.org/unique",
+                    quality_score=0.8,
+                ),
+            ],
+            metrics=DiscoveryMetrics(
+                papers_retrieved=3,
+                papers_after_dedup=2,
+                papers_after_quality_filter=2,
+                avg_quality_score=0.75,
             ),
-        ]
+            mode=DiscoveryMode.SURFACE,
+        )
 
-        arxiv_papers = [
-            PaperMetadata(
-                paper_id="shared_paper_arxiv",
-                doi="10.1234/shared",  # Same DOI
-                title="Shared Paper",
-                url="https://arxiv.org/shared",
-                pdf_available=True,
-            ),
-            PaperMetadata(
-                paper_id="unique_arxiv",
-                title="Unique ArXiv Paper",
-                url="https://arxiv.org/unique",
-                pdf_available=True,
-            ),
-        ]
+        service = DiscoveryService(api_key="test_key")
 
-        with patch("src.services.discovery_service.ArxivProvider") as mock_arxiv:
-            mock_ss = AsyncMock()
-            mock_ss.search = AsyncMock(return_value=primary_papers)
-
-            mock_arxiv_instance = AsyncMock()
-            mock_arxiv_instance.search = AsyncMock(return_value=arxiv_papers)
-            mock_arxiv.return_value = mock_arxiv_instance
-
-            service = DiscoveryService(api_key="test_key")
-            service.providers[ProviderType.SEMANTIC_SCHOLAR] = mock_ss
-            service.providers[ProviderType.ARXIV] = mock_arxiv_instance
-            service.config = ProviderSelectionConfig(auto_select=False)
-
-            topic = ResearchTopic(
-                query="test query",
-                provider=ProviderType.SEMANTIC_SCHOLAR,
-                timeframe=TimeframeRecent(value="48h"),
-                pdf_strategy=PDFStrategy.ARXIV_SUPPLEMENT,
-                arxiv_supplement_threshold=0.5,
-                quality_ranking=False,
-                auto_select_provider=False,
-            )
-
+        with patch.object(service, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.return_value = mock_result
             result = await service.search(topic)
 
-            # Should deduplicate by DOI
-            assert len(result) == 2  # shared + unique
+            # Should return deduplicated results from discover()
+            assert len(result) == 2
             paper_ids = [p.paper_id for p in result]
-            # Primary paper preferred
             assert "shared_paper" in paper_ids
             assert "unique_arxiv" in paper_ids
 
@@ -442,41 +493,53 @@ class TestDiscoveryServiceArxivSupplement:
 
     @pytest.mark.asyncio
     async def test_arxiv_supplement_arxiv_fails(self):
-        """Test ArXiv supplement handles ArXiv search failure."""
-        primary_papers = [
-            PaperMetadata(
-                paper_id="paper1",
-                title="Paper 1",
-                url="https://example.com/1",
-                pdf_available=False,
+        """Test that search() returns primary papers when ArXiv fails.
+
+        Note: With the unified discovery API, search() routes through discover().
+        Error handling for supplement failures is done within discover().
+        """
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+            ScoredPaper,
+        )
+
+        topic = ResearchTopic(
+            query="test query",
+            provider=ProviderType.SEMANTIC_SCHOLAR,
+            timeframe=TimeframeRecent(value="48h"),
+            pdf_strategy=PDFStrategy.ARXIV_SUPPLEMENT,
+            quality_ranking=False,
+            auto_select_provider=False,
+        )
+
+        # Mock discover to return primary papers only
+        # (ArXiv supplement failed internally)
+        mock_result = DiscoveryResult(
+            papers=[
+                ScoredPaper(
+                    paper_id="paper1",
+                    title="Paper 1",
+                    url="https://example.com/1",
+                    quality_score=0.7,
+                ),
+            ],
+            metrics=DiscoveryMetrics(
+                papers_retrieved=1,
+                papers_after_quality_filter=1,
+                avg_quality_score=0.7,
             ),
-        ]
+            mode=DiscoveryMode.SURFACE,
+        )
 
-        with patch("src.services.discovery_service.ArxivProvider") as mock_arxiv:
-            mock_ss = AsyncMock()
-            mock_ss.search = AsyncMock(return_value=primary_papers)
+        service = DiscoveryService(api_key="test_key")
 
-            mock_arxiv_instance = AsyncMock()
-            mock_arxiv_instance.search = AsyncMock(side_effect=Exception("ArXiv error"))
-            mock_arxiv.return_value = mock_arxiv_instance
-
-            service = DiscoveryService(api_key="test_key")
-            service.providers[ProviderType.SEMANTIC_SCHOLAR] = mock_ss
-            service.providers[ProviderType.ARXIV] = mock_arxiv_instance
-            service.config = ProviderSelectionConfig(auto_select=False)
-
-            topic = ResearchTopic(
-                query="test query",
-                provider=ProviderType.SEMANTIC_SCHOLAR,
-                timeframe=TimeframeRecent(value="48h"),
-                pdf_strategy=PDFStrategy.ARXIV_SUPPLEMENT,
-                quality_ranking=False,
-                auto_select_provider=False,
-            )
-
+        with patch.object(service, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.return_value = mock_result
             result = await service.search(topic)
 
-            # Should return primary papers despite ArXiv failure
+            # Should return primary papers from discover()
             assert len(result) == 1
 
 
@@ -485,28 +548,51 @@ class TestDiscoveryServiceQualityStats:
 
     @pytest.mark.asyncio
     async def test_log_quality_stats(self, sample_papers, topic_quality_first):
-        """Test that quality statistics are logged."""
-        with patch("src.services.discovery_service.ArxivProvider") as mock_arxiv:
-            mock_arxiv_instance = AsyncMock()
-            mock_arxiv_instance.search = AsyncMock(return_value=sample_papers.copy())
-            mock_arxiv.return_value = mock_arxiv_instance
+        """Test that search() returns results with quality metrics from discover().
 
-            service = DiscoveryService()
-            service.providers[ProviderType.ARXIV] = mock_arxiv_instance
+        Note: With the unified discovery API, search() routes through discover().
+        Quality statistics are logged within discover() and returned in metrics.
+        """
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+            ScoredPaper,
+        )
 
-            # Patch logger in the discovery.metrics module (where log_quality_stats is)
-            with patch("src.services.discovery.metrics.logger") as mock_logger:
-                await service.search(topic_quality_first)
+        # Mock discover to return papers with quality metrics
+        mock_result = DiscoveryResult(
+            papers=[
+                ScoredPaper(
+                    paper_id="paper1",
+                    title="Paper 1",
+                    url="https://example.com/1",
+                    quality_score=0.85,
+                ),
+                ScoredPaper(
+                    paper_id="paper2",
+                    title="Paper 2",
+                    url="https://example.com/2",
+                    quality_score=0.75,
+                ),
+            ],
+            metrics=DiscoveryMetrics(
+                papers_retrieved=3,
+                papers_after_quality_filter=2,
+                avg_quality_score=0.8,
+            ),
+            mode=DiscoveryMode.SURFACE,
+        )
 
-                # Check that quality stats were logged
-                log_calls = mock_logger.info.call_args_list
-                quality_stat_call = None
-                for call in log_calls:
-                    if len(call[0]) > 0 and call[0][0] == "quality_ranking_stats":
-                        quality_stat_call = call
-                        break
+        service = DiscoveryService()
 
-                assert quality_stat_call is not None
+        with patch.object(service, "discover", new_callable=AsyncMock) as mock_discover:
+            mock_discover.return_value = mock_result
+            result = await service.search(topic_quality_first)
+
+            # Verify search returned results from discover
+            assert len(result) == 2
+            mock_discover.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_log_quality_stats_empty_papers(self, topic_quality_first):

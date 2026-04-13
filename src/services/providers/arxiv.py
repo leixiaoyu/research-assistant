@@ -389,7 +389,7 @@ class ArxivProvider(DiscoveryProvider):
                     publication_date=pub_date,
                     authors=authors,
                     citation_count=0,
-                    influential_citation_count=0,
+                    influential_citation_count=None,  # ArXiv doesn't provide this
                     venue="ArXiv",
                     open_access_pdf=pdf_link,  # type: ignore
                     relevance_score=0.0,

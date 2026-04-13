@@ -8,5 +8,8 @@ pytest-xdist==3.5.0
 bandit==1.7.8
 pip-audit==2.7.3
 
+# Type stubs for Mypy
+types-PyYAML==6.0.12.20250402
+
 # Note: gitleaks is installed via brew/binary, not pip
 # Note: pytest, black, mypy, flake8 are in requirements.txt

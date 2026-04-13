@@ -18,8 +18,11 @@ from src.models.config import (
 )
 from src.models.discovery import (
     DiscoveryStats,
-    DiscoveryFilterResult,
     ResolvedTimeframe,
+    DiscoveryResult as DiscoveryAPIResult,
+    DiscoveryMetrics,
+    ScoredPaper,
+    DiscoveryMode,
 )
 from src.models.paper import PaperMetadata
 from src.services.providers.base import APIError
@@ -73,6 +76,52 @@ def sample_papers():
         url="https://example.com/paper2",
     )
     return [paper1, paper2]
+
+
+@pytest.fixture
+def sample_scored_papers(sample_papers):
+    """Create sample scored papers for discover() API."""
+    scored = []
+    for paper in sample_papers:
+        scored_paper = ScoredPaper(
+            paper_id=paper.paper_id,
+            title=paper.title,
+            abstract=paper.abstract,
+            doi=paper.doi,
+            url=str(paper.url) if paper.url else None,
+            open_access_pdf=None,
+            authors=[],
+            publication_date=None,
+            venue=None,
+            citation_count=0,
+            source=None,
+            quality_score=0.8,
+            relevance_score=0.7,
+            engagement_score=0.0,
+        )
+        scored.append(scored_paper)
+    return scored
+
+
+def make_discovery_result(scored_papers, mode=DiscoveryMode.STANDARD):
+    """Helper to create DiscoveryAPIResult for mocking."""
+    return DiscoveryAPIResult(
+        papers=scored_papers,
+        metrics=DiscoveryMetrics(
+            queries_generated=1,
+            papers_retrieved=len(scored_papers),
+            papers_after_dedup=len(scored_papers),
+            papers_after_quality_filter=len(scored_papers),
+            papers_after_relevance_filter=len(scored_papers),
+            providers_queried=["arxiv"],
+            avg_relevance_score=0.7,
+            avg_quality_score=0.8,
+            pipeline_duration_ms=100,
+        ),
+        queries_used=[],
+        source_breakdown={"arxiv": len(scored_papers)},
+        mode=mode,
+    )
 
 
 class TestDiscoveryResult:
@@ -155,13 +204,18 @@ class TestDiscoveryPhase:
 
     @pytest.mark.asyncio
     async def test_execute_single_topic_success(
-        self, mock_context, sample_topic, sample_papers
+        self, mock_context, sample_topic, sample_scored_papers
     ):
         """Test execute with single successful topic."""
         mock_context.config.research_topics = [sample_topic]
-        mock_context.discovery_service.search.return_value = sample_papers
         mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
             topic_slug="machine-learning"
+        )
+
+        # Mock discover() to return DiscoveryAPIResult
+        discovery_result = make_discovery_result(sample_scored_papers)
+        mock_context.discovery_service.discover = AsyncMock(
+            return_value=discovery_result
         )
 
         phase = DiscoveryPhase(mock_context)
@@ -170,17 +224,24 @@ class TestDiscoveryPhase:
         assert result.topics_processed == 1
         assert result.topics_failed == 0
         assert result.total_papers == 2
-        mock_context.add_discovered_papers.assert_called_once_with(
-            "machine-learning", sample_papers
-        )
+        # Verify discover was called with correct parameters
+        mock_context.discovery_service.discover.assert_called_once()
+        call_args = mock_context.discovery_service.discover.call_args
+        assert call_args[1]["topic"] == "machine learning"
+        # Mode defaults to STANDARD when neither multi_source nor
+        # enhanced_enabled is set
+        assert call_args[1]["mode"] == DiscoveryMode.STANDARD
 
     @pytest.mark.asyncio
     async def test_execute_topic_api_error(self, mock_context, sample_topic):
         """Test execute handles API errors."""
         mock_context.config.research_topics = [sample_topic]
-        mock_context.discovery_service.search.side_effect = APIError("API failed")
         mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
             topic_slug="machine-learning"
+        )
+        # Mock discover() to raise APIError
+        mock_context.discovery_service.discover = AsyncMock(
+            side_effect=APIError("API failed")
         )
 
         phase = DiscoveryPhase(mock_context)
@@ -194,9 +255,12 @@ class TestDiscoveryPhase:
     async def test_execute_topic_unexpected_error(self, mock_context, sample_topic):
         """Test execute handles unexpected errors."""
         mock_context.config.research_topics = [sample_topic]
-        mock_context.discovery_service.search.side_effect = Exception("Unexpected")
         mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
             topic_slug="machine-learning"
+        )
+        # Mock discover() to raise unexpected error
+        mock_context.discovery_service.discover = AsyncMock(
+            side_effect=Exception("Unexpected")
         )
 
         phase = DiscoveryPhase(mock_context)
@@ -209,9 +273,13 @@ class TestDiscoveryPhase:
     async def test_execute_no_papers_found(self, mock_context, sample_topic):
         """Test execute when no papers found."""
         mock_context.config.research_topics = [sample_topic]
-        mock_context.discovery_service.search.return_value = []
         mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
             topic_slug="machine-learning"
+        )
+        # Mock discover() to return empty result
+        discovery_result = make_discovery_result([])
+        mock_context.discovery_service.discover = AsyncMock(
+            return_value=discovery_result
         )
 
         phase = DiscoveryPhase(mock_context)
@@ -221,7 +289,7 @@ class TestDiscoveryPhase:
         assert result.total_papers == 0
 
     @pytest.mark.asyncio
-    async def test_execute_multiple_topics(self, mock_context, sample_papers):
+    async def test_execute_multiple_topics(self, mock_context, sample_scored_papers):
         """Test execute with multiple topics."""
         topics = [
             ResearchTopic(
@@ -234,11 +302,15 @@ class TestDiscoveryPhase:
             ),
         ]
         mock_context.config.research_topics = topics
-        mock_context.discovery_service.search.return_value = sample_papers
         mock_context.catalog_service.get_or_create_topic.side_effect = [
             MagicMock(topic_slug="topic1"),
             MagicMock(topic_slug="topic2"),
         ]
+        # Mock discover() to return results for each topic
+        discovery_result = make_discovery_result(sample_scored_papers)
+        mock_context.discovery_service.discover = AsyncMock(
+            return_value=discovery_result
+        )
 
         phase = DiscoveryPhase(mock_context)
         result = await phase.execute()
@@ -259,13 +331,17 @@ class TestDiscoveryPhasePhase71Integration:
 
     @pytest.mark.asyncio
     async def test_incremental_discovery_disabled(
-        self, mock_context, sample_topic, sample_papers
+        self, mock_context, sample_topic, sample_scored_papers
     ):
         """Test discovery when incremental mode is disabled."""
         mock_context.config.research_topics = [sample_topic]
-        mock_context.discovery_service.search.return_value = sample_papers
         mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
             topic_slug="machine-learning"
+        )
+        # Mock discover()
+        discovery_result = make_discovery_result(sample_scored_papers)
+        mock_context.discovery_service.discover = AsyncMock(
+            return_value=discovery_result
         )
 
         phase = DiscoveryPhase(mock_context)
@@ -278,7 +354,7 @@ class TestDiscoveryPhasePhase71Integration:
 
     @pytest.mark.asyncio
     async def test_incremental_discovery_enabled(
-        self, mock_context, sample_topic, sample_papers
+        self, mock_context, sample_topic, sample_scored_papers
     ):
         """Test discovery with incremental mode enabled."""
         # Enable incremental discovery
@@ -287,9 +363,14 @@ class TestDiscoveryPhasePhase71Integration:
         )
 
         mock_context.config.research_topics = [sample_topic]
-        mock_context.discovery_service.search.return_value = sample_papers
         mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
             topic_slug="machine-learning"
+        )
+
+        # Mock discover()
+        discovery_result = make_discovery_result(sample_scored_papers)
+        mock_context.discovery_service.discover = AsyncMock(
+            return_value=discovery_result
         )
 
         # Mock TimeframeResolver
@@ -356,13 +437,18 @@ class TestDiscoveryPhasePhase71Integration:
 
     @pytest.mark.asyncio
     async def test_discovery_filtering_disabled(
-        self, mock_context, sample_topic, sample_papers
+        self, mock_context, sample_topic, sample_scored_papers
     ):
         """Test discovery when filtering is disabled."""
         mock_context.config.research_topics = [sample_topic]
-        mock_context.discovery_service.search.return_value = sample_papers
         mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
             topic_slug="machine-learning"
+        )
+
+        # Mock discover()
+        discovery_result = make_discovery_result(sample_scored_papers)
+        mock_context.discovery_service.discover = AsyncMock(
+            return_value=discovery_result
         )
 
         phase = DiscoveryPhase(mock_context)
@@ -380,9 +466,9 @@ class TestDiscoveryPhasePhase71Integration:
 
     @pytest.mark.asyncio
     async def test_discovery_filtering_enabled(
-        self, mock_context, sample_topic, sample_papers
+        self, mock_context, sample_topic, sample_scored_papers
     ):
-        """Test discovery with filtering enabled."""
+        """Test discovery with filtering enabled (in discover())."""
         # Enable filtering
         mock_context.config.settings.discovery_filter_settings = (
             DiscoveryFilterSettings(
@@ -395,56 +481,46 @@ class TestDiscoveryPhasePhase71Integration:
         mock_context.registry_service = MagicMock()
 
         mock_context.config.research_topics = [sample_topic]
-        mock_context.discovery_service.search.return_value = sample_papers
         mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
             topic_slug="machine-learning"
         )
 
-        # Mock DiscoveryFilter
-        mock_filter_result = DiscoveryFilterResult(
-            new_papers=[sample_papers[0]],  # 1 new paper
-            filtered_papers=[],  # 1 filtered
-            stats=DiscoveryStats(
-                total_discovered=2,
-                new_count=1,
-                filtered_count=1,
-                filter_breakdown={"doi": 1},
-                incremental_query=False,
-            ),
+        # Mock discover() - filtering is now internal to discover()
+        # Return only 1 paper to simulate filtering
+        discovery_result = make_discovery_result([sample_scored_papers[0]])
+        discovery_result.metrics = DiscoveryMetrics(
+            queries_generated=1,
+            papers_retrieved=2,  # 2 retrieved
+            papers_after_dedup=2,
+            papers_after_quality_filter=1,  # 1 after filtering
+            papers_after_relevance_filter=1,
+            providers_queried=["arxiv"],
+            avg_relevance_score=0.7,
+            avg_quality_score=0.8,
+            pipeline_duration_ms=100,
+        )
+        mock_context.discovery_service.discover = AsyncMock(
+            return_value=discovery_result
         )
 
-        with patch(
-            "src.orchestration.phases.discovery.DiscoveryFilter"
-        ) as mock_filter_class:
-            mock_filter = MagicMock()
-            mock_filter.filter_papers = AsyncMock(return_value=mock_filter_result)
-            mock_filter_class.return_value = mock_filter
+        phase = DiscoveryPhase(mock_context)
+        result = await phase.execute()
 
-            phase = DiscoveryPhase(mock_context)
-            result = await phase.execute()
+        assert result.topics_processed == 1
+        assert result.total_papers == 1  # Only papers after filtering
 
-            assert result.topics_processed == 1
-            assert result.total_papers == 1  # Only new papers
-
-            # Verify filter was called
-            mock_filter.filter_papers.assert_called_once_with(
-                papers=sample_papers,
-                topic_slug="machine-learning",
-                register_new=True,
-            )
-
-            # Verify discovery stats
-            topic_result = result.topic_results[0]
-            assert topic_result.discovery_stats is not None
-            assert topic_result.discovery_stats.total_discovered == 2
-            assert topic_result.discovery_stats.new_count == 1
-            assert topic_result.discovery_stats.filtered_count == 1
+        # Verify discovery stats reflect filtering
+        topic_result = result.topic_results[0]
+        assert topic_result.discovery_stats is not None
+        assert topic_result.discovery_stats.total_discovered == 2
+        assert topic_result.discovery_stats.new_count == 1
+        assert topic_result.discovery_stats.filtered_count == 1
 
     @pytest.mark.asyncio
     async def test_filtering_requires_registry_service(
-        self, mock_context, sample_topic, sample_papers
+        self, mock_context, sample_topic, sample_scored_papers
     ):
-        """Test filtering is skipped when registry_service is None."""
+        """Test filtering handled by discover() API."""
         # Enable filtering but no registry service
         mock_context.config.settings.discovery_filter_settings = (
             DiscoveryFilterSettings(
@@ -455,16 +531,21 @@ class TestDiscoveryPhasePhase71Integration:
         mock_context.registry_service = None
 
         mock_context.config.research_topics = [sample_topic]
-        mock_context.discovery_service.search.return_value = sample_papers
         mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
             topic_slug="machine-learning"
+        )
+
+        # Mock discover() - returns all papers (filtering is internal)
+        discovery_result = make_discovery_result(sample_scored_papers)
+        mock_context.discovery_service.discover = AsyncMock(
+            return_value=discovery_result
         )
 
         phase = DiscoveryPhase(mock_context)
         result = await phase.execute()
 
         assert result.topics_processed == 1
-        assert result.total_papers == 2  # All papers (no filtering)
+        assert result.total_papers == 2  # All papers
 
         # Verify stats show no filtering
         topic_result = result.topic_results[0]
@@ -473,7 +554,7 @@ class TestDiscoveryPhasePhase71Integration:
 
     @pytest.mark.asyncio
     async def test_incremental_with_filtering_combined(
-        self, mock_context, sample_topic, sample_papers
+        self, mock_context, sample_topic, sample_scored_papers
     ):
         """Test incremental discovery combined with filtering."""
         # Enable both features
@@ -489,7 +570,6 @@ class TestDiscoveryPhasePhase71Integration:
         mock_context.registry_service = MagicMock()
 
         mock_context.config.research_topics = [sample_topic]
-        mock_context.discovery_service.search.return_value = sample_papers
         mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
             topic_slug="machine-learning"
         )
@@ -502,34 +582,29 @@ class TestDiscoveryPhasePhase71Integration:
             overlap_buffer_hours=1,
         )
 
-        # Mock DiscoveryFilter
-        mock_filter_result = DiscoveryFilterResult(
-            new_papers=[sample_papers[0]],
-            filtered_papers=[],
-            stats=DiscoveryStats(
-                total_discovered=2,
-                new_count=1,
-                filtered_count=1,
-                filter_breakdown={"doi": 1},
-                incremental_query=False,  # Will be updated
-            ),
+        # Mock discover() with filtered results
+        discovery_result = make_discovery_result([sample_scored_papers[0]])
+        discovery_result.metrics = DiscoveryMetrics(
+            queries_generated=1,
+            papers_retrieved=2,
+            papers_after_dedup=2,
+            papers_after_quality_filter=1,
+            papers_after_relevance_filter=1,
+            providers_queried=["arxiv"],
+            avg_relevance_score=0.7,
+            avg_quality_score=0.8,
+            pipeline_duration_ms=100,
+        )
+        mock_context.discovery_service.discover = AsyncMock(
+            return_value=discovery_result
         )
 
-        with (
-            patch(
-                "src.orchestration.phases.discovery.TimeframeResolver"
-            ) as mock_resolver_class,
-            patch(
-                "src.orchestration.phases.discovery.DiscoveryFilter"
-            ) as mock_filter_class,
-        ):
+        with patch(
+            "src.orchestration.phases.discovery.TimeframeResolver"
+        ) as mock_resolver_class:
             mock_resolver = MagicMock()
             mock_resolver.resolve.return_value = mock_resolved
             mock_resolver_class.return_value = mock_resolver
-
-            mock_filter = MagicMock()
-            mock_filter.filter_papers = AsyncMock(return_value=mock_filter_result)
-            mock_filter_class.return_value = mock_filter
 
             phase = DiscoveryPhase(mock_context)
             result = await phase.execute()
@@ -551,13 +626,18 @@ class TestDiscoveryPhasePhase71Integration:
 
     @pytest.mark.asyncio
     async def test_discovery_stats_populated_on_success(
-        self, mock_context, sample_topic, sample_papers
+        self, mock_context, sample_topic, sample_scored_papers
     ):
         """Test discovery stats are populated in result."""
         mock_context.config.research_topics = [sample_topic]
-        mock_context.discovery_service.search.return_value = sample_papers
         mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
             topic_slug="machine-learning"
+        )
+
+        # Mock discover()
+        discovery_result = make_discovery_result(sample_scored_papers)
+        mock_context.discovery_service.discover = AsyncMock(
+            return_value=discovery_result
         )
 
         phase = DiscoveryPhase(mock_context)
@@ -578,9 +658,12 @@ class TestDiscoveryPhasePhase71Integration:
     async def test_discovery_stats_none_on_error(self, mock_context, sample_topic):
         """Test discovery stats remain None when discovery fails."""
         mock_context.config.research_topics = [sample_topic]
-        mock_context.discovery_service.search.side_effect = APIError("API failed")
         mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
             topic_slug="machine-learning"
+        )
+        # Mock discover() to raise error
+        mock_context.discovery_service.discover = AsyncMock(
+            side_effect=APIError("API failed")
         )
 
         phase = DiscoveryPhase(mock_context)

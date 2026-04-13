@@ -176,8 +176,9 @@ class QualityScorer:
         base_score = math.log10(paper.citation_count + 1) / 3.0
 
         # Influential citation bonus (up to 0.1 extra)
-        if paper.influential_citation_count > 0:
-            influential_bonus = min(0.1, paper.influential_citation_count * 0.01)
+        influential = paper.influential_citation_count
+        if influential is not None and influential > 0:
+            influential_bonus = min(0.1, influential * 0.01)
             base_score += influential_bonus
 
         return min(1.0, base_score)

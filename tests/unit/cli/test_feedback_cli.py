@@ -35,8 +35,8 @@ runner = CliRunner()
 
 def make_feedback_entry(
     paper_id: str = "paper123",
-    rating: str = "thumbs_up",
-    reasons: Optional[List[str]] = None,
+    rating: FeedbackRating = FeedbackRating.THUMBS_UP,
+    reasons: Optional[List[FeedbackReason]] = None,
     free_text: Optional[str] = None,
     topic_slug: Optional[str] = None,
 ) -> FeedbackEntry:

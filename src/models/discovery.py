@@ -29,28 +29,17 @@ from pydantic import BaseModel, Field, ConfigDict, computed_field, model_validat
 
 import structlog
 
+# Import QueryFocus from canonical location to avoid duplication (DRY)
+from src.models.query import QueryFocus
+
 if TYPE_CHECKING:
     from src.models.paper import PaperMetadata
 
 logger = structlog.get_logger()
 
 
-class QueryFocus(str, Enum):
-    """Focus area for decomposed queries.
-
-    Categorizes sub-queries by their research perspective:
-    - METHODOLOGY: Focus on techniques, algorithms, approaches
-    - APPLICATION: Focus on use cases, domains, implementations
-    - COMPARISON: Focus on comparisons, benchmarks, evaluations
-    - RELATED: Focus on related concepts, synonyms, variations
-    - INTERSECTION: Focus on cross-disciplinary aspects
-    """
-
-    METHODOLOGY = "methodology"
-    APPLICATION = "application"
-    COMPARISON = "comparison"
-    RELATED = "related"
-    INTERSECTION = "intersection"
+# Re-export QueryFocus for backward compatibility
+__all__ = ["QueryFocus"]
 
 
 class ProviderCategory(str, Enum):
@@ -63,6 +52,62 @@ class ProviderCategory(str, Enum):
 
     COMPREHENSIVE = "comprehensive"  # ArXiv, Semantic Scholar, OpenAlex
     TRENDING = "trending"  # HuggingFace
+
+
+class DiscoveryMode(str, Enum):
+    """Discovery operation mode determining speed vs comprehensiveness tradeoff.
+
+    - SURFACE: Fast discovery (<5s), single provider, no query enhancement
+    - STANDARD: Balanced (<30s), query decomposition, all providers, quality filter
+    - DEEP: Comprehensive (<120s), hybrid enhancement, citations, relevance ranking
+    """
+
+    SURFACE = "surface"
+    STANDARD = "standard"
+    DEEP = "deep"
+
+
+class QueryEnhancementConfig(BaseModel):
+    """Configuration for query enhancement strategies."""
+
+    model_config = ConfigDict(frozen=True)
+
+    strategy: str = Field(
+        "decompose", description="Enhancement strategy: decompose, expand, hybrid"
+    )
+    max_queries: int = Field(
+        5, ge=1, le=20, description="Maximum sub-queries to generate"
+    )
+    include_original: bool = Field(
+        True, description="Include original query in results"
+    )
+    cache_enabled: bool = Field(True, description="Enable query cache")
+
+
+class DiscoveryCitationConfig(BaseModel):
+    """Simplified citation config for DiscoveryPipelineConfig.
+
+    This is a lightweight config for the unified discover() API.
+    For detailed citation exploration, use CitationExplorationConfig
+    from src.models.config.phase7.
+
+    Note: Renamed from CitationExplorationConfig to avoid collision
+    with the more detailed config in src.models.config.phase7.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = Field(True, description="Enable citation exploration")
+    forward_citations: bool = Field(
+        True, description="Explore papers citing discovered papers"
+    )
+    backward_citations: bool = Field(
+        True, description="Explore papers cited by discovered papers"
+    )
+    max_depth: int = Field(1, ge=1, le=3, description="Citation exploration depth")
+    max_papers_per_direction: int = Field(
+        10, ge=1, le=50, description="Max papers per direction"
+    )
 
 
 class DecomposedQuery(BaseModel):
@@ -81,6 +126,32 @@ class DecomposedQuery(BaseModel):
     query: str = Field(..., min_length=1, max_length=500, description="Query text")
     focus: QueryFocus = Field(..., description="Focus area of this query")
     weight: float = Field(1.0, ge=0.0, le=2.0, description="Weight for result merging")
+
+
+class QualityTierConfig(BaseModel):
+    """Configuration for quality tier thresholds.
+
+    Attributes:
+        excellent: Minimum score for excellent tier (default: 0.80)
+        good: Minimum score for good tier (default: 0.60)
+        fair: Minimum score for fair tier (default: 0.40)
+        # Papers below fair threshold are "low" tier
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    excellent: float = Field(0.80, ge=0.0, le=1.0)
+    good: float = Field(0.60, ge=0.0, le=1.0)
+    fair: float = Field(0.40, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_tier_order(self) -> "QualityTierConfig":
+        """Validate tiers are in descending order."""
+        if not (self.excellent > self.good > self.fair):
+            raise ValueError(
+                "Tier thresholds must be in order: excellent > good > fair"
+            )
+        return self
 
 
 class QualityWeights(BaseModel):
@@ -139,6 +210,57 @@ class QualityWeights(BaseModel):
                 message="Weights do not sum to 1.0, scoring may be inconsistent",
             )
         return self
+
+
+class DiscoveryPipelineConfig(BaseModel):
+    """Unified configuration for all discovery modes.
+
+    Replaces fragmented configs: ProviderSelectionConfig, EnhancedDiscoveryConfig,
+    QueryExpansionConfig, AggregationConfig.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # Mode selection
+    mode: DiscoveryMode = Field(DiscoveryMode.STANDARD, description="Discovery mode")
+
+    # Provider configuration
+    providers: List[str] = Field(
+        default_factory=lambda: [
+            "arxiv",
+            "semantic_scholar",
+            "openalex",
+            "huggingface",
+        ],
+        description="Providers to query",
+    )
+    provider_timeout_seconds: float = Field(30.0, ge=1.0, le=300.0)
+    fallback_enabled: bool = Field(True, description="Enable provider fallback")
+
+    # Query enhancement
+    query_enhancement: QueryEnhancementConfig = Field(
+        default_factory=QueryEnhancementConfig
+    )
+
+    # Citation exploration (DEEP mode only)
+    citation_exploration: DiscoveryCitationConfig = Field(
+        default_factory=DiscoveryCitationConfig
+    )
+
+    # Quality filtering
+    quality_weights: QualityWeights = Field(default_factory=QualityWeights)
+    quality_tiers: QualityTierConfig = Field(default_factory=QualityTierConfig)
+    min_quality_score: float = Field(
+        0.3, ge=0.0, le=1.0, description="Minimum quality threshold"
+    )
+    min_citations: int = Field(0, ge=0, description="Minimum citation count")
+
+    # Relevance filtering
+    enable_relevance_ranking: bool = Field(True)
+    min_relevance_score: float = Field(0.5, ge=0.0, le=1.0)
+
+    # Result limits
+    max_papers: int = Field(50, ge=1, le=500, description="Maximum papers to return")
 
 
 class ScoredPaper(BaseModel):
@@ -287,6 +409,9 @@ class DiscoveryMetrics(BaseModel):
         avg_relevance_score: Average relevance score of final papers
         avg_quality_score: Average quality score of final papers
         pipeline_duration_ms: Total pipeline execution time
+        forward_citations_found: Forward citations discovered (DEEP mode)
+        backward_citations_found: Backward citations discovered (DEEP mode)
+        duration_ms: Alias for pipeline_duration_ms
     """
 
     model_config = ConfigDict(frozen=True)
@@ -310,6 +435,11 @@ class DiscoveryMetrics(BaseModel):
         0.0, ge=0.0, le=1.0, description="Avg quality score"
     )
     pipeline_duration_ms: int = Field(0, ge=0, description="Pipeline duration (ms)")
+    forward_citations_found: int = Field(0, ge=0, description="Forward citations found")
+    backward_citations_found: int = Field(
+        0, ge=0, description="Backward citations found"
+    )
+    duration_ms: int = Field(0, ge=0, description="Alias for pipeline_duration_ms")
 
 
 class DiscoveryResult(BaseModel):
@@ -321,6 +451,8 @@ class DiscoveryResult(BaseModel):
         papers: List of scored and ranked papers
         metrics: Pipeline execution metrics
         queries_used: Decomposed queries used for retrieval
+        source_breakdown: Papers per source
+        mode: Discovery mode used
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -333,6 +465,10 @@ class DiscoveryResult(BaseModel):
     queries_used: List[DecomposedQuery] = Field(
         default_factory=list, description="Queries used"
     )
+    source_breakdown: Dict[str, int] = Field(
+        default_factory=dict, description="Papers per source"
+    )
+    mode: Optional[DiscoveryMode] = Field(None, description="Discovery mode used")
 
     @computed_field  # type: ignore[prop-decorator]
     @property

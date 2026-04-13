@@ -74,6 +74,23 @@ venues:
   nature: 30
   science: 30
   cell: 30
+
+  # Nature sub-journals (lower tier than flagship Nature)
+  nature communications: 24
+  nature methods: 25
+  nature machine intelligence: 26
+  nature computational science: 25
+  nature human behaviour: 24
+  nature neuroscience: 26
+  nature genetics: 26
+  nature medicine: 27
+  nature biotechnology: 26
+  nature physics: 26
+  nature chemistry: 26
+
+  # Science sub-journals
+  science advances: 24
+  science robotics: 25
   jmlr: 25
   pami: 25
   tpami: 25
@@ -84,7 +101,7 @@ venues:
   # ---------------------------------------------------------------------------
   # Preprint Servers (lower quality signal - not peer-reviewed)
   # ---------------------------------------------------------------------------
-  arxiv: 10
+  arxiv: 15
   biorxiv: 10
   medrxiv: 10
   ssrn: 10

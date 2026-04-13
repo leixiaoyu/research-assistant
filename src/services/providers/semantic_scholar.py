@@ -213,7 +213,9 @@ class SemanticScholarProvider(DiscoveryProvider):
                     publication_date=pub_date,
                     authors=authors,
                     citation_count=item.get("citationCount", 0),
-                    influential_citation_count=item.get("influentialCitationCount", 0),
+                    influential_citation_count=item.get(
+                        "influentialCitationCount"
+                    ),  # None if missing
                     venue=item.get("venue"),
                     open_access_pdf=open_access_pdf,  # type: ignore
                     relevance_score=0.0,

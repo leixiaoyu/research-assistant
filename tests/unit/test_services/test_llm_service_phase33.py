@@ -376,7 +376,10 @@ class TestFallbackExecution:
         with patch("anthropic.AsyncAnthropic"):
             mock_client = Mock()
             with patch("google.genai.Client", return_value=mock_client):
-                return LLMService(config, limits)
+                service = LLMService(config, limits)
+                # Reset circuit breakers to ensure clean state (handles test isolation)
+                service.reset_circuit_breakers()
+                return service
 
     @pytest.mark.asyncio
     async def test_fallback_activated_on_primary_failure(

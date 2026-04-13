@@ -308,7 +308,9 @@ class PaperSearchMCPProvider(DiscoveryProvider):
             publication_date=pub_date,
             venue=result.get("venue") or result.get("journal"),
             citation_count=result.get("citation_count", 0),
-            influential_citation_count=result.get("influential_citation_count", 0),
+            influential_citation_count=result.get(
+                "influential_citation_count"
+            ),  # None if unavailable
             relevance_score=result.get("relevance_score", 0.0),
             quality_score=result.get("quality_score", 0.0),
             # Phase 3.4: PDF availability tracking

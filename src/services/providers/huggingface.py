@@ -311,7 +311,7 @@ class HuggingFaceProvider(DiscoveryProvider):
                     publication_date=pub_date,
                     venue="ArXiv (via HuggingFace)",
                     citation_count=upvotes,  # Use upvotes as engagement proxy
-                    influential_citation_count=0,
+                    influential_citation_count=None,  # HF doesn't provide this
                     relevance_score=0.0,
                     # Phase 3.4: PDF availability (always available for ArXiv papers)
                     pdf_available=True,

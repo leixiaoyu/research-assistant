@@ -1,5 +1,6 @@
 """Unit tests for SimilaritySearcher."""
 
+from typing import Optional
 from unittest.mock import AsyncMock, Mock
 
 import numpy as np
@@ -12,7 +13,7 @@ from src.services.embeddings.similarity_searcher import SimilaritySearcher
 class MockPaper:
     """Mock paper for testing."""
 
-    def __init__(self, paper_id: str, title: str, abstract: str = None):
+    def __init__(self, paper_id: str, title: str, abstract: Optional[str] = None):
         self.paper_id = paper_id
         self.title = title
         self.abstract = abstract

@@ -17,6 +17,7 @@ from src.models.feedback import FeedbackEntry, FeedbackRating
 from src.models.paper import PaperMetadata
 from src.services.result_aggregator import ResultAggregator
 from src.services.feedback.preference_model import PreferenceModel
+from tests.conftest_types import make_url
 
 
 class MockFeedbackService:
@@ -75,21 +76,21 @@ class TestFeedbackIntegration:
             PaperMetadata(
                 paper_id="paper1",
                 title="Machine Learning Basics",
-                url="https://example.com/1",
+                url=make_url("https://example.com/1"),
                 citation_count=100,
                 year=2024,
             ),
             PaperMetadata(
                 paper_id="paper2",
                 title="Deep Learning Advanced",
-                url="https://example.com/2",
+                url=make_url("https://example.com/2"),
                 citation_count=50,
                 year=2023,
             ),
             PaperMetadata(
                 paper_id="paper3",
                 title="Natural Language Processing",
-                url="https://example.com/3",
+                url=make_url("https://example.com/3"),
                 citation_count=75,
                 year=2024,
             ),

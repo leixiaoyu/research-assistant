@@ -12,16 +12,24 @@ import time
 from src.utils.provider_selector import ProviderSelector
 from src.models.provider import ProviderType
 from src.models.config import ResearchTopic, TimeframeRecent
+from tests.conftest_types import make_url
 
 
 def make_topic(query: str, **kwargs) -> ResearchTopic:
     """Helper to create ResearchTopic with required timeframe."""
-    defaults = {
-        "timeframe": TimeframeRecent(value="48h"),
-        "auto_select_provider": True,
-    }
-    defaults.update(kwargs)
-    return ResearchTopic(query=query, **defaults)
+    # Extract known fields and set defaults
+    timeframe = kwargs.pop("timeframe", TimeframeRecent(value="48h"))
+    auto_select_provider = kwargs.pop("auto_select_provider", True)
+    min_citations = kwargs.pop("min_citations", None)
+    max_papers = kwargs.pop("max_papers", 10)
+
+    return ResearchTopic(
+        query=query,
+        timeframe=timeframe,
+        auto_select_provider=auto_select_provider,
+        min_citations=min_citations,
+        max_papers=max_papers,
+    )
 
 
 class TestProviderSelectorBranches:
@@ -600,7 +608,7 @@ class TestNotificationDeduplicatorBranches:
                 paper_id="test-123",
                 title="Test Paper",
                 abstract="Test abstract",
-                url="https://example.com/paper.pdf",
+                url=make_url("https://example.com/paper.pdf"),
             )
         ]
 
@@ -641,7 +649,7 @@ class TestFilterServiceBranches:
                 paper_id="test-123",
                 title="Test Paper",
                 abstract="Test abstract",
-                url="https://example.com/paper.pdf",
+                url=make_url("https://example.com/paper.pdf"),
                 citation_count=0,  # Will be filtered out
             )
         ]
@@ -721,13 +729,13 @@ class TestDailyResearchJobWithPapers:
                 paper_id="paper-1",
                 title="Test Paper 1",
                 abstract="Abstract 1",
-                url="https://example.com/1.pdf",
+                url=make_url("https://example.com/1.pdf"),
             ),
             PaperMetadata(
                 paper_id="paper-2",
                 title="Test Paper 2",
                 abstract="Abstract 2",
-                url="https://example.com/2.pdf",
+                url=make_url("https://example.com/2.pdf"),
             ),
         ]
 
@@ -861,7 +869,7 @@ class TestRegistryServiceMoreBranches:
                 paper_id="test-paper-123",
                 title="Test Paper",
                 abstract="Test abstract",
-                url="https://example.com/paper.pdf",
+                url=make_url("https://example.com/paper.pdf"),
             )
 
             # Register paper - this returns the entry's paper_id

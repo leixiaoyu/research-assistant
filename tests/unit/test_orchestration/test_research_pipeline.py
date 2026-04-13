@@ -143,7 +143,17 @@ settings:
 
     @pytest.mark.asyncio
     async def test_run_processes_topics(self):
-        """Should process all topics."""
+        """Should process all topics.
+
+        Note: With the unified discovery API, DiscoveryPhase now uses
+        discover() method which is the unified entry point.
+        """
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+        )
+
         with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False) as f:
             config_content = """
 research_topics:
@@ -167,8 +177,22 @@ settings:
         try:
             pipeline = ResearchPipeline(config_path=config_path, enable_phase2=False)
 
+            # Mock discover() to return empty result (unified API)
+            mock_discovery_result = DiscoveryResult(
+                papers=[],
+                metrics=DiscoveryMetrics(
+                    papers_retrieved=0,
+                    papers_after_quality_filter=0,
+                    avg_quality_score=0.0,
+                ),
+                mode=DiscoveryMode.SURFACE,
+            )
+
             with patch("src.services.discovery_service.DiscoveryService") as mock_ds:
                 mock_ds.return_value.search = AsyncMock(return_value=[])
+                mock_ds.return_value.discover = AsyncMock(
+                    return_value=mock_discovery_result
+                )
 
                 with patch("src.services.catalog_service.CatalogService") as mock_cs:
                     mock_cs.return_value.get_or_create_topic.return_value = Mock(
@@ -292,7 +316,17 @@ class TestResearchPipelineProcessTopic:
 
     @pytest.mark.asyncio
     async def test_process_topic_no_papers(self):
-        """Should handle topic with no papers found."""
+        """Should handle topic with no papers found.
+
+        Note: With the unified discovery API, DiscoveryPhase now uses
+        discover() method which is the unified entry point.
+        """
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+        )
+
         with tempfile.NamedTemporaryFile(suffix=".yaml", delete=False) as f:
             config_content = """
 research_topics:
@@ -312,8 +346,22 @@ settings:
         try:
             pipeline = ResearchPipeline(config_path=config_path, enable_phase2=False)
 
+            # Mock discover() to return empty result (unified API)
+            mock_discovery_result = DiscoveryResult(
+                papers=[],
+                metrics=DiscoveryMetrics(
+                    papers_retrieved=0,
+                    papers_after_quality_filter=0,
+                    avg_quality_score=0.0,
+                ),
+                mode=DiscoveryMode.SURFACE,
+            )
+
             with patch("src.services.discovery_service.DiscoveryService") as mock_ds:
                 mock_ds.return_value.search = AsyncMock(return_value=[])
+                mock_ds.return_value.discover = AsyncMock(
+                    return_value=mock_discovery_result
+                )
 
                 with patch("src.services.catalog_service.CatalogService") as mock_cs:
                     mock_cs.return_value.get_or_create_topic.return_value = Mock(
@@ -333,7 +381,16 @@ settings:
         """Should process topic with papers found.
 
         Phase 5.2: Updated to work with new context-based architecture.
+        Note: With the unified discovery API, DiscoveryPhase now uses
+        discover() method which is the unified entry point.
         """
+        from src.models.discovery import (
+            DiscoveryResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+            ScoredPaper,
+        )
+
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.yaml"
             output_dir = Path(temp_dir) / "output"
@@ -364,8 +421,30 @@ settings:
                 authors=[Author(name="Author 1")],
             )
 
+            # Mock discover() to return result with paper (unified API)
+            mock_discovery_result = DiscoveryResult(
+                papers=[
+                    ScoredPaper(
+                        paper_id="123",
+                        title="Test Paper",
+                        url="https://example.com/paper",
+                        abstract="Abstract",
+                        quality_score=0.8,
+                    )
+                ],
+                metrics=DiscoveryMetrics(
+                    papers_retrieved=1,
+                    papers_after_quality_filter=1,
+                    avg_quality_score=0.8,
+                ),
+                mode=DiscoveryMode.SURFACE,
+            )
+
             with patch("src.services.discovery_service.DiscoveryService") as mock_ds:
                 mock_ds.return_value.search = AsyncMock(return_value=[test_paper])
+                mock_ds.return_value.discover = AsyncMock(
+                    return_value=mock_discovery_result
+                )
 
                 with patch("src.services.catalog_service.CatalogService") as mock_cs:
                     mock_cs.return_value.get_or_create_topic.return_value = Mock(

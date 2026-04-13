@@ -46,7 +46,7 @@ def make_paper_metadata(
     publication_date: Optional[datetime] = None,
     venue: Optional[str] = None,
     citation_count: int = 0,
-    influential_citation_count: int = 0,
+    influential_citation_count: Optional[int] = None,
     quality_score: float = 0.0,
     relevance_score: float = 0.0,
     discovery_source: Optional[str] = None,

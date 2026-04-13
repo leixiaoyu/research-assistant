@@ -162,7 +162,7 @@ def test_citation_score_no_citation_count(
 def test_citation_score_log_normalization(
     default_service: QualityIntelligenceService,
 ) -> None:
-    """Test citation score uses log1p normalization."""
+    """Test citation score uses log1p normalization (SS source, known 0 influential)."""
     test_cases = [
         (10, math.log1p(10) / 10.0),
         (100, math.log1p(100) / 10.0),
@@ -175,6 +175,7 @@ def test_citation_score_log_normalization(
             title="Test",
             url=make_url("https://example.com"),
             citation_count=citations,
+            influential_citation_count=0,  # SS source with known 0 influential
         )
         score = default_service._calculate_citation_score(paper)
         assert abs(score - expected) < 0.01
@@ -232,13 +233,13 @@ def test_citation_score_no_influential_data(
         title="Test",
         url=make_url("https://example.com"),
         citation_count=100,
+        influential_citation_count=None,  # Explicitly None (ArXiv, OpenAlex, etc.)
     )
-    # No influential_citation_count attribute (ArXiv, OpenAlex, etc.)
 
     score = default_service._calculate_citation_score(paper)
 
-    # Should only use base score, no bonus
-    expected = math.log1p(100) / 10.0
+    # Should use base score + neutral bonus (0.05) to prevent provider bias
+    expected = math.log1p(100) / 10.0 + 0.05
     assert abs(score - expected) < 0.01
 
 

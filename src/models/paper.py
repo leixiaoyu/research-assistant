@@ -35,7 +35,8 @@ class PaperMetadata(BaseModel):
 
     # Metrics
     citation_count: int = Field(0, ge=0)
-    influential_citation_count: int = Field(0, ge=0)
+    # None = unknown (non-SS source), 0 = known to have no influential citations
+    influential_citation_count: Optional[int] = Field(None, ge=0)
 
     # Computed fields
     relevance_score: float = Field(0.0, ge=0.0, le=1.0)

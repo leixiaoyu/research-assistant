@@ -345,7 +345,9 @@ class CitationExplorer:
             publication_date=data.get("publicationDate"),
             venue=data.get("venue"),
             citation_count=data.get("citationCount", 0),
-            influential_citation_count=0,
+            influential_citation_count=data.get(
+                "influentialCitationCount"
+            ),  # SS provides this
             relevance_score=0.0,
             quality_score=0.0,
             open_access_pdf=pdf_url,  # type: ignore[arg-type]

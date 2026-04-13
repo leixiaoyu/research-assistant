@@ -202,7 +202,7 @@ class AnswerSynthesizer:
             abstract="Cross-topic synthesis request",
             year=2025,
             citation_count=0,
-            influential_citation_count=0,
+            influential_citation_count=None,  # Synthetic paper, no real data
             relevance_score=1.0,
             quality_score=100.0,
             pdf_available=False,

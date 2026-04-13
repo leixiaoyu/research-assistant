@@ -57,7 +57,8 @@ class QualityIntelligenceService:
     CITATION_NORMALIZATION_FACTOR: float = 10.0
     INFLUENTIAL_BONUS_FACTOR: float = 0.01
     MAX_INFLUENTIAL_BONUS: float = 0.1
-    # Neutral factor when influential_citation_count is unavailable (not from SS)
+    # Neutral factor when influential_citation_count is unavailable (None)
+    # Value 0.05 is midpoint between 0.0 (known zero) and 0.1 (max bonus)
     # This prevents provider bias between SS and non-SS sources
     INFLUENTIAL_UNKNOWN_NEUTRAL: float = 0.05
 
@@ -306,16 +307,16 @@ class QualityIntelligenceService:
 
         # Influential citation bonus
         # Distinguish between: None (unavailable) vs 0 (known, no influential citations)
-        influential_count_raw = getattr(paper, "influential_citation_count", None)
+        influential_count = paper.influential_citation_count
 
-        if influential_count_raw is None:
+        if influential_count is None:
             # Data unavailable (non-SS source) - use neutral factor to prevent bias
             influential_bonus = self.INFLUENTIAL_UNKNOWN_NEUTRAL
-        elif influential_count_raw > 0:
+        elif influential_count > 0:
             # Known influential citations - calculate bonus
             influential_bonus = min(
                 self.MAX_INFLUENTIAL_BONUS,
-                influential_count_raw * self.INFLUENTIAL_BONUS_FACTOR,
+                influential_count * self.INFLUENTIAL_BONUS_FACTOR,
             )
         else:
             # Known to be zero influential citations

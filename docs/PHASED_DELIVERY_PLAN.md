@@ -48,13 +48,13 @@ This document outlines a phased delivery plan to build the Automated Research In
 
 ### Investment & Returns
 
-| Metric | Value |
-|--------|-------|
-| **Development Time** | Phase 8.1 complete; Phase 8.2 (Agent Loop) in progress |
-| **Team Size** | 2-3 engineers |
-| **Infrastructure Cost** | ~$100/month (LLM + hosting) |
-| **Expected Savings** | 15+ hours/week of manual research |
-| **ROI Timeframe** | 2-3 months |
+| Metric | Estimate | Current Status |
+|--------|----------|----------------|
+| **Development Time** | 6-8 weeks total | Phase 8.1 complete; Phase 8.2 in progress |
+| **Team Size** | 2-3 engineers | — |
+| **Infrastructure Cost** | ~$100/month (LLM + hosting) | — |
+| **Expected Savings** | 15+ hours/week of manual research | — |
+| **ROI Timeframe** | 2-3 months | — |
 
 ---
 

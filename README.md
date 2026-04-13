@@ -5,7 +5,7 @@
 [![Python 3.14](https://img.shields.io/badge/python-3.14-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Security: High](https://img.shields.io/badge/security-high-green.svg)](docs/security/)
-[![Test Coverage: 99%](https://img.shields.io/badge/coverage-99%25-brightgreen.svg)](tests/)
+[![Test Coverage: 99.25%](https://img.shields.io/badge/coverage-99.25%25-brightgreen.svg)](tests/)
 
 ## 🎯 Overview
 
@@ -15,7 +15,7 @@ ARISP automates the research process by:
 - 🤖 **Extracting** prompts, code, and insights using LLM (Claude/Gemini)
 - 📝 **Synthesizing** Obsidian-ready markdown briefs for engineering teams
 
-**✨ Phase 8.1 Complete:** Corpus Infrastructure for Deep Research Agent — hybrid search (FAISS + BM25), paper ingestion pipeline, semantic chunking, and trajectory storage. Plus full Intelligence Services Consolidation (Phase 1), Human Feedback Loop (Phase 7.3), and 3,642 tests at 99%+ coverage!
+**✨ Phase 8.1 Complete:** Corpus Infrastructure for Deep Research Agent — paper ingestion pipeline, semantic chunking, and trajectory storage. Plus Intelligence Services Consolidation Phase 1 (Core Services), Human Feedback Loop (Phase 7.3), and 3,642 tests at 99.25% coverage!
 
 ## ✨ Key Features
 
@@ -50,15 +50,16 @@ ARISP automates the research process by:
 - **Full Integration**: Works with cache, dedup, filter, and checkpoint services
 
 ### Production (Phase 4) ✅ Complete
-- **Observable**: Structured logging, Prometheus metrics, Grafana dashboards
-- **Resilient**: Retry logic, circuit breakers, checkpoint/resume
+- **Observable**: Structured logging with correlation IDs, Prometheus metrics, Grafana dashboards
+- **Resilient**: Infrastructure-level checkpoint/resume, graceful degradation (complements Phase 3.3's LLM-level retries)
 - **Secure**: Security-first design, secrets scanning, input validation
 
-### Global Registry & CLI (Phase 5.x) ✅ Complete
-- **Paper Registry**: Global paper identity with Semantic Scholar, ArXiv, HuggingFace integration
-- **LLM Decomposition**: Break complex queries into targeted search strategies
-- **Research Pipeline**: Multi-source discovery with cross-provider deduplication
+### CLI & Pipeline Decomposition (Phase 5.x) ✅ Complete
+*Builds on Phase 3.5's Global Registry foundation*
+- **LLM Service Decomposition**: Modular provider architecture (Anthropic, Google)
+- **Research Pipeline Phases**: Separated Discovery, Extraction, Synthesis, CrossSynthesis
 - **CLI Commands**: Full command-line interface for all pipeline operations
+- **Query Decomposition**: Break complex queries into targeted search strategies
 
 ### Enhanced Discovery (Phase 6) ✅ Complete
 - **Multi-Provider Orchestration**: Unified discovery across ArXiv, Semantic Scholar, HuggingFace
@@ -74,11 +75,11 @@ ARISP automates the research process by:
 - **VenueRepository**: YAML-based venue quality scoring with LRU caching
 - **QualityIntelligenceService**: Unified quality scoring with recency decay
 - **QueryIntelligenceService**: Provider selection and LLM-powered query expansion
-- **Hybrid Search**: FAISS + BM25 retrieval outperforming dense-only approaches
+- **Hybrid Search Service**: FAISS + BM25 retrieval infrastructure (applied by DRA in Phase 8.1)
 
 ### Deep Research Agent — Corpus (Phase 8.1) ✅ Complete
 - **Corpus Manager**: Offline indexed corpus from ARISP papers with semantic chunking
-- **Hybrid Retrieval**: FAISS + BM25 hybrid search with <200ms latency targets
+- **Hybrid Retrieval**: Applies Phase 7.x's FAISS + BM25 service to DRA corpus (<200ms latency)
 - **Paper Ingestion**: Automated pipeline to index and search over all discovered papers
 - **Trajectory Storage**: Batch trajectory storage for learning from research sessions
 
@@ -234,10 +235,11 @@ output/
 - [Phase 3: Intelligence Layer](docs/specs/PHASE_3_SPEC.md) - ✅ Complete (Cache, Dedup, Filters, Checkpoint)
 - [Phase 3.1: Concurrent Orchestration](docs/specs/PHASE_3.1_SPEC.md) - ✅ Complete (Async Workers & Resource Limiting)
 - [Phase 3.3: LLM Resilience](docs/specs/PHASE_3.3_LLM_FALLBACK_SPEC.md) - ✅ Complete (Retry, Circuit Breaker, Provider Failover)
-- [Phase 3.4: Multi-Provider Discovery](docs/specs/PHASE_3.4_PDF_PRIORITY_SPEC.md) - ✅ Complete (HuggingFace, Cross-Provider)
+- [Phase 3.4: Quality-First Discovery](docs/specs/PHASE_3.4_PDF_PRIORITY_SPEC.md) - ✅ Complete (Quality Ranking, PDF Availability Tracking)
 - [Phase 3.5: Global Registry](docs/specs/PHASE_3.5_SPEC.md) - ✅ Complete (Paper Identity & Registry)
 - [Phase 3.6: Delta Briefs](docs/specs/PHASE_3.6_SPEC.md) - ✅ Complete (Topic-Level Change Tracking)
-- [Phase 3.8: Cross-Topic Synthesis](docs/specs/PHASE_3.8_SPEC.md) - ✅ Complete (Multi-Topic Query Synthesis)
+- Phase 3.7: Cross-Topic Synthesis - ✅ Complete (LLM-Powered Multi-Topic Analysis; see [Phased Delivery Plan](docs/PHASED_DELIVERY_PLAN.md#phase-37-cross-topic-synthesis))
+- [Phase 3.8: Cross-Topic Synthesis Output](docs/specs/PHASE_3.8_SPEC.md) - ✅ Complete (Multi-Topic Query Synthesis)
 - [Phase 4: Production Hardening](docs/specs/PHASE_4_SPEC.md) - ✅ Complete (Observability, Security, Deployment)
 - [Phase 5.x: CLI & Decomposition](docs/specs/PHASE_5_OVERVIEW.md) - ✅ Complete (CLI, LLM Decomposition, Research Pipeline)
 - [Phase 6: Enhanced Discovery](docs/specs/PHASE_6_DISCOVERY_ENHANCEMENT_SPEC.md) - ✅ Complete (Multi-Provider Orchestration)
@@ -258,7 +260,7 @@ output/
 
 ## 🏗️ Project Status
 
-**Current Status:** ✅ **Phase 8.1 Complete** - Corpus Infrastructure for Deep Research Agent + Intelligence Services Consolidation Phase 1 (PR #89 merged 2026-04-13). Full production pipeline with 3,642 tests at 99%+ coverage.
+**Current Status:** ✅ **Phase 8.1 Complete** - Corpus Infrastructure for Deep Research Agent + Intelligence Services Consolidation Phase 1 (Core Services) (PR #89 merged 2026-04-13). Full production pipeline with 3,642 tests at 99.25% coverage.
 
 **Next Phase:** 📋 **Phase 8.2: DRA Agent Loop** (ReAct-style reasoning) or **Phase 9 planning** - Autonomous research agent with trajectory learning.
 
@@ -452,4 +454,4 @@ timeframe:
 
 **Built with ❤️ for research teams who want to stay ahead**
 
-**Status**: Phase 8.1 Complete - Corpus Infrastructure for Deep Research Agent + Intelligence Services Consolidation Phase 1. 3,642 tests, 99%+ coverage 🚀
+**Status**: Phase 8.1 Complete - Corpus Infrastructure for Deep Research Agent + Intelligence Services Consolidation Phase 1 (Core Services). 3,642 tests, 99.25% coverage 🚀

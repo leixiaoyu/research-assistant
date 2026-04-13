@@ -140,21 +140,26 @@ class CorpusManager:
 
     Integrates with the paper registry to ingest markdown content
     into searchable chunks with embeddings.
+
+    SR-8.7: Supports rate limiting for hosted embedding APIs.
     """
 
     def __init__(
         self,
         config: Optional[CorpusConfig] = None,
         search_engine: Optional[HybridSearchEngine] = None,
+        rate_limiter: Optional["RateLimiter"] = None,
     ):
         """Initialize corpus manager.
 
         Args:
             config: Corpus configuration
             search_engine: Search engine instance (created if not provided)
+            rate_limiter: Optional rate limiter for embedding API (SR-8.7)
         """
         self.config = config or CorpusConfig()
         self.corpus_dir = Path(self.config.corpus_dir)
+        self.rate_limiter = rate_limiter  # SR-8.7
 
         self._search_engine = search_engine
         self._section_parser = SectionParser()
@@ -170,13 +175,17 @@ class CorpusManager:
 
     @property
     def search_engine(self) -> HybridSearchEngine:
-        """Get or create search engine."""
+        """Get or create search engine.
+
+        SR-8.7: Passes rate_limiter to search engine for embedding API rate limiting.
+        """
         if self._search_engine is None:
             from src.models.dra import SearchConfig
 
             self._search_engine = HybridSearchEngine(
                 corpus_config=self.config,
                 search_config=SearchConfig(),
+                rate_limiter=self.rate_limiter,  # SR-8.7
             )
         return self._search_engine
 

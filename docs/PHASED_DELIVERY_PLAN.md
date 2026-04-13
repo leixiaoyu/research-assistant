@@ -1,9 +1,9 @@
 # ARISP Phased Delivery Plan
 **Automated Research Ingestion & Synthesis Pipeline**
 
-**Version:** 2.0
-**Date:** 2026-03-11
-**Status:** Phase 6 Cleanup Complete (Deprecated Modules Removed)
+**Version:** 3.0
+**Date:** 2026-04-13
+**Status:** Phase 8.1 Complete — Deep Research Agent Corpus Infrastructure operational. Intelligence Services Consolidation Phase 1 merged (PR #89).
 
 ---
 
@@ -22,27 +22,35 @@ This document outlines a phased delivery plan to build the Automated Research In
 
 ┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
 │Phase 3.6 │Phase 3.7 │Phase 5.1 │Phase 5.2 │Phase 5.3 │Phase 5.4 │Phase 5.5 │ Phase 6  │
-│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│(Future)  │(Future)  │🔄 Core   │
-│          │          │          │          │          │          │          │ Complete │
+│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│
+│          │          │          │          │          │          │          │          │
 │ Delta    │Cross-    │   LLM    │Research  │   CLI    │ Utility  │ Model    │ Enhanced │
 │ Briefs   │Synthesis │ Decompose│ Pipeline │ Commands │ Patterns │Consolid. │ Discovery│
 └──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
 
-┌──────────┬──────────┐
-│ Phase 8  │ Phase 4  │
-│📋Planned │📋Planned │
-│          │          │
-│   DRA    │Production│
-│Autonomous│Hardening │
-│ Research │          │
-└──────────┴──────────┘
+┌──────────┬──────────┬──────────┬──────────┬──────────┐
+│ Phase 7.1│ Phase 7.2│ Phase 7.3│ Phase 8.1│ Phase 4  │
+│✅Complete│✅Complete│✅Complete│✅Complete│✅Complete│
+│          │          │          │          │          │
+│ Feedback │Preference│  Human   │   DRA    │Production│
+│Foundation│ Learning │ Feedback │  Corpus  │Hardening │
+└──────────┴──────────┴──────────┴──────────┴──────────┘
+
+┌──────────┐
+│ Phase 8.2│
+│📋Planned │
+│          │
+│   DRA    │
+│ Agent    │
+│   Loop   │
+└──────────┘
 ```
 
 ### Investment & Returns
 
 | Metric | Value |
 |--------|-------|
-| **Development Time** | 3-4 weeks remaining |
+| **Development Time** | Phase 8.1 complete; Phase 8.2 (Agent Loop) in progress |
 | **Team Size** | 2-3 engineers |
 | **Infrastructure Cost** | ~$100/month (LLM + hosting) |
 | **Expected Savings** | 15+ hours/week of manual research |
@@ -254,8 +262,8 @@ Despite retrieving 90+ papers, the synthesis phase covered 0 topics due to poor 
 ---
 
 ### Phase 8: Deep Research Agent (DRA)
-**Status:** 📋 **PLANNED**
-**Duration:** 4-5 weeks
+**Status:** 🔄 **Phase 8.1 Complete** (PR #83 merged 2026-04-05); Phase 8.2+ in progress
+**Duration:** 4-5 weeks total
 **Dependencies:** Phase 3.5 (Global Registry), Phase 5.1 (LLM Service Decomposition), Phase 6 Core (Enhanced Discovery, optional)
 **Goal:** Autonomous, self-improving research agent with iterative reasoning and trajectory learning
 

@@ -15,7 +15,7 @@ ARISP automates the research process by:
 - 🤖 **Extracting** prompts, code, and insights using LLM (Claude/Gemini)
 - 📝 **Synthesizing** Obsidian-ready markdown briefs for engineering teams
 
-**✨ Phase 3.1 Complete:** Concurrent orchestration with async worker pools, intelligent resource limiting, and full integration with intelligence layer - 99% test coverage, 442 tests!
+**✨ Phase 8.1 Complete:** Corpus Infrastructure for Deep Research Agent — hybrid search (FAISS + BM25), paper ingestion pipeline, semantic chunking, and trajectory storage. Plus full Intelligence Services Consolidation (Phase 1), Human Feedback Loop (Phase 7.3), and 3,642 tests at 99%+ coverage!
 
 ## ✨ Key Features
 
@@ -49,10 +49,38 @@ ARISP automates the research process by:
 - **Graceful Degradation**: Individual paper failures don't block pipeline
 - **Full Integration**: Works with cache, dedup, filter, and checkpoint services
 
-### Production (Phase 4)
+### Production (Phase 4) ✅ Complete
 - **Observable**: Structured logging, Prometheus metrics, Grafana dashboards
 - **Resilient**: Retry logic, circuit breakers, checkpoint/resume
 - **Secure**: Security-first design, secrets scanning, input validation
+
+### Global Registry & CLI (Phase 5.x) ✅ Complete
+- **Paper Registry**: Global paper identity with Semantic Scholar, ArXiv, HuggingFace integration
+- **LLM Decomposition**: Break complex queries into targeted search strategies
+- **Research Pipeline**: Multi-source discovery with cross-provider deduplication
+- **CLI Commands**: Full command-line interface for all pipeline operations
+
+### Enhanced Discovery (Phase 6) ✅ Complete
+- **Multi-Provider Orchestration**: Unified discovery across ArXiv, Semantic Scholar, HuggingFace
+- **Provider Abstraction**: Pluggable provider interface with health tracking
+- **Benchmark Mode**: Cross-provider comparison and quality scoring
+
+### Human Feedback Loop (Phase 7.3) ✅ Complete
+- **Preference Learning**: User feedback drives paper relevance scoring
+- **Semantic Similarity**: Embedding-based topic matching for smarter discovery
+- **Feedback Integration**: Phase 7.3 loop wired into the discovery pipeline
+
+### Intelligence Services Consolidation (Phase 7.x) ✅ Complete
+- **VenueRepository**: YAML-based venue quality scoring with LRU caching
+- **QualityIntelligenceService**: Unified quality scoring with recency decay
+- **QueryIntelligenceService**: Provider selection and LLM-powered query expansion
+- **Hybrid Search**: FAISS + BM25 retrieval outperforming dense-only approaches
+
+### Deep Research Agent — Corpus (Phase 8.1) ✅ Complete
+- **Corpus Manager**: Offline indexed corpus from ARISP papers with semantic chunking
+- **Hybrid Retrieval**: FAISS + BM25 hybrid search with <200ms latency targets
+- **Paper Ingestion**: Automated pipeline to index and search over all discovered papers
+- **Trajectory Storage**: Batch trajectory storage for learning from research sessions
 
 ## 🚀 Quick Start
 
@@ -205,14 +233,23 @@ output/
 - [Phase 2.5: PDF Reliability](docs/specs/PHASE_2.5_SPEC.md) - ✅ Complete (Multi-Backend Fallback Chain)
 - [Phase 3: Intelligence Layer](docs/specs/PHASE_3_SPEC.md) - ✅ Complete (Cache, Dedup, Filters, Checkpoint)
 - [Phase 3.1: Concurrent Orchestration](docs/specs/PHASE_3.1_SPEC.md) - ✅ Complete (Async Workers & Resource Limiting)
-- [Phase 3.2: Semantic Scholar Activation](docs/specs/PHASE_3.2_SPEC.md) - 🎯 Ready (Multi-Provider Intelligence)
-- [Phase 4: Hardening](docs/specs/PHASE_4_SPEC.md) - 📋 Planned (Production Readiness)
-- [Phase 8: Deep Research Agent](docs/specs/PHASE_8_DRA_SPEC.md) - 📋 Planned (Autonomous Research Agent)
+- [Phase 3.3: LLM Resilience](docs/specs/PHASE_3.3_LLM_FALLBACK_SPEC.md) - ✅ Complete (Retry, Circuit Breaker, Provider Failover)
+- [Phase 3.4: Multi-Provider Discovery](docs/specs/PHASE_3.4_PDF_PRIORITY_SPEC.md) - ✅ Complete (HuggingFace, Cross-Provider)
+- [Phase 3.5: Global Registry](docs/specs/PHASE_3.5_SPEC.md) - ✅ Complete (Paper Identity & Registry)
+- [Phase 3.6: Delta Briefs](docs/specs/PHASE_3.6_SPEC.md) - ✅ Complete (Topic-Level Change Tracking)
+- [Phase 3.8: Cross-Topic Synthesis](docs/specs/PHASE_3.8_SPEC.md) - ✅ Complete (Multi-Topic Query Synthesis)
+- [Phase 4: Production Hardening](docs/specs/PHASE_4_SPEC.md) - ✅ Complete (Observability, Security, Deployment)
+- [Phase 5.x: CLI & Decomposition](docs/specs/PHASE_5_OVERVIEW.md) - ✅ Complete (CLI, LLM Decomposition, Research Pipeline)
+- [Phase 6: Enhanced Discovery](docs/specs/PHASE_6_DISCOVERY_ENHANCEMENT_SPEC.md) - ✅ Complete (Multi-Provider Orchestration)
+- [Phase 7.1: Feedback Foundation](docs/specs/PHASE_7.1_SPEC.md) - ✅ Complete (Feedback Data Model)
+- [Phase 7.2: Preference Learning](docs/specs/PHASE_7.2_SPEC.md) - ✅ Complete (Embedding-Based Topic Matching)
+- [Phase 7.3: Human Feedback Loop](docs/specs/PHASE_7.3_SPEC.md) - ✅ Complete (Feedback Integration)
+- [Phase 8.1: DRA Corpus Infrastructure](docs/specs/PHASE_8_DRA_SPEC.md) - ✅ Complete (Hybrid Search, Paper Ingestion, Trajectory Storage)
 
 ### Proposals
 - [Proposal 001: Discovery Provider Strategy](docs/proposals/001_DISCOVERY_PROVIDER_STRATEGY.md) - ✅ Approved & Implemented
 - [Proposal 002: PDF Extraction Reliability](docs/proposals/002_PDF_EXTRACTION_RELIABILITY.md) - ✅ Approved & Implemented
-- [Proposal 004: Deep Research Agent (DRA)](docs/proposals/004_OPENRESEARCHER_OFFLINE_TRAJECTORY_SYNTHESIS.md) - 📋 Draft (Autonomous, Self-Improving Research)
+- [Proposal 004: Deep Research Agent (DRA)](docs/proposals/004_OPENRESEARCHER_OFFLINE_TRAJECTORY_SYNTHESIS.md) - 🔄 Phase 8.1 Complete (Corpus Infrastructure); Agent Loop (8.2) in progress
 
 ### Development
 - [CLAUDE.md](CLAUDE.md) - Development guide for Claude Code integration
@@ -221,9 +258,9 @@ output/
 
 ## 🏗️ Project Status
 
-**Current Status:** ✅ **Phase 3.1 Complete** - Concurrent orchestration with async worker pools, resource limiting, and full integration with intelligence layer.
+**Current Status:** ✅ **Phase 8.1 Complete** - Corpus Infrastructure for Deep Research Agent + Intelligence Services Consolidation Phase 1 (PR #89 merged 2026-04-13). Full production pipeline with 3,642 tests at 99%+ coverage.
 
-**Next Phase:** 📋 **Phase 3.2: Semantic Scholar Activation** or **Phase 4: Production Hardening** - Multi-provider intelligence or observability/monitoring.
+**Next Phase:** 📋 **Phase 8.2: DRA Agent Loop** (ReAct-style reasoning) or **Phase 9 planning** - Autonomous research agent with trajectory learning.
 
 📊 **For detailed progress tracking, timelines, and phase-by-phase completion status, see:**
 → **[Phased Delivery Plan](docs/PHASED_DELIVERY_PLAN.md)** (Single Source of Truth)
@@ -415,4 +452,4 @@ timeframe:
 
 **Built with ❤️ for research teams who want to stay ahead**
 
-**Status**: Phase 3.1 Complete - Concurrent orchestration with async workers, resource limiting, and full intelligence integration. 99.1% coverage, 442 tests 🚀
+**Status**: Phase 8.1 Complete - Corpus Infrastructure for Deep Research Agent + Intelligence Services Consolidation Phase 1. 3,642 tests, 99%+ coverage 🚀

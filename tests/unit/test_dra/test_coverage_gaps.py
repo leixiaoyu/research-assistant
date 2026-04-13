@@ -50,14 +50,14 @@ class TestEmbeddingModelEncode:
         model._tokenizer = mock_tokenizer
         model._model = mock_model
 
-        # Patch torch at the module level
-        import torch as real_torch
-
+        # Mock torch module
+        mock_torch = MagicMock()
         mock_no_grad = MagicMock()
         mock_no_grad.__enter__ = MagicMock(return_value=None)
         mock_no_grad.__exit__ = MagicMock(return_value=None)
+        mock_torch.no_grad.return_value = mock_no_grad
 
-        with patch.object(real_torch, "no_grad", return_value=mock_no_grad):
+        with patch.dict("sys.modules", {"torch": mock_torch}):
             texts = ["text one", "text two", "text three"]
             # This will fail because we can't fully mock torch, but coverage is hit
             try:

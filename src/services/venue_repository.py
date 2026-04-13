@@ -149,11 +149,13 @@ class YamlVenueRepository:
             return self._venues[normalized]
 
         # Try substring match (prefer longest match)
+        # Only match when input venue CONTAINS a known venue key
+        # Prevents "nature" (1.0) from wrongly matching "nature communications"
         best_match: Optional[str] = None
         best_length = 0
 
         for venue_key in self._venues.keys():
-            if venue_key in normalized or normalized in venue_key:
+            if venue_key in normalized:
                 if len(venue_key) > best_length:
                     best_match = venue_key
                     best_length = len(venue_key)

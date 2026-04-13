@@ -57,6 +57,9 @@ class QualityIntelligenceService:
     CITATION_NORMALIZATION_FACTOR: float = 10.0
     INFLUENTIAL_BONUS_FACTOR: float = 0.01
     MAX_INFLUENTIAL_BONUS: float = 0.1
+    # Neutral factor when influential_citation_count is unavailable (not from SS)
+    # This prevents provider bias between SS and non-SS sources
+    INFLUENTIAL_UNKNOWN_NEUTRAL: float = 0.05
 
     RECENCY_DECAY_RATE: float = 0.2
     RECENCY_MIN_SCORE: float = 0.1
@@ -283,8 +286,10 @@ class QualityIntelligenceService:
         - 100 citations -> ~0.46
         - 1000 citations -> ~0.69
 
-        Plus influential citation bonus (Semantic Scholar only):
-        - Up to +0.1 for highly influential citations
+        Plus influential citation bonus:
+        - Up to +0.1 for highly influential citations (Semantic Scholar)
+        - Neutral factor (0.05) when influential_citation_count is unavailable
+          (prevents provider bias between SS and non-SS sources)
 
         Args:
             paper: Paper to score
@@ -299,15 +304,22 @@ class QualityIntelligenceService:
         # Base score: log1p normalization
         base_score = math.log1p(citation_count) / self.CITATION_NORMALIZATION_FACTOR
 
-        # Influential citation bonus (Semantic Scholar only)
-        influential_count = getattr(paper, "influential_citation_count", 0) or 0
-        influential_bonus = 0.0
+        # Influential citation bonus
+        # Distinguish between: None (unavailable) vs 0 (known, no influential citations)
+        influential_count_raw = getattr(paper, "influential_citation_count", None)
 
-        if influential_count > 0:
+        if influential_count_raw is None:
+            # Data unavailable (non-SS source) - use neutral factor to prevent bias
+            influential_bonus = self.INFLUENTIAL_UNKNOWN_NEUTRAL
+        elif influential_count_raw > 0:
+            # Known influential citations - calculate bonus
             influential_bonus = min(
                 self.MAX_INFLUENTIAL_BONUS,
-                influential_count * self.INFLUENTIAL_BONUS_FACTOR,
+                influential_count_raw * self.INFLUENTIAL_BONUS_FACTOR,
             )
+        else:
+            # Known to be zero influential citations
+            influential_bonus = 0.0
 
         return min(1.0, base_score + influential_bonus)
 

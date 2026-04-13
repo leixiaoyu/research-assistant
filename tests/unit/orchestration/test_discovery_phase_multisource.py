@@ -325,3 +325,83 @@ class TestDiscoveryPhaseMultiSourceExecution:
         # Note: phase72_stats may be None with unified API as stats come from
         # DiscoveryResult.metrics instead of legacy phase72_stats
         mock_discovery.discover.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_discovery_phase_initializes_phase72_stats_with_source_breakdown(
+        self,
+    ):
+        """Test that Phase72Stats is initialized when source_breakdown is present."""
+        from src.orchestration.phases.discovery import DiscoveryPhase
+        from src.models.discovery import (
+            DiscoveryResult as DiscoveryResultModel,
+            DiscoveryMetrics,
+            DiscoveryMode,
+            ScoredPaper,
+        )
+
+        mock_context = MagicMock()
+        mock_context.config = MagicMock()
+        mock_context.config.research_topics = [
+            ResearchTopic(
+                query="source breakdown test",
+                timeframe=TimeframeRecent(value="7d"),
+            )
+        ]
+
+        mock_catalog = MagicMock()
+        mock_catalog.get_or_create_topic.return_value = MagicMock(
+            topic_slug="source-breakdown-test"
+        )
+        mock_context.catalog_service = mock_catalog
+
+        # Create discovery result WITH source_breakdown to trigger Phase72Stats init
+        mock_discovery_result = DiscoveryResultModel(
+            papers=[
+                ScoredPaper(
+                    paper_id="p1",
+                    title="Paper from ArXiv",
+                    url="https://arxiv.org/p1",
+                    quality_score=0.8,
+                ),
+                ScoredPaper(
+                    paper_id="p2",
+                    title="Paper from Semantic Scholar",
+                    url="https://semanticscholar.org/p2",
+                    quality_score=0.75,
+                ),
+            ],
+            metrics=DiscoveryMetrics(
+                papers_retrieved=2,
+                papers_after_quality_filter=2,
+                avg_quality_score=0.775,
+            ),
+            source_breakdown={"arxiv": 1, "semantic_scholar": 1},  # This triggers init
+            mode=DiscoveryMode.STANDARD,
+        )
+
+        mock_discovery = MagicMock()
+        mock_discovery.discover = AsyncMock(return_value=mock_discovery_result)
+        mock_context.discovery_service = mock_discovery
+        mock_context.add_discovered_papers = MagicMock()
+        mock_context.add_error = MagicMock()
+
+        phase = DiscoveryPhase(
+            context=mock_context,
+            multi_source_enabled=True,  # Required for Phase72Stats path
+        )
+
+        result = await phase.execute()
+
+        # Verify Phase72Stats was initialized with source breakdown data
+        assert result.topics_processed == 1
+        topic_result = result.topic_results[0]
+        assert topic_result.phase72_stats is not None
+        assert topic_result.phase72_stats.source_breakdown == {
+            "arxiv": 1,
+            "semantic_scholar": 1,
+        }
+        assert set(topic_result.phase72_stats.sources_queried) == {
+            "arxiv",
+            "semantic_scholar",
+        }
+        assert topic_result.phase72_stats.papers_after_dedup == 2

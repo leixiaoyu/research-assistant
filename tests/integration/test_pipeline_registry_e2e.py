@@ -358,6 +358,9 @@ class TestPipelineRegistryIntegration:
             captured_topic_slug = topic_slug
             return mock_extraction_results
 
+        # Note: With unified API, must mock both search() and discover()
+        mock_discovery_result = create_mock_discovery_result(papers=sample_papers)
+
         with (
             patch.object(ConfigManager, "__init__", return_value=None),
             patch.object(ConfigManager, "load_config", return_value=mock_config),
@@ -366,6 +369,11 @@ class TestPipelineRegistryIntegration:
                 "src.services.discovery_service.DiscoveryService.search",
                 new_callable=AsyncMock,
                 return_value=sample_papers,
+            ),
+            patch(
+                "src.services.discovery_service.DiscoveryService.discover",
+                new_callable=AsyncMock,
+                return_value=mock_discovery_result,
             ),
             patch("src.services.catalog_service.CatalogService.load"),
             patch(
@@ -498,6 +506,9 @@ class TestPipelineRegistryIntegration:
             "papers_skipped": 0,
         }
 
+        # Note: With unified API, must mock both search() and discover()
+        mock_discovery_result = create_mock_discovery_result(papers=sample_papers)
+
         with (
             patch.object(ConfigManager, "__init__", return_value=None),
             patch.object(ConfigManager, "load_config", return_value=mock_config),
@@ -506,6 +517,11 @@ class TestPipelineRegistryIntegration:
                 "src.services.discovery_service.DiscoveryService.search",
                 new_callable=AsyncMock,
                 return_value=sample_papers,
+            ),
+            patch(
+                "src.services.discovery_service.DiscoveryService.discover",
+                new_callable=AsyncMock,
+                return_value=mock_discovery_result,
             ),
             patch("src.services.catalog_service.CatalogService.load"),
             patch(
@@ -554,6 +570,9 @@ class TestPipelineRegistryIntegration:
         output_dir = temp_output_dir / "output"
         output_dir.mkdir(exist_ok=True)
 
+        # Note: With unified API, must mock both search() and discover()
+        mock_discovery_result = create_mock_discovery_result(papers=sample_papers)
+
         with (
             patch.object(ConfigManager, "__init__", return_value=None),
             patch.object(ConfigManager, "load_config", return_value=mock_config),
@@ -562,6 +581,11 @@ class TestPipelineRegistryIntegration:
                 "src.services.discovery_service.DiscoveryService.search",
                 new_callable=AsyncMock,
                 return_value=sample_papers,
+            ),
+            patch(
+                "src.services.discovery_service.DiscoveryService.discover",
+                new_callable=AsyncMock,
+                return_value=mock_discovery_result,
             ),
             patch("src.services.catalog_service.CatalogService.load"),
             patch(

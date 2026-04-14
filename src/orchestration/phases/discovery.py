@@ -84,12 +84,14 @@ class DiscoveryPhase(PipelinePhase[DiscoveryResult]):
     - Store discovered papers in context
     - Phase 7.1: Incremental discovery and filtering
     - Phase 7.2: Multi-source discovery with query expansion and citations
+    - Phase 6: Enhanced discovery with 4-stage pipeline (LLM-based)
     """
 
     def __init__(
         self,
         context: "PipelineContext",  # type: ignore[name-defined]
         multi_source_enabled: bool = False,
+        enhanced_discovery_enabled: bool = False,
         query_expansion_config: Optional[QueryExpansionConfig] = None,
         citation_config: Optional[CitationExplorationConfig] = None,
         aggregation_config: Optional[AggregationConfig] = None,
@@ -99,12 +101,14 @@ class DiscoveryPhase(PipelinePhase[DiscoveryResult]):
         Args:
             context: Pipeline context
             multi_source_enabled: Enable Phase 7.2 multi-source discovery
+            enhanced_discovery_enabled: Enable Phase 6 enhanced 4-stage pipeline
             query_expansion_config: Query expansion configuration
             citation_config: Citation exploration configuration
             aggregation_config: Result aggregation configuration
         """
         super().__init__(context)
         self.multi_source_enabled = multi_source_enabled
+        self.enhanced_discovery_enabled = enhanced_discovery_enabled
         self.query_expansion_config = query_expansion_config
         self.citation_config = citation_config
         self.aggregation_config = aggregation_config
@@ -215,33 +219,50 @@ class DiscoveryPhase(PipelinePhase[DiscoveryResult]):
                 topic=topic.query,
                 topic_slug=topic_slug,
                 multi_source=self.multi_source_enabled,
+                enhanced_discovery=self.enhanced_discovery_enabled,
             )
 
-            # Execute discovery (Phase 7.2: multi-source or standard)
-            if self.multi_source_enabled:
+            # Phase 7.1: Create modified topic with incremental timeframe
+            # This is used by standard, multi-source, and enhanced discovery
+            if resolved_timeframe is not None and resolved_timeframe.is_incremental:
+                incremental_timeframe = TimeframeDateRange(
+                    type=TimeframeType.DATE_RANGE,
+                    start_date=resolved_timeframe.start_date.date(),
+                    end_date=resolved_timeframe.end_date.date(),
+                )
+                search_topic = topic.model_copy(
+                    update={"timeframe": incremental_timeframe}
+                )
+                self.logger.info(
+                    "using_incremental_search",
+                    topic=topic.query,
+                    start_date=incremental_timeframe.start_date.isoformat(),
+                    end_date=incremental_timeframe.end_date.isoformat(),
+                )
+            else:
+                search_topic = topic
+
+            # Execute discovery
+            # Phase 6: Enhanced discovery takes precedence (4-stage LLM pipeline)
+            if self.enhanced_discovery_enabled:
+                discovery_result = await self.context.discovery_service.enhanced_search(
+                    search_topic
+                )
+                papers = discovery_result.papers
+                result.papers = papers
+                # Enhanced discovery has its own quality filtering
+                self.logger.info(
+                    "enhanced_discovery_completed",
+                    topic=topic.query,
+                    papers_count=len(papers),
+                    quality_scores=(
+                        [p.quality_score for p in papers[:5]] if papers else []
+                    ),
+                )
+            elif self.multi_source_enabled:
                 papers = await self._multi_source_discover(topic, result)
                 result.papers = papers
             else:
-                # Phase 7.1: Create modified topic with incremental timeframe
-                if resolved_timeframe is not None and resolved_timeframe.is_incremental:
-                    # Convert ResolvedTimeframe to TimeframeDateRange for provider
-                    incremental_timeframe = TimeframeDateRange(
-                        type=TimeframeType.DATE_RANGE,
-                        start_date=resolved_timeframe.start_date.date(),
-                        end_date=resolved_timeframe.end_date.date(),
-                    )
-                    search_topic = topic.model_copy(
-                        update={"timeframe": incremental_timeframe}
-                    )
-                    self.logger.info(
-                        "using_incremental_search",
-                        topic=topic.query,
-                        start_date=incremental_timeframe.start_date.isoformat(),
-                        end_date=incremental_timeframe.end_date.isoformat(),
-                    )
-                else:
-                    search_topic = topic
-
                 papers = await self.context.discovery_service.search(search_topic)
 
                 # Phase 7.1: Apply discovery filtering

@@ -1,21 +1,21 @@
-"""
-Quality Scorer Service for Paper Ranking (Phase 3.4).
+"""Quality Scorer Service for Paper Ranking (Phase 3.4).
 
-Calculates composite quality scores for papers based on:
-- Citation impact (40% weight)
-- Venue reputation (30% weight)
-- Recency (20% weight)
-- Metadata completeness (10% weight)
+This module maintains backward compatibility with the original Phase 3.4 QualityScorer
+interface while internally delegating to QualityIntelligenceService for the composite
+score calculation.
 
-Venue scores are externalized to YAML for domain flexibility.
+Deprecated:
+    QualityScorer is deprecated in favor of QualityIntelligenceService.
+    The score() method delegates to QualityIntelligenceService internally.
+    Internal methods (_citation_score, etc.) preserve original Phase 3.4 math.
 """
 
 import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
+import warnings
 import structlog
-import yaml
 
 from src.models.paper import PaperMetadata
 
@@ -41,6 +41,8 @@ def load_venue_scores(path: Optional[Path] = None) -> Tuple[Dict[str, int], int]
         return {}, 15  # Fallback defaults
 
     try:
+        import yaml
+
         with open(scores_path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
@@ -53,6 +55,9 @@ def load_venue_scores(path: Optional[Path] = None) -> Tuple[Dict[str, int], int]
 
         logger.info("venue_scores_loaded", count=len(venues), default=default)
         return venues, default
+    except ImportError:
+        logger.error("yaml_not_installed", path=str(scores_path))
+        return {}, 15
     except yaml.YAMLError as e:
         logger.error("venue_scores_parse_error", path=str(scores_path), error=str(e))
         return {}, 15
@@ -64,8 +69,17 @@ def load_venue_scores(path: Optional[Path] = None) -> Tuple[Dict[str, int], int]
 class QualityScorer:
     """Calculate quality scores for papers.
 
+    .. deprecated::
+        QualityScorer is deprecated in favor of QualityIntelligenceService.
+        For new code, use QualityIntelligenceService directly.
+        This class is preserved for backward compatibility.
+
     Uses weighted scoring across multiple dimensions to produce
     a composite quality score (0-100).
+
+    Internal methods (_citation_score, _venue_score, etc.) preserve the
+    original Phase 3.4 math for backward compatibility with tests.
+    The composite score() method delegates to QualityIntelligenceService.
     """
 
     # Maximum points for each component (before normalization)
@@ -91,6 +105,12 @@ class QualityScorer:
             completeness_weight: Weight for completeness score (0-1).
             venue_scores_path: Path to venue scores YAML file.
         """
+        warnings.warn(
+            "QualityScorer is deprecated. Use QualityIntelligenceService instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         # Validate weights sum to 1.0 (with tolerance for floating point)
         total_weight = (
             citation_weight + venue_weight + recency_weight + completeness_weight
@@ -103,7 +123,7 @@ class QualityScorer:
         self.recency_weight = recency_weight
         self.completeness_weight = completeness_weight
 
-        # Load externalized venue scores
+        # Load externalized venue scores from YAML
         self.venue_scores, self.default_venue_score = load_venue_scores(
             venue_scores_path
         )
@@ -120,39 +140,20 @@ class QualityScorer:
     def score(self, paper: PaperMetadata) -> float:
         """Calculate composite quality score (0-100).
 
+        This method delegates to QualityIntelligenceService to ensure
+        consistent scoring math with the rest of the system.
+
         Args:
             paper: Paper metadata to score.
 
         Returns:
             Quality score between 0 and 100.
         """
-        scores = {
-            "citation": self._citation_score(paper),
-            "venue": self._venue_score(paper),
-            "recency": self._recency_score(paper),
-            "completeness": self._completeness_score(paper),
-        }
+        # Import here to avoid circular imports
+        from src.services.quality_intelligence_service import QualityIntelligenceService
 
-        # Calculate weighted total (each component returns 0-1)
-        total = (
-            scores["citation"] * self.citation_weight
-            + scores["venue"] * self.venue_weight
-            + scores["recency"] * self.recency_weight
-            + scores["completeness"] * self.completeness_weight
-        )
-
-        # Normalize to 0-100
-        final_score = min(100.0, total * 100.0)
-
-        logger.debug(
-            "quality_score_calculated",
-            paper_id=paper.paper_id,
-            title=paper.title[:50] if paper.title else "N/A",
-            scores=scores,
-            final=round(final_score, 2),
-        )
-
-        return final_score
+        delegate = QualityIntelligenceService()
+        return delegate.score_100(paper)
 
     def _citation_score(self, paper: PaperMetadata) -> float:
         """Calculate citation impact score (0-1).

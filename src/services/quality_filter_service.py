@@ -1,30 +1,31 @@
 """Quality Filter Service for Phase 6: Enhanced Discovery Pipeline.
 
-Filters and scores papers based on multiple quality signals:
-- Citation count (logarithmic normalization)
-- Venue quality (CORE/SJR rankings)
-- Recency (5-year half-life decay)
-- Engagement (HuggingFace upvotes)
-- Metadata completeness
-- Author reputation (h-index)
+.. deprecated::
+    QualityFilterService is deprecated in favor of QualityIntelligenceService.
+    All functionality has been merged into QualityIntelligenceService which
+    provides consistent scoring math (log1p), scale (0-1.0), and venue data (JSON).
+
+This module is preserved for backward compatibility. New code should use
+QualityIntelligenceService directly.
 
 Usage:
-    from src.services.quality_filter_service import QualityFilterService
+    from src.services.quality_intelligence_service import QualityIntelligenceService
 
-    service = QualityFilterService(min_quality_score=0.3)
+    service = QualityIntelligenceService(min_quality_score=0.3)
     scored_papers = service.filter_and_score(papers)
 """
 
-import math
-from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict
-import json
 
 import structlog
 
 from src.models.discovery import QualityWeights, ScoredPaper
 from src.models.paper import PaperMetadata
+from src.services.quality_intelligence_service import (
+    QualityIntelligenceService,
+    load_venue_scores_json,
+)
 
 logger = structlog.get_logger()
 
@@ -32,70 +33,44 @@ logger = structlog.get_logger()
 class QualityFilterService:
     """Multi-signal quality filtering for academic papers.
 
-    Combines multiple quality signals to compute a composite score
-    and filter papers below a minimum threshold.
+    .. deprecated::
+        QualityFilterService is deprecated. Use QualityIntelligenceService.
 
-    Attributes:
-        min_citations: Minimum citation count threshold
-        min_quality_score: Minimum quality score to include (0.0-1.0)
-        weights: Weights for quality signal combination
-        venue_scores: Mapping of venue names to quality scores
+    This class now delegates to QualityIntelligenceService for all scoring.
+    It is preserved for backward compatibility with existing imports.
     """
 
     # =========================================================================
-    # Scoring Constants
+    # Scoring Constants (deprecated - use QualityIntelligenceService constants)
     # =========================================================================
 
-    # Citation score: Uses log1p normalization. With factor of 10:
-    # 10 citations -> ~0.24, 100 -> ~0.46, 1000 -> ~0.69, 10000 -> ~0.92
     CITATION_NORMALIZATION_FACTOR: float = 10.0
-
-    # Recency score: Half-life decay model where decay_rate determines how
-    # quickly older papers lose value. With 0.2: 5 years -> 0.5 score
     RECENCY_DECAY_RATE: float = 0.2
-    RECENCY_MIN_SCORE: float = 0.1  # Floor score for very old papers
-
-    # Engagement score: Log normalization for HuggingFace upvotes.
-    # With factor of 7: 10 upvotes -> ~0.35, 100 -> ~0.66, 500 -> ~0.86
+    RECENCY_MIN_SCORE: float = 0.1
     ENGAGEMENT_NORMALIZATION_FACTOR: float = 7.0
-
-    # Completeness score: Minimum abstract length to consider "complete"
-    # 50 chars filters out placeholder abstracts like "Abstract not available"
     MIN_ABSTRACT_LENGTH: int = 50
-
-    # Default score for unknown/missing values (neutral midpoint)
     DEFAULT_SCORE: float = 0.5
 
-    # Completeness weights for each metadata field
-    COMPLETENESS_WEIGHT_ABSTRACT: float = 0.3  # Required, higher weight
-    COMPLETENESS_WEIGHT_AUTHORS: float = 0.2  # Required
-    COMPLETENESS_WEIGHT_VENUE: float = 0.2  # Optional but valuable
-    COMPLETENESS_WEIGHT_PDF: float = 0.2  # Optional but valuable
-    COMPLETENESS_WEIGHT_DOI: float = 0.1  # Optional
+    COMPLETENESS_WEIGHT_ABSTRACT: float = 0.3
+    COMPLETENESS_WEIGHT_AUTHORS: float = 0.2
+    COMPLETENESS_WEIGHT_VENUE: float = 0.2
+    COMPLETENESS_WEIGHT_PDF: float = 0.2
+    COMPLETENESS_WEIGHT_DOI: float = 0.1
 
-    # Default venue scores for common venues (can be extended)
     DEFAULT_VENUE_SCORES: Dict[str, float] = {
-        # Top-tier conferences (A*)
         "neurips": 1.0,
         "icml": 1.0,
-        "iclr": 1.0,
+        "iclr": 0.93,
         "acl": 1.0,
         "emnlp": 1.0,
-        "cvpr": 1.0,
-        "iccv": 1.0,
-        "eccv": 0.95,
-        "aaai": 0.95,
-        "ijcai": 0.95,
-        "naacl": 0.9,
+        "naacl": 0.93,
         "coling": 0.85,
-        # Top-tier journals
         "nature": 1.0,
         "science": 1.0,
         "cell": 1.0,
         "jmlr": 0.95,
         "tacl": 0.9,
         "pnas": 0.9,
-        # Preprint servers (lower score but not penalized heavily)
         "arxiv": 0.6,
         "biorxiv": 0.6,
         "medrxiv": 0.6,
@@ -110,54 +85,48 @@ class QualityFilterService:
     ) -> None:
         """Initialize QualityFilterService.
 
+        .. deprecated::
+            Use QualityIntelligenceService directly.
+
         Args:
             min_citations: Minimum citation count to include
             min_quality_score: Minimum quality score (0.0-1.0)
             weights: Custom weights for quality signals
             venue_data_path: Path to venue rankings JSON file
         """
-        self.min_citations = min_citations
-        self.min_quality_score = min_quality_score
-        self.weights = weights or QualityWeights()  # type: ignore[call-arg]
-        self.venue_scores = self._load_venue_scores(venue_data_path)
+        # Start with DEFAULT_VENUE_SCORES as fallback
+        default_venues = dict(self.DEFAULT_VENUE_SCORES)
 
-    def _load_venue_scores(self, venue_data_path: Optional[str]) -> Dict[str, float]:
-        """Load venue scores from file or use defaults.
-
-        Args:
-            venue_data_path: Path to JSON file with venue rankings
-
-        Returns:
-            Dictionary mapping normalized venue names to scores
-        """
-        scores = dict(self.DEFAULT_VENUE_SCORES)
-
+        # Try to load from file
         if venue_data_path:
             path = Path(venue_data_path)
             if path.exists():
-                try:
-                    with open(path, "r") as f:
-                        data = json.load(f)
-                        venues = data.get("venues", data)
-                        for venue, info in venues.items():
-                            if isinstance(info, dict):
-                                score = info.get("score", self.DEFAULT_SCORE)
-                            else:
-                                score = info
-                            scores[self._normalize_venue(venue)] = score
-                    logger.info(
-                        "quality_filter_venue_data_loaded",
-                        path=str(path),
-                        venues_count=len(scores),
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "quality_filter_venue_data_error",
-                        path=str(path),
-                        error=str(e),
-                    )
+                loaded_venues, _ = load_venue_scores_json(path)
+                # Merge loaded venues over defaults
+                default_venues.update(loaded_venues)
 
-        return scores
+        # Create delegate with merged venue scores
+        self._delegate = QualityIntelligenceService(
+            venue_scores_path=None,  # Don't let delegate load from default
+            weights=weights,
+            min_quality_score=min_quality_score,
+            min_citations=min_citations,
+        )
+        # Override delegate's venue_scores with our merged version
+        self._delegate.venue_scores = default_venues
+
+        # Preserve backward-compatible attributes
+        self.min_citations = min_citations
+        self.min_quality_score = min_quality_score
+        self.weights = self._delegate.weights
+        self.venue_scores = self._delegate.venue_scores
+
+        logger.info(
+            "quality_filter_service_initialized",
+            min_citations=min_citations,
+            min_quality_score=min_quality_score,
+            venue_count=len(self.venue_scores),
+        )
 
     def filter_and_score(
         self,
@@ -173,55 +142,7 @@ class QualityFilterService:
         Returns:
             List of papers with quality scores, filtered by min_quality_score
         """
-        if not papers:
-            return []
-
-        effective_weights = weights or self.weights
-
-        logger.info(
-            "quality_filter_starting",
-            papers_count=len(papers),
-            min_citations=self.min_citations,
-            min_quality_score=self.min_quality_score,
-        )
-
-        scored_papers = []
-        filtered_count = 0
-
-        for paper in papers:
-            # Check citation threshold
-            citation_count = paper.citation_count or 0
-            if citation_count < self.min_citations:
-                filtered_count += 1
-                continue
-
-            # Calculate quality score
-            quality_score = self._calculate_quality_score(paper, effective_weights)
-
-            # Check quality threshold
-            if quality_score < self.min_quality_score:
-                filtered_count += 1
-                continue
-
-            # Get engagement score if available
-            engagement_score = getattr(paper, "upvotes", 0) or 0
-
-            # Create scored paper
-            scored_paper = ScoredPaper.from_paper_metadata(
-                paper=paper,
-                quality_score=quality_score,
-                engagement_score=float(engagement_score),
-            )
-            scored_papers.append(scored_paper)
-
-        logger.info(
-            "quality_filter_completed",
-            papers_input=len(papers),
-            papers_output=len(scored_papers),
-            papers_filtered=filtered_count,
-        )
-
-        return scored_papers
+        return self._delegate.filter_and_score(papers, weights)
 
     def calculate_quality_score(
         self,
@@ -231,8 +152,6 @@ class QualityFilterService:
         """Calculate quality score for a single paper.
 
         Public method for scoring individual papers without filtering.
-        Used by the pipeline to compute quality scores for Delta reporting
-        before any filtering is applied.
 
         Args:
             paper: Paper to score
@@ -241,8 +160,21 @@ class QualityFilterService:
         Returns:
             Quality score between 0.0 and 1.0
         """
-        effective_weights = weights or self.weights
-        return self._calculate_quality_score(paper, effective_weights)
+        return self._delegate.score(paper)
+
+    def _load_venue_scores(self, venue_data_path: Optional[str]) -> Dict[str, float]:
+        """Load venue scores from file or use defaults.
+
+        .. deprecated::
+            Internal method. Use QualityIntelligenceService directly.
+
+        Args:
+            venue_data_path: Path to JSON file with venue rankings
+
+        Returns:
+            Dictionary mapping normalized venue names to scores
+        """
+        return self._delegate.venue_scores
 
     def _calculate_quality_score(
         self,
@@ -251,226 +183,46 @@ class QualityFilterService:
     ) -> float:
         """Calculate composite quality score for a paper.
 
-        Args:
-            paper: Paper to score
-            weights: Weights for each signal
+        .. deprecated::
+            Internal method. Use QualityIntelligenceService.score().
 
         Returns:
             Quality score between 0.0 and 1.0
         """
-        # Calculate individual signal scores
-        citation_score = self._calculate_citation_score(paper)
-        venue_score = self._calculate_venue_score(paper)
-        recency_score = self._calculate_recency_score(paper)
-        engagement_score = self._calculate_engagement_score(paper)
-        completeness_score = self._calculate_completeness_score(paper)
-        author_score = self._calculate_author_score(paper)
-
-        # Compute weighted average
-        total_weight = weights.total_weight
-        if total_weight == 0:
-            return self.DEFAULT_SCORE  # Default if no weights
-
-        score = (
-            weights.citation * citation_score
-            + weights.venue * venue_score
-            + weights.recency * recency_score
-            + weights.engagement * engagement_score
-            + weights.completeness * completeness_score
-            + weights.author * author_score
-        ) / total_weight
-
-        return min(1.0, max(0.0, score))
+        return self._delegate._calculate_quality_score_with_weights(paper, weights)
 
     def _calculate_citation_score(self, paper: PaperMetadata) -> float:
-        """Logarithmic citation score (0-1 range).
-
-        Uses log1p normalization with scale factor of 10.
-        - 0 citations -> 0.0
-        - 10 citations -> ~0.24
-        - 100 citations -> ~0.46
-        - 1000 citations -> ~0.69
-        - 10000 citations -> ~0.92
-
-        Args:
-            paper: Paper to score
-
-        Returns:
-            Citation score (0.0-1.0)
-        """
-        citation_count = paper.citation_count or 0
-        return min(1.0, math.log1p(citation_count) / self.CITATION_NORMALIZATION_FACTOR)
+        """Logarithmic citation score (0-1 range)."""
+        return self._delegate._calculate_citation_score(paper)
 
     def _calculate_venue_score(self, paper: PaperMetadata) -> float:
-        """Venue quality score based on rankings.
-
-        Args:
-            paper: Paper to score
-
-        Returns:
-            Venue score (0.0-1.0), default 0.5 for unknown venues
-        """
-        if not paper.venue:
-            return self.DEFAULT_SCORE  # Default for no venue
-
-        venue_key = self._normalize_venue(paper.venue)
-
-        # Check for exact match
-        if venue_key in self.venue_scores:
-            return self.venue_scores[venue_key]
-
-        # Check for partial match
-        for known_venue, score in self.venue_scores.items():
-            if known_venue in venue_key or venue_key in known_venue:
-                return score
-
-        return self.DEFAULT_SCORE  # Default for unknown venues
+        """Venue quality score based on rankings."""
+        return self._delegate._calculate_venue_score(paper)
 
     def _calculate_recency_score(self, paper: PaperMetadata) -> float:
-        """Recency score with 5-year half-life decay.
-
-        Newer papers get higher scores:
-        - This year -> 1.0
-        - 1 year old -> ~0.83
-        - 2 years old -> ~0.71
-        - 5 years old -> ~0.5
-        - 10 years old -> ~0.33
-
-        Args:
-            paper: Paper to score
-
-        Returns:
-            Recency score (0.1-1.0)
-        """
-        if not paper.publication_date:
-            return self.DEFAULT_SCORE  # Default for unknown date
-
-        try:
-            # Parse publication date
-            if isinstance(paper.publication_date, str):
-                # Handle various date formats
-                date_str = paper.publication_date
-                if len(date_str) == 4:  # Year only
-                    pub_year = int(date_str)
-                elif len(date_str) >= 7:  # YYYY-MM or YYYY-MM-DD
-                    pub_year = int(date_str[:4])
-                else:
-                    return self.DEFAULT_SCORE
-            else:
-                pub_year = paper.publication_date.year
-
-            current_year = datetime.now().year
-            years_old = max(0, current_year - pub_year)
-
-            # Half-life decay: score = 1 / (1 + decay_rate * years)
-            decay_score = 1.0 / (1 + self.RECENCY_DECAY_RATE * years_old)
-            return max(self.RECENCY_MIN_SCORE, decay_score)
-
-        except (ValueError, AttributeError):
-            return self.DEFAULT_SCORE  # Default for parse errors
+        """Recency score with 5-year half-life decay."""
+        return self._delegate._calculate_recency_score(paper)
 
     def _calculate_engagement_score(self, paper: PaperMetadata) -> float:
-        """Engagement score from community signals (e.g., upvotes).
-
-        Important for HuggingFace Daily Papers which may have
-        high engagement but zero citations due to recency.
-
-        Args:
-            paper: Paper to score
-
-        Returns:
-            Engagement score (0.0-1.0)
-        """
-        # Get upvotes if available
-        upvotes = getattr(paper, "upvotes", 0) or 0
-
-        if upvotes == 0:
-            return 0.0
-
-        # Logarithmic scaling: normalize to 0-1 range
-        return min(1.0, math.log1p(upvotes) / self.ENGAGEMENT_NORMALIZATION_FACTOR)
+        """Engagement score from community signals."""
+        return self._delegate._calculate_engagement_score(paper)
 
     def _calculate_completeness_score(self, paper: PaperMetadata) -> float:
-        """Metadata completeness score.
-
-        Checks presence of key metadata fields:
-        - Abstract
-        - Authors
-        - Venue
-        - PDF URL
-        - DOI
-
-        Args:
-            paper: Paper to score
-
-        Returns:
-            Completeness score (0.0-1.0)
-        """
-        score = 0.0
-        checks = 0.0
-
-        # Required fields (higher weight)
-        if paper.abstract and len(paper.abstract) > self.MIN_ABSTRACT_LENGTH:
-            score += self.COMPLETENESS_WEIGHT_ABSTRACT
-        checks += self.COMPLETENESS_WEIGHT_ABSTRACT
-
-        if paper.authors and len(paper.authors) > 0:
-            score += self.COMPLETENESS_WEIGHT_AUTHORS
-        checks += self.COMPLETENESS_WEIGHT_AUTHORS
-
-        # Optional but valuable fields
-        if paper.venue:
-            score += self.COMPLETENESS_WEIGHT_VENUE
-        checks += self.COMPLETENESS_WEIGHT_VENUE
-
-        if paper.open_access_pdf or paper.pdf_available:
-            score += self.COMPLETENESS_WEIGHT_PDF
-        checks += self.COMPLETENESS_WEIGHT_PDF
-
-        if paper.doi:
-            score += self.COMPLETENESS_WEIGHT_DOI
-        checks += self.COMPLETENESS_WEIGHT_DOI
-
-        return score / checks if checks > 0 else self.DEFAULT_SCORE
+        """Metadata completeness score."""
+        return self._delegate._calculate_completeness_score(paper)
 
     def _calculate_author_score(self, paper: PaperMetadata) -> float:
-        """Author reputation score.
-
-        Currently returns default as author h-index data
-        is not typically available from providers.
-
-        Args:
-            paper: Paper to score
-
-        Returns:
-            Author score (0.0-1.0), default 0.5
-        """
-        # Author h-index not typically available from APIs
-        # Would need additional author lookup service
-        # For now, return default
-        return self.DEFAULT_SCORE
+        """Author reputation score."""
+        return self._delegate._calculate_author_score(paper)
 
     def _normalize_venue(self, venue: str) -> str:
-        """Normalize venue name for matching.
-
-        Args:
-            venue: Raw venue name
-
-        Returns:
-            Normalized lowercase name
-        """
+        """Normalize venue name for matching."""
         if not venue:
             return ""
-
-        # Lowercase and remove common suffixes
         normalized = venue.lower()
-        # Remove year suffixes like "2023" or "2024"
         normalized = "".join(c for c in normalized if not c.isdigit())
-        # Remove special characters
         normalized = "".join(c for c in normalized if c.isalnum() or c.isspace())
-        # Remove common words
         for word in ["proceedings", "conference", "journal", "international"]:
             normalized = normalized.replace(word, "")
-        # Collapse whitespace
         normalized = " ".join(normalized.split())
         return normalized.strip()

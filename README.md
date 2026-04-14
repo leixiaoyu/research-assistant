@@ -234,6 +234,7 @@ output/
 - [Phase 2.5: PDF Reliability](docs/specs/PHASE_2.5_SPEC.md) - ✅ Complete (Multi-Backend Fallback Chain)
 - [Phase 3: Intelligence Layer](docs/specs/PHASE_3_SPEC.md) - ✅ Complete (Cache, Dedup, Filters, Checkpoint)
 - [Phase 3.1: Concurrent Orchestration](docs/specs/PHASE_3.1_SPEC.md) - ✅ Complete (Async Workers & Resource Limiting)
+- [Phase 3.2: Semantic Scholar Activation](docs/specs/PHASE_3.2_SPEC.md) - ⚙️ Superseded → Semantic Scholar activation implemented as part of Phase 6 (Multi-Provider Orchestration)
 - [Phase 3.3: LLM Resilience](docs/specs/PHASE_3.3_LLM_FALLBACK_SPEC.md) - ✅ Complete (Retry, Circuit Breaker, Provider Failover)
 - [Phase 3.4: Quality-First Discovery](docs/specs/PHASE_3.4_PDF_PRIORITY_SPEC.md) - ✅ Complete (Quality Ranking, PDF Availability Tracking)
 - [Phase 3.5: Global Registry](docs/specs/PHASE_3.5_SPEC.md) - ✅ Complete (Paper Identity & Registry)

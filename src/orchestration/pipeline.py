@@ -149,6 +149,21 @@ class ResearchPipeline:
             logger.exception("pipeline_failed", error=str(e))
             result.errors.append({"phase": "pipeline", "error": str(e)})
 
+        finally:
+            # Cleanup: Close discovery service to prevent resource leaks
+            # and suppress InterruptedError during shutdown (Bug #4)
+            if self._context and self._context.discovery_service:
+                try:
+                    await self._context.discovery_service.close()
+                    logger.debug("discovery_service_closed")
+                except Exception as e:
+                    # Log but don't raise - cleanup errors shouldn't fail pipeline
+                    logger.warning(
+                        "discovery_service_close_error",
+                        error=str(e),
+                        error_type=type(e).__name__,
+                    )
+
         return result
 
     async def _create_context(self) -> PipelineContext:

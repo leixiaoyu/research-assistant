@@ -134,6 +134,9 @@ class ConfigManager:
         """Save catalog to disk atomically"""
         catalog_path = self.get_catalog_path()
 
+        # Ensure parent directory exists (Bug #2 fix)
+        catalog_path.parent.mkdir(parents=True, exist_ok=True)
+
         # Atomic write: write to .tmp then rename
         temp_path = catalog_path.with_suffix(".tmp")
 
@@ -142,9 +145,18 @@ class ConfigManager:
                 f.write(catalog.model_dump_json(indent=2))
 
             temp_path.rename(catalog_path)
-            logger.info("catalog_saved", path=str(catalog_path))
+            logger.info(
+                "catalog_saved",
+                path=str(catalog_path),
+                topics_count=len(catalog.topics),
+            )
         except Exception as e:
-            logger.error("catalog_save_failed", error=str(e))
+            logger.error(
+                "catalog_save_failed",
+                error=str(e),
+                error_type=type(e).__name__,
+                catalog_path=str(catalog_path),
+            )
             if temp_path.exists():  # pragma: no cover
                 temp_path.unlink()
             raise

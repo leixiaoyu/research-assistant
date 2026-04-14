@@ -166,6 +166,9 @@ class DiscoveryService:
 
         This should be called when the DiscoveryService is no longer needed,
         especially in long-running applications to avoid aiohttp session leaks.
+
+        Suppresses InterruptedError during cleanup to prevent noise in logs
+        when the process is terminated by signals (e.g., launchd shutdown).
         """
         for provider_type, provider in self.providers.items():
             if hasattr(provider, "close") and callable(provider.close):
@@ -173,6 +176,14 @@ class DiscoveryService:
                     await provider.close()
                     logger.debug(
                         "provider_session_closed",
+                        provider=provider_type.value,
+                    )
+                except InterruptedError:
+                    # Suppress InterruptedError during shutdown (Bug #4)
+                    # This commonly occurs when marker-pdf cleanup is interrupted
+                    # by process termination signals (SIGTERM from launchd)
+                    logger.debug(
+                        "provider_close_interrupted",
                         provider=provider_type.value,
                     )
                 except Exception as e:

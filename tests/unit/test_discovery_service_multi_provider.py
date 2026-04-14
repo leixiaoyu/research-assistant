@@ -988,3 +988,54 @@ class TestResultAwareFallback:
         # ArXiv and Semantic Scholar are comprehensive, not sampling
         assert ProviderType.ARXIV not in DiscoveryService.SAMPLING_PROVIDERS
         assert ProviderType.SEMANTIC_SCHOLAR not in DiscoveryService.SAMPLING_PROVIDERS
+
+
+class TestDiscoveryServiceClose:
+    """Test DiscoveryService.close() method for resource cleanup."""
+
+    @pytest.mark.asyncio
+    async def test_close_calls_provider_close(self):
+        """Test that close() calls close() on providers that support it."""
+        ds = DiscoveryService(api_key="test_key_1234567890")
+        
+        # Track which providers had close() called
+        close_called = {}
+        original_close = None
+        
+        for provider_type, provider in ds.providers.items():
+            if hasattr(provider, 'close') and callable(getattr(provider, 'close', None)):
+                original_close = getattr(provider, 'close')
+                
+                async def mock_close(provider_type=provider_type):
+                    close_called[provider_type] = True
+                provider.close = mock_close
+        
+        await ds.close()
+        
+        # At least one provider should have had close() called
+        assert len(close_called) > 0, "Expected at least one provider.close() to be called"
+
+    @pytest.mark.asyncio
+    async def test_close_handles_provider_without_close(self):
+        """Test that close() gracefully handles providers without close()."""
+        ds = DiscoveryService(api_key="test_key_1234567890")
+        
+        # Should not raise even if some providers don\'t have close()
+        try:
+            await ds.close()
+        except Exception as e:
+            pytest.fail(f"close() raised an exception: {e}")
+
+    @pytest.mark.asyncio
+    async def test_close_handles_close_exception(self):
+        """Test that close() handles exceptions from provider.close() gracefully."""
+        ds = DiscoveryService(api_key="test_key_1234567890")
+        
+        for provider_type, provider in ds.providers.items():
+            if hasattr(provider, 'close') and callable(getattr(provider, 'close', None)):
+                async def failing_close():
+                    raise RuntimeError("Close failed")
+                provider.close = failing_close
+        
+        # Should not raise — exceptions are caught and logged
+        await ds.close()

@@ -8,8 +8,6 @@ This module provides:
 """
 
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -23,7 +21,11 @@ from src.models.dra import (
     SearchConfig,
     SearchResult,
 )
-from src.services.dra.utils import TextNormalizer
+from src.services.dra.utils import (
+    TextNormalizer,
+    atomic_write_json,
+    set_secure_permissions,
+)
 
 logger = structlog.get_logger()
 
@@ -720,7 +722,7 @@ class HybridSearchEngine:
     def save(self, path: Optional[Path] = None) -> None:
         """Save search engine state to disk with atomic writes.
 
-        SR-8.1: Uses atomic write pattern (write to temp -> rename) to ensure
+        SR-8.1: Uses atomic write pattern (write to temp -> fsync -> rename) to ensure
         corpus integrity and prevent partial writes.
 
         Args:
@@ -730,10 +732,7 @@ class HybridSearchEngine:
         save_path.mkdir(parents=True, exist_ok=True)
 
         # SR-8.1: Restrict corpus directory permissions to 0700
-        try:
-            os.chmod(save_path, 0o700)
-        except OSError as e:
-            logger.warning("chmod_failed", path=str(save_path), error=str(e))
+        set_secure_permissions(save_path, 0o700)
 
         # Save indices
         self._dense_index.save(save_path / "dense")
@@ -753,37 +752,9 @@ class HybridSearchEngine:
             }
             for cid, c in self._chunks.items()
         }
-        self._atomic_write_json(save_path / "chunks.json", chunks_data)
+        atomic_write_json(save_path / "chunks.json", chunks_data)
 
         logger.info("search_engine_saved", path=str(save_path))
-
-    def _atomic_write_json(self, target_path: Path, data: dict) -> None:
-        """Write JSON data atomically using temp file + rename.
-
-        SR-8.1: Ensures corpus integrity by preventing partial writes.
-
-        Args:
-            target_path: Final destination path
-            data: Dictionary to serialize as JSON
-        """
-        # Write to temp file in same directory (required for atomic rename)
-        temp_fd, temp_path_str = tempfile.mkstemp(
-            dir=target_path.parent,
-            prefix=f".{target_path.name}.",
-            suffix=".tmp",
-        )
-        try:
-            with os.fdopen(temp_fd, "w") as f:
-                json.dump(data, f)
-            # Atomic rename (POSIX guarantees atomicity on same filesystem)
-            Path(temp_path_str).rename(target_path)
-        except Exception:
-            # Clean up temp file on error
-            try:
-                Path(temp_path_str).unlink()
-            except OSError:
-                pass
-            raise
 
     def load(self, path: Optional[Path] = None) -> None:
         """Load search engine state from disk.

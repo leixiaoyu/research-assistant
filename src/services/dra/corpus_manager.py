@@ -8,9 +8,7 @@ This module provides:
 """
 
 import json
-import os
 import re
-import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
@@ -24,7 +22,9 @@ from src.services.dra.utils import (
     ChunkBuilder,
     SectionParser,
     TokenCounter,
+    atomic_write_json,
     compute_checksum,
+    set_secure_permissions,
 )
 
 # Pattern for valid paper IDs (alphanumeric, hyphen, underscore, dot)
@@ -530,7 +530,7 @@ class CorpusManager:
     def save(self, path: Optional[Path] = None) -> None:
         """Save corpus state to disk with atomic writes.
 
-        Uses atomic write pattern (write to temp -> rename) to ensure
+        Uses atomic write pattern (write to temp -> fsync -> rename) to ensure
         corpus integrity per SR-8.1 security requirement.
 
         Args:
@@ -540,10 +540,7 @@ class CorpusManager:
         save_path.mkdir(parents=True, exist_ok=True)
 
         # SR-8.1: Restrict corpus directory permissions to 0700
-        try:
-            os.chmod(save_path, 0o700)
-        except OSError as e:
-            logger.warning("chmod_failed", path=str(save_path), error=str(e))
+        set_secure_permissions(save_path, 0o700)
 
         # Save search engine
         self.search_engine.save(save_path)
@@ -551,45 +548,17 @@ class CorpusManager:
         # SR-8.1: Atomic write for paper records
         papers_data = {pid: record.to_dict() for pid, record in self._papers.items()}
         papers_path = save_path / "papers.json"
-        self._atomic_write_json(papers_path, papers_data)
+        atomic_write_json(papers_path, papers_data)
 
         # SR-8.1: Atomic write for stats
         stats_path = save_path / "stats.json"
-        self._atomic_write_json(stats_path, self._stats.to_dict())
+        atomic_write_json(stats_path, self._stats.to_dict())
 
         logger.info(
             "corpus_saved",
             path=str(save_path),
             papers=len(self._papers),
         )
-
-    def _atomic_write_json(self, target_path: Path, data: dict) -> None:
-        """Write JSON data atomically using temp file + rename.
-
-        SR-8.1: Ensures corpus integrity by preventing partial writes.
-
-        Args:
-            target_path: Final destination path
-            data: Dictionary to serialize as JSON
-        """
-        # Write to temp file in same directory (required for atomic rename)
-        temp_fd, temp_path = tempfile.mkstemp(
-            dir=target_path.parent,
-            prefix=f".{target_path.name}.",
-            suffix=".tmp",
-        )
-        try:
-            with os.fdopen(temp_fd, "w") as f:
-                json.dump(data, f, indent=2)
-            # Atomic rename (POSIX guarantees atomicity on same filesystem)
-            Path(temp_path).rename(target_path)
-        except Exception:
-            # Clean up temp file on error
-            try:
-                Path(temp_path).unlink()
-            except OSError:
-                pass
-            raise
 
     def load(self, path: Optional[Path] = None) -> None:
         """Load corpus state from disk.
@@ -667,6 +636,12 @@ class CorpusManager:
         Compares the corpus last_updated timestamp against the registry's
         most recent modification time to determine if the corpus needs
         refreshing before agent operations.
+
+        Note:
+            This check is not atomic. If the registry is being modified
+            concurrently (e.g., by another process ingesting papers), results
+            may be inconsistent. For production use with concurrent writers,
+            consider a registry-level lock or version counter.
 
         Args:
             registry_path: Path to the registry directory

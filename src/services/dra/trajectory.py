@@ -24,6 +24,7 @@ from src.models.dra import (
     TrajectoryRecord,
     Turn,
 )
+from src.services.dra.utils import atomic_write_json
 
 logger = structlog.get_logger()
 
@@ -68,10 +69,18 @@ class ExpertSeedTrajectory(BaseModel):
         """
         # Extract metadata from turns
         papers_opened = len(
-            {t.action.arguments.get("paper_id") for t in self.turns if t.action.tool == ToolCallType.OPEN}
+            {
+                t.action.arguments.get("paper_id")
+                for t in self.turns
+                if t.action.tool == ToolCallType.OPEN
+            }
         )
         unique_searches = len(
-            {t.action.arguments.get("query") for t in self.turns if t.action.tool == ToolCallType.SEARCH}
+            {
+                t.action.arguments.get("query")
+                for t in self.turns
+                if t.action.tool == ToolCallType.SEARCH
+            }
         )
         find_ops = sum(1 for t in self.turns if t.action.tool == ToolCallType.FIND)
         context_tokens = sum(t.observation_tokens for t in self.turns)
@@ -134,7 +143,9 @@ class TrajectoryCollector:
             Recorded trajectory
         """
         # Generate trajectory ID
-        trajectory_id = f"{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        trajectory_id = (
+            f"{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        )
 
         # Compute metadata
         papers_opened = len(set(result.papers_consulted))
@@ -243,7 +254,9 @@ class TrajectoryCollector:
             seed_sequence = [t.action.tool.value for t in seed.turns]
 
             # Simple sequence similarity (longest common subsequence ratio)
-            lcs_length = self._longest_common_subsequence(action_sequence, seed_sequence)
+            lcs_length = self._longest_common_subsequence(
+                action_sequence, seed_sequence
+            )
             similarity = lcs_length / max(len(action_sequence), len(seed_sequence))
 
             alignment_scores.append(similarity)
@@ -319,7 +332,11 @@ class TrajectoryCollector:
             "quality_filter_applied",
             total=len(all_trajectories),
             filtered=len(filtered),
-            criteria={"min_turns": min_turns, "require_answer": require_answer, "min_quality": min_quality_score},
+            criteria={
+                "min_turns": min_turns,
+                "require_answer": require_answer,
+                "min_quality": min_quality_score,
+            },
         )
 
         return filtered
@@ -358,7 +375,9 @@ class TrajectoryCollector:
                             query_patterns[term] = query_patterns.get(term, 0) + 1
 
         # Get top query patterns
-        effective_patterns = sorted(query_patterns.items(), key=lambda x: x[1], reverse=True)[:10]
+        effective_patterns = sorted(
+            query_patterns.items(), key=lambda x: x[1], reverse=True
+        )[:10]
         effective_query_patterns = [term for term, _ in effective_patterns]
 
         # Extract successful sequences (most common 3-action sequences)
@@ -366,17 +385,20 @@ class TrajectoryCollector:
         for traj in trajectories:
             actions = [t.action.tool.value for t in traj.turns]
             for i in range(len(actions) - 2):
-                seq = " -> ".join(actions[i:i+3])
+                seq = " -> ".join(actions[i : i + 3])
                 sequence_counts[seq] = sequence_counts.get(seq, 0) + 1
 
-        successful_sequences = sorted(sequence_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+        successful_sequences = sorted(
+            sequence_counts.items(), key=lambda x: x[1], reverse=True
+        )[:5]
         successful_seqs = [seq for seq, _ in successful_sequences]
 
         # Compute average turns to success
         successful_trajs = [t for t in trajectories if t.answer]
         avg_turns = (
             sum(len(t.turns) for t in successful_trajs) / len(successful_trajs)
-            if successful_trajs else 0.0
+            if successful_trajs
+            else 0.0
         )
 
         # Extract paper consultation patterns
@@ -486,8 +508,8 @@ class TrajectoryCollector:
             for t in record.turns
         ]
 
-        with open(file_path, "w") as f:
-            json.dump(data, f, indent=2)
+        # SR-8.1: Use atomic write for crash durability
+        atomic_write_json(file_path, data, file_mode=0o600)
 
         logger.debug("trajectory_saved", file=str(file_path))
 

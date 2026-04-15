@@ -883,6 +883,7 @@ class CorpusManager:
         # Return updated freshness result
         return FreshnessResult(
             is_fresh=True,
+            status=FreshnessStatus.FRESH,
             corpus_updated=self._stats.last_updated,
             registry_updated=result.registry_updated,
             stale_by_seconds=0.0,

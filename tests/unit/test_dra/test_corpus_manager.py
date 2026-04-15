@@ -1112,3 +1112,180 @@ class TestEnsureFresh:
 
             assert result.is_fresh is True
             assert "refreshed" in result.recommendation.lower()
+
+
+class TestChecksumVerification:
+    """Tests for verify_checksums parameter in freshness check."""
+
+    @patch("src.services.dra.corpus_manager.HybridSearchEngine")
+    def test_verify_checksums_detects_modified_content(self, mock_engine_class):
+        """Test verify_checksums detects content changes when mtime unchanged."""
+        import time
+        from datetime import timedelta
+
+        from src.services.dra.utils import compute_checksum
+
+        mock_engine = MagicMock()
+        mock_engine.corpus_size = 1
+        mock_engine_class.return_value = mock_engine
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir)
+            papers_dir = registry_path / "papers"
+            papers_dir.mkdir()
+
+            # Create paper in registry with specific content
+            paper_dir = papers_dir / "paper1"
+            paper_dir.mkdir()
+            original_content = "# Abstract\nOriginal content."
+            (paper_dir / "content.md").write_text(original_content)
+            (paper_dir / "metadata.json").write_text('{"title": "Test"}')
+
+            # Create manager with paper "ingested" with WRONG checksum
+            # This simulates content changing after ingestion
+            manager = CorpusManager()
+            # Use a different checksum than the actual content
+            wrong_checksum = compute_checksum("different content")
+            # Set ingested_at to BEFORE now so registry appears newer
+            old_time = datetime.now(UTC) - timedelta(hours=1)
+            manager._papers["paper1"] = PaperRecord(
+                paper_id="paper1",
+                title="Test",
+                checksum=wrong_checksum,  # Wrong checksum to simulate change
+                chunk_ids=["paper1:0"],
+                ingested_at=old_time,
+            )
+            manager._stats = CorpusStats(
+                total_papers=1,
+                last_updated=old_time,  # Corpus is older than registry
+            )
+
+            # Small delay to ensure file mtime is after corpus timestamp
+            time.sleep(0.01)
+
+            # Touch the file to update mtime
+            (paper_dir / "content.md").write_text(original_content)
+
+            # With verify_checksums: should detect checksum mismatch
+            result = manager.check_freshness(
+                registry_path, deep_check=True, verify_checksums=True
+            )
+            assert result.papers_to_refresh >= 1
+
+    @patch("src.services.dra.corpus_manager.HybridSearchEngine")
+    def test_verify_checksums_no_change_detected(self, mock_engine_class):
+        """Test that verify_checksums correctly identifies unchanged content."""
+        from src.services.dra.utils import compute_checksum
+
+        mock_engine = MagicMock()
+        mock_engine.corpus_size = 1
+        mock_engine_class.return_value = mock_engine
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir)
+            papers_dir = registry_path / "papers"
+            papers_dir.mkdir()
+
+            # Create paper in registry
+            paper_dir = papers_dir / "paper1"
+            paper_dir.mkdir()
+            content = "# Abstract\nSame content."
+            (paper_dir / "content.md").write_text(content)
+            (paper_dir / "metadata.json").write_text('{"title": "Test"}')
+
+            # Create manager with matching checksum
+            manager = CorpusManager()
+            checksum = compute_checksum(content)
+            manager._papers["paper1"] = PaperRecord(
+                paper_id="paper1",
+                title="Test",
+                checksum=checksum,
+                chunk_ids=["paper1:0"],
+                ingested_at=datetime.now(UTC),
+            )
+            manager._stats = CorpusStats(
+                total_papers=1,
+                last_updated=datetime.now(UTC),
+            )
+
+            # With verify_checksums: should NOT detect change
+            result = manager.check_freshness(
+                registry_path, deep_check=True, verify_checksums=True
+            )
+            assert result.papers_to_refresh == 0
+            assert result.is_fresh is True
+
+    @patch("src.services.dra.corpus_manager.HybridSearchEngine")
+    def test_ensure_fresh_passes_verify_checksums(self, mock_engine_class):
+        """Test that ensure_fresh passes verify_checksums to check_freshness."""
+        mock_engine = MagicMock()
+        mock_engine.corpus_size = 0
+        mock_engine_class.return_value = mock_engine
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir)
+            papers_dir = registry_path / "papers"
+            papers_dir.mkdir()
+
+            manager = CorpusManager()
+            # Should not raise and should accept the parameter
+            result = manager.ensure_fresh(
+                registry_path, auto_refresh=False, verify_checksums=True
+            )
+            assert result.is_fresh is True  # Empty registry
+
+    @patch("src.services.dra.corpus_manager.HybridSearchEngine")
+    def test_verify_checksums_handles_unreadable_file(self, mock_engine_class):
+        """Test graceful handling when file cannot be read for checksum."""
+        import time
+        from datetime import timedelta
+
+        mock_engine = MagicMock()
+        mock_engine.corpus_size = 1
+        mock_engine_class.return_value = mock_engine
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir)
+            papers_dir = registry_path / "papers"
+            papers_dir.mkdir()
+
+            # Create paper directory but with unreadable content
+            paper_dir = papers_dir / "paper1"
+            paper_dir.mkdir()
+            content_path = paper_dir / "content.md"
+            content_path.write_text("# Test")
+            (paper_dir / "metadata.json").write_text('{"title": "Test"}')
+
+            # Create manager with paper record - set old timestamps
+            old_time = datetime.now(UTC) - timedelta(hours=1)
+            manager = CorpusManager()
+            manager._papers["paper1"] = PaperRecord(
+                paper_id="paper1",
+                title="Test",
+                checksum="abc123",
+                chunk_ids=["paper1:0"],
+                ingested_at=old_time,
+            )
+            manager._stats = CorpusStats(
+                total_papers=1,
+                last_updated=old_time,  # Corpus is older than registry
+            )
+
+            # Small delay and touch file to ensure mtime is after corpus
+            time.sleep(0.01)
+            content_path.write_text("# Test updated")
+
+            # Mock read_text to raise OSError during checksum verification
+            original_read_text = Path.read_text
+
+            def mock_read_text(self, *args, **kwargs):
+                if self.name == "content.md" and "paper1" in str(self):
+                    raise OSError("Permission denied")
+                return original_read_text(self, *args, **kwargs)
+
+            with patch.object(Path, "read_text", mock_read_text):
+                result = manager.check_freshness(
+                    registry_path, deep_check=True, verify_checksums=True
+                )
+                # Should count as needing refresh when unreadable
+                assert result.papers_to_refresh >= 1

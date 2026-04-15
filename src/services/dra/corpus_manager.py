@@ -646,7 +646,10 @@ class CorpusManager:
         }
 
     def check_freshness(
-        self, registry_path: Path, deep_check: bool = False
+        self,
+        registry_path: Path,
+        deep_check: bool = False,
+        verify_checksums: bool = False,
     ) -> FreshnessResult:
         """Check if corpus is fresh relative to the registry.
 
@@ -659,6 +662,12 @@ class CorpusManager:
             stat() calls. Set deep_check=True to perform per-paper validation
             when precise counts are needed.
 
+        Containerized Environment Support:
+            File modification times (mtime) can be unreliable in containers,
+            Docker volumes, or when files are restored from backup. Set
+            verify_checksums=True to use content-based change detection
+            instead of mtime. This is slower but more reliable.
+
         Note:
             This check is not atomic. If the registry is being modified
             concurrently (e.g., by another process ingesting papers), results
@@ -668,6 +677,8 @@ class CorpusManager:
         Args:
             registry_path: Path to the registry directory
             deep_check: If True, perform per-paper freshness validation (slower)
+            verify_checksums: If True, use checksum comparison instead of mtime
+                for modified paper detection (recommended for containers)
 
         Returns:
             FreshnessResult with freshness status and recommendation
@@ -745,11 +756,23 @@ class CorpusManager:
                 paper_record = self._papers[paper_id]
                 content_path = paper_dir / "content.md"
                 if content_path.exists():
-                    content_mtime = datetime.fromtimestamp(
-                        content_path.stat().st_mtime, tz=UTC
-                    )
-                    if content_mtime > paper_record.ingested_at:
-                        papers_to_refresh += 1
+                    if verify_checksums:
+                        # Checksum-based: More reliable for containers/Docker
+                        try:
+                            content = content_path.read_text(encoding="utf-8")
+                            current_checksum = compute_checksum(content)
+                            if current_checksum != paper_record.checksum:
+                                papers_to_refresh += 1
+                        except (OSError, UnicodeDecodeError):
+                            # If we can't read the file, assume it needs refresh
+                            papers_to_refresh += 1
+                    else:
+                        # mtime-based: Faster but unreliable in containers
+                        content_mtime = datetime.fromtimestamp(
+                            content_path.stat().st_mtime, tz=UTC
+                        )
+                        if content_mtime > paper_record.ingested_at:
+                            papers_to_refresh += 1
 
         # No papers in registry
         if registry_updated is None:
@@ -804,6 +827,7 @@ class CorpusManager:
         registry_path: Path,
         auto_refresh: bool = True,
         force: bool = False,
+        verify_checksums: bool = False,
     ) -> FreshnessResult:
         """Ensure corpus is fresh before agent operations.
 
@@ -814,12 +838,14 @@ class CorpusManager:
             registry_path: Path to the registry directory
             auto_refresh: If True, automatically refresh stale corpus
             force: If True, refresh even if corpus appears fresh
+            verify_checksums: If True, use checksum comparison instead of mtime
+                for modified paper detection (recommended for containers)
 
         Returns:
             FreshnessResult with final freshness status
         """
         # Check current freshness
-        result = self.check_freshness(registry_path)
+        result = self.check_freshness(registry_path, verify_checksums=verify_checksums)
 
         logger.info(
             "freshness_check_result",

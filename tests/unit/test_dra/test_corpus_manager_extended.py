@@ -17,7 +17,7 @@ class TestCorpusStatsExtended:
     """Extended tests for CorpusStats."""
 
     def test_round_trip_serialization(self):
-        """Test to_dict and from_dict round trip."""
+        """Test model_dump and model_validate round trip (Pydantic v2)."""
         original = CorpusStats(
             total_papers=42,
             total_chunks=210,
@@ -26,8 +26,8 @@ class TestCorpusStatsExtended:
             last_updated=datetime.now(UTC),
         )
 
-        data = original.to_dict()
-        restored = CorpusStats.from_dict(data)
+        data = original.model_dump(mode="json")
+        restored = CorpusStats.model_validate(data)
 
         assert restored.total_papers == original.total_papers
         assert restored.total_chunks == original.total_chunks
@@ -38,7 +38,7 @@ class TestPaperRecordExtended:
     """Extended tests for PaperRecord."""
 
     def test_round_trip_serialization(self):
-        """Test to_dict and from_dict round trip."""
+        """Test model_dump and model_validate round trip (Pydantic v2)."""
         original = PaperRecord(
             paper_id="arxiv:2301.00001",
             title="A Great Paper on ML",
@@ -47,16 +47,16 @@ class TestPaperRecordExtended:
             metadata={"doi": "10.1234/test", "authors": ["Alice", "Bob"]},
         )
 
-        data = original.to_dict()
-        restored = PaperRecord.from_dict(data)
+        data = original.model_dump(mode="json")
+        restored = PaperRecord.model_validate(data)
 
         assert restored.paper_id == original.paper_id
         assert restored.title == original.title
         assert restored.chunk_ids == original.chunk_ids
         assert restored.metadata == original.metadata
 
-    def test_from_dict_without_metadata(self):
-        """Test from_dict when metadata is missing."""
+    def test_model_validate_without_metadata(self):
+        """Test model_validate when metadata is missing."""
         data = {
             "paper_id": "paper1",
             "title": "Test",
@@ -64,7 +64,7 @@ class TestPaperRecordExtended:
             "chunk_ids": [],
             "ingested_at": "2024-01-15T10:00:00",
         }
-        record = PaperRecord.from_dict(data)
+        record = PaperRecord.model_validate(data)
         assert record.metadata == {}
 
 
@@ -608,13 +608,13 @@ class TestEdgeCases:
             assert "paper/with/slashes" in manager._papers
 
     def test_corpus_stats_empty_sections(self):
-        """Test CorpusStats with empty chunks_by_section."""
+        """Test CorpusStats with empty chunks_by_section (Pydantic v2)."""
         stats = CorpusStats(
             total_papers=0,
             total_chunks=0,
             total_tokens=0,
         )
-        data = stats.to_dict()
-        restored = CorpusStats.from_dict(data)
+        data = stats.model_dump(mode="json")
+        restored = CorpusStats.model_validate(data)
 
         assert restored.chunks_by_section == {}

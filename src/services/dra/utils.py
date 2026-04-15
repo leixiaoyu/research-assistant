@@ -523,6 +523,7 @@ def atomic_write_json(
     target_path: Path,
     data: Any,
     indent: int = 2,
+    file_mode: Optional[int] = None,
 ) -> None:
     """Write JSON data atomically using temp file + fsync + rename.
 
@@ -533,6 +534,7 @@ def atomic_write_json(
         target_path: Final destination path
         data: Data to serialize as JSON
         indent: JSON indentation level (default 2 for readability)
+        file_mode: File permission mode (e.g., 0o600 for owner rw only)
 
     Raises:
         OSError: If write or rename fails
@@ -552,7 +554,11 @@ def atomic_write_json(
             # Sync to disk for crash durability (SR-8.1)
             os.fsync(f.fileno())
         # Atomic rename (POSIX guarantees atomicity on same filesystem)
-        Path(temp_path_str).rename(target_path)
+        temp_path = Path(temp_path_str)
+        temp_path.rename(target_path)
+        # SR-8.1: Set secure file permissions after rename (0600 for sensitive data)
+        if file_mode is not None:
+            set_secure_permissions(target_path, file_mode)
     except (OSError, TypeError, ValueError) as e:
         # Clean up temp file on error
         logger.warning(

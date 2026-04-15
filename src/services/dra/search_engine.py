@@ -8,6 +8,7 @@ This module provides:
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -156,6 +157,7 @@ class EmbeddingModel:
                 # Note: In async context, use asyncio.run(rate_limiter.acquire())
                 import asyncio
                 import time
+
                 try:
                     # Try async acquire
                     loop = asyncio.get_event_loop()
@@ -725,20 +727,28 @@ class HybridSearchEngine:
         SR-8.1: Uses atomic write pattern (write to temp -> fsync -> rename) to ensure
         corpus integrity and prevent partial writes.
 
+        SR-8.1 Permission Model:
+        - Directory: 0700 (owner rwx only)
+        - Files: 0600 (owner rw only)
+
         Args:
             path: Directory to save state (default from config)
         """
         save_path = path or Path(self.corpus_config.corpus_dir)
-        save_path.mkdir(parents=True, exist_ok=True)
 
-        # SR-8.1: Restrict corpus directory permissions to 0700
-        set_secure_permissions(save_path, 0o700)
+        # SR-8.1: Create directory with secure permissions (avoid TOCTOU)
+        old_umask = os.umask(0o077)  # Ensure restrictive default
+        try:
+            save_path.mkdir(parents=True, exist_ok=True)
+            set_secure_permissions(save_path, 0o700)
+        finally:
+            os.umask(old_umask)
 
         # Save indices
         self._dense_index.save(save_path / "dense")
         self._bm25_index.save(save_path / "bm25")
 
-        # Save chunks with atomic write
+        # Save chunks with atomic write and file permissions
         chunks_data = {
             cid: {
                 "chunk_id": c.chunk_id,
@@ -752,7 +762,7 @@ class HybridSearchEngine:
             }
             for cid, c in self._chunks.items()
         }
-        atomic_write_json(save_path / "chunks.json", chunks_data)
+        atomic_write_json(save_path / "chunks.json", chunks_data, file_mode=0o600)
 
         logger.info("search_engine_saved", path=str(save_path))
 

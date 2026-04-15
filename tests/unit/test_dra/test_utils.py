@@ -1,7 +1,6 @@
 """Unit tests for Phase 8 DRA utility functions."""
 
 import json
-import os
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -625,6 +624,29 @@ class TestAtomicWriteJson:
             with open(target_path) as f:
                 loaded = json.load(f)
             assert loaded == data
+
+    def test_sets_file_permissions_with_file_mode(self):
+        """Test atomic_write_json sets file permissions when file_mode given."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = Path(tmpdir) / "secure.json"
+
+            # Write with SR-8.1 secure file permissions (0600)
+            atomic_write_json(target_path, {"sensitive": "data"}, file_mode=0o600)
+
+            # Verify file permissions
+            mode = target_path.stat().st_mode & 0o777
+            assert mode == 0o600
+
+    def test_no_file_mode_uses_default_permissions(self):
+        """Test that omitting file_mode doesn't change permissions."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = Path(tmpdir) / "default.json"
+
+            # Write without file_mode
+            atomic_write_json(target_path, {"key": "value"})
+
+            # File should exist (permissions depend on umask)
+            assert target_path.exists()
 
 
 class TestSetSecurePermissions:

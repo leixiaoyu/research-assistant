@@ -11,6 +11,7 @@ from src.services.dra.corpus_manager import (
     CorpusManager,
     CorpusStats,
     FreshnessResult,
+    FreshnessStatus,
     PaperRecord,
 )
 
@@ -41,17 +42,19 @@ class TestCorpusStats:
         assert stats.total_chunks == 50
         assert stats.chunks_by_section["abstract"] == 10
 
-    def test_to_dict(self):
-        """Test conversion to dictionary."""
+    def test_model_dump_json(self):
+        """Test Pydantic v2 model_dump with JSON mode."""
         stats = CorpusStats(total_papers=5, total_chunks=25)
-        data = stats.to_dict()
+        data = stats.model_dump(mode="json")
 
         assert data["total_papers"] == 5
         assert data["total_chunks"] == 25
         assert "last_updated" in data
+        # datetime should be serialized as ISO string
+        assert isinstance(data["last_updated"], str)
 
-    def test_from_dict(self):
-        """Test creation from dictionary."""
+    def test_model_validate(self):
+        """Test Pydantic v2 model_validate."""
         data = {
             "total_papers": 10,
             "total_chunks": 50,
@@ -59,18 +62,18 @@ class TestCorpusStats:
             "chunks_by_section": {"abstract": 10},
             "last_updated": "2024-01-15T10:00:00",
         }
-        stats = CorpusStats.from_dict(data)
+        stats = CorpusStats.model_validate(data)
 
         assert stats.total_papers == 10
         assert stats.total_chunks == 50
         assert stats.chunks_by_section["abstract"] == 10
 
-    def test_from_dict_missing_timestamp(self):
-        """Test creation from dict without timestamp."""
+    def test_model_validate_missing_timestamp(self):
+        """Test model_validate with missing timestamp uses default."""
         data = {"total_papers": 5}
-        stats = CorpusStats.from_dict(data)
+        stats = CorpusStats.model_validate(data)
         assert stats.total_papers == 5
-        # When no timestamp provided, from_dict returns current time
+        # When no timestamp provided, model uses default_factory
         assert stats.last_updated is not None
 
 
@@ -102,22 +105,24 @@ class TestPaperRecord:
         )
         assert record.metadata["doi"] == "10.1234/test"
 
-    def test_to_dict(self):
-        """Test conversion to dictionary."""
+    def test_model_dump_json(self):
+        """Test Pydantic v2 model_dump with JSON mode."""
         record = PaperRecord(
             paper_id="paper123",
             title="Test",
             checksum="abc",
             chunk_ids=["chunk1"],
         )
-        data = record.to_dict()
+        data = record.model_dump(mode="json")
 
         assert data["paper_id"] == "paper123"
         assert data["checksum"] == "abc"
         assert "ingested_at" in data
+        # datetime should be serialized as ISO string
+        assert isinstance(data["ingested_at"], str)
 
-    def test_from_dict(self):
-        """Test creation from dictionary."""
+    def test_model_validate(self):
+        """Test Pydantic v2 model_validate."""
         data = {
             "paper_id": "paper123",
             "title": "Test Paper",
@@ -126,7 +131,7 @@ class TestPaperRecord:
             "ingested_at": "2024-01-15T10:00:00",
             "metadata": {"key": "value"},
         }
-        record = PaperRecord.from_dict(data)
+        record = PaperRecord.model_validate(data)
 
         assert record.paper_id == "paper123"
         assert record.title == "Test Paper"
@@ -712,6 +717,22 @@ This is the introduction.
             assert manager._stats.total_tokens == 300
 
 
+class TestFreshnessStatus:
+    """Tests for FreshnessStatus enum."""
+
+    def test_enum_values(self):
+        """Test FreshnessStatus enum has expected values."""
+        assert FreshnessStatus.FRESH == "fresh"
+        assert FreshnessStatus.STALE == "stale"
+        assert FreshnessStatus.EMPTY_CORPUS == "empty_corpus"
+        assert FreshnessStatus.NO_REGISTRY == "no_registry"
+
+    def test_enum_is_string(self):
+        """Test FreshnessStatus values are strings for JSON serialization."""
+        for status in FreshnessStatus:
+            assert isinstance(status.value, str)
+
+
 class TestFreshnessResult:
     """Tests for FreshnessResult model."""
 
@@ -719,11 +740,13 @@ class TestFreshnessResult:
         """Test creating a fresh result."""
         result = FreshnessResult(
             is_fresh=True,
+            status=FreshnessStatus.FRESH,
             corpus_updated=datetime.now(UTC),
             registry_updated=datetime.now(UTC),
             recommendation="Corpus is up-to-date.",
         )
         assert result.is_fresh is True
+        assert result.status == FreshnessStatus.FRESH
         assert result.stale_by_seconds == 0.0
         assert result.papers_to_refresh == 0
 
@@ -731,13 +754,33 @@ class TestFreshnessResult:
         """Test creating a stale result."""
         result = FreshnessResult(
             is_fresh=False,
+            status=FreshnessStatus.STALE,
             stale_by_seconds=3600.0,
             papers_to_refresh=5,
             recommendation="Corpus is stale.",
         )
         assert result.is_fresh is False
+        assert result.status == FreshnessStatus.STALE
         assert result.stale_by_seconds == 3600.0
         assert result.papers_to_refresh == 5
+
+    def test_empty_corpus_status(self):
+        """Test empty corpus status."""
+        result = FreshnessResult(
+            is_fresh=False,
+            status=FreshnessStatus.EMPTY_CORPUS,
+            recommendation="Corpus is empty.",
+        )
+        assert result.status == FreshnessStatus.EMPTY_CORPUS
+
+    def test_no_registry_status(self):
+        """Test no registry status."""
+        result = FreshnessResult(
+            is_fresh=True,
+            status=FreshnessStatus.NO_REGISTRY,
+            recommendation="Registry not found.",
+        )
+        assert result.status == FreshnessStatus.NO_REGISTRY
 
 
 class TestFreshnessCheck:
@@ -890,6 +933,74 @@ class TestFreshnessCheck:
 
             # Paper was modified after ingestion, so needs refresh
             assert result.papers_to_refresh >= 1
+
+    def test_check_freshness_short_circuit_optimization(self):
+        """Test that short-circuit avoids full scan when corpus is newer."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            registry_path = Path(tmp_dir)
+            papers_dir = registry_path / "papers"
+            papers_dir.mkdir()
+
+            # Create paper directory
+            paper_dir = papers_dir / "paper1"
+            paper_dir.mkdir()
+            (paper_dir / "metadata.json").write_text('{"title": "Test"}')
+            (paper_dir / "content.md").write_text("# Test content")
+
+            # Create manager with corpus that's newer than registry
+            manager = CorpusManager()
+
+            # Set corpus timestamp to future (newer than registry)
+            future_time = datetime.now(UTC)
+            manager._papers["paper1"] = PaperRecord(
+                paper_id="paper1",
+                title="Paper 1",
+                checksum="abc",
+                chunk_ids=["paper1:0"],
+            )
+            manager._stats = CorpusStats(
+                total_papers=1,
+                last_updated=future_time,
+            )
+
+            # Without deep_check, should use short-circuit
+            result = manager.check_freshness(registry_path, deep_check=False)
+            assert result.is_fresh is True
+            assert result.status == FreshnessStatus.FRESH
+
+    def test_check_freshness_deep_check_bypasses_short_circuit(self):
+        """Test that deep_check=True performs full paper-by-paper scan."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            registry_path = Path(tmp_dir)
+            papers_dir = registry_path / "papers"
+            papers_dir.mkdir()
+
+            # Create paper that's NOT in corpus
+            paper_dir = papers_dir / "new_paper"
+            paper_dir.mkdir()
+            (paper_dir / "metadata.json").write_text('{"title": "New Paper"}')
+            (paper_dir / "content.md").write_text("# New content")
+
+            manager = CorpusManager()
+            manager._stats = CorpusStats(
+                total_papers=0,
+                last_updated=datetime.now(UTC),
+            )
+
+            # With deep_check=True, should detect the new paper
+            result = manager.check_freshness(registry_path, deep_check=True)
+            # Even though corpus timestamp might be recent, deep check finds new paper
+            assert result.papers_to_refresh >= 1
+
+    def test_check_freshness_returns_status_enum(self):
+        """Test that check_freshness returns proper FreshnessStatus enum."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            registry_path = Path(tmp_dir)
+            # No papers dir = no registry
+            manager = CorpusManager()
+
+            result = manager.check_freshness(registry_path)
+            assert result.status == FreshnessStatus.NO_REGISTRY
 
 
 class TestEnsureFresh:

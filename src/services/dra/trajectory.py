@@ -443,20 +443,22 @@ class TrajectoryCollector:
 
         # Tip 1: Query patterns
         if insights.effective_query_patterns:
+            patterns = ", ".join(insights.effective_query_patterns[:5])
             tip = ContextualTip(
                 context="When searching for papers",
-                strategy=f"Use terms like: {', '.join(insights.effective_query_patterns[:5])}. "
+                strategy=f"Use terms like: {patterns}. "
                 "These terms frequently lead to relevant results.",
                 confidence=0.8,
-                examples=["expert_seed_comparative_analysis"],  # Reference expert seeds
+                examples=["expert_seed_comparative_analysis"],
             )
             tips.append(tip)
 
         # Tip 2: Action sequences
         if insights.successful_sequences:
+            seq = insights.successful_sequences[0]
             tip = ContextualTip(
                 context="When gathering evidence",
-                strategy=f"Follow successful patterns: {insights.successful_sequences[0]}. "
+                strategy=f"Follow successful patterns: {seq}. "
                 "This sequence often leads to comprehensive findings.",
                 confidence=0.75,
                 examples=["expert_seed_evidence_gathering"],
@@ -549,7 +551,7 @@ DEFAULT_EXPERT_SEEDS = [
         "seed_id": "comparative_analysis",
         "name": "Comparative Analysis Best Practice",
         "description": "Demonstrates effective strategy for comparing two approaches",
-        "question": "How does Transformer architecture compare to RNN for machine translation?",
+        "question": "How does Transformer compare to RNN for translation?",
         "key_patterns": [
             "Use 'vs' or 'compared to' in search queries",
             "Open methods sections first to understand implementations",
@@ -561,7 +563,7 @@ DEFAULT_EXPERT_SEEDS = [
         "seed_id": "evidence_gathering",
         "name": "Evidence Gathering Best Practice",
         "description": "Shows systematic evidence collection across multiple papers",
-        "question": "What empirical evidence supports the effectiveness of attention mechanisms?",
+        "question": "What evidence supports attention mechanism effectiveness?",
         "key_patterns": [
             "Search for multiple related terms (attention, self-attention, multi-head)",
             "Open results sections to find empirical data",

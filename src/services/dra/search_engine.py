@@ -10,10 +10,13 @@ This module provides:
 import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import structlog
+
+if TYPE_CHECKING:
+    from src.utils.rate_limiter import RateLimiter
 
 from src.models.dra import (
     ChunkType,

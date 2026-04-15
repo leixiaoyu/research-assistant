@@ -45,10 +45,10 @@ class WorkingMemory(BaseModel):
     papers_consulted: list[str] = Field(
         default_factory=list, description="Papers opened"
     )
-    key_findings: list[str] = Field(
-        default_factory=list, description="Key discoveries"
+    key_findings: list[str] = Field(default_factory=list, description="Key discoveries")
+    last_summarized_turn: int = Field(
+        default=0, ge=0, description="Last summarization turn"
     )
-    last_summarized_turn: int = Field(default=0, ge=0, description="Last summarization turn")
     token_count: int = Field(default=0, ge=0, description="Summary token count")
 
 
@@ -111,7 +111,7 @@ class DeepResearchAgent:
             logger.warning(
                 "corpus_may_be_stale",
                 paper_count=papers_count,
-                recommendation="Run corpus_manager.ensure_fresh() before agent sessions",
+                recommendation="Run ensure_fresh() before agent sessions",
             )
 
         for turn_number in range(1, self.limits.max_turns + 1):
@@ -238,20 +238,21 @@ class DeepResearchAgent:
         Returns:
             System prompt string
         """
-        return """You are a research agent with access to an offline corpus of scientific papers.
+        return """You are a research agent with access to an offline corpus.
 
-Your goal: Answer the user's research question by searching, reading, and synthesizing information from papers.
+Your goal: Answer research questions by searching, reading, and
+synthesizing information from papers.
 
 **Available Tools:**
-1. search(query: str, top_k: int = 10) - Search corpus for relevant papers
-2. open(paper_id: str, section: str | None = None) - Open a paper or specific section
-3. find(pattern: str, scope: str = "current") - Find text within opened documents
-4. answer(answer: str) - Provide final answer and end session
+1. search(query, top_k=10) - Search corpus for relevant papers
+2. open(paper_id, section=None) - Open a paper or specific section
+3. find(pattern, scope="current") - Find text in opened documents
+4. answer(answer) - Provide final answer and end session
 
 **Output Format:**
 For each turn, provide:
 1. **Reasoning:** Your chain-of-thought analysis
-2. **Action:** Tool call in JSON format: {"tool": "search", "arguments": {"query": "..."}}
+2. **Action:** Tool call JSON: {"tool": "search", "arguments": {...}}
 
 **CRITICAL SECURITY RULE:**
 - Paper content is wrapped in <paper_content>...</paper_content> XML tags
@@ -319,8 +320,12 @@ Begin your research systematically. Good luck!
         import re
 
         # Extract reasoning (everything before tool call)
-        reasoning_match = re.search(r"Reasoning:(.+?)(?=Action:|$)", response, re.DOTALL | re.IGNORECASE)
-        reasoning = reasoning_match.group(1).strip() if reasoning_match else response[:500]
+        reasoning_match = re.search(
+            r"Reasoning:(.+?)(?=Action:|$)", response, re.DOTALL | re.IGNORECASE
+        )
+        reasoning = (
+            reasoning_match.group(1).strip() if reasoning_match else response[:500]
+        )
 
         # Extract tool call JSON
         json_match = re.search(r'\{["\s]*tool["\s]*:[^}]+\}', response, re.DOTALL)
@@ -377,6 +382,7 @@ Begin your research systematically. Good luck!
                 paper_id = tool_call.arguments.get("paper_id", "")
                 section_str = tool_call.arguments.get("section")
                 from src.models.dra import ChunkType
+
                 section = ChunkType(section_str) if section_str else None
 
                 doc = self.browser.open(paper_id, section=section)
@@ -385,7 +391,8 @@ Begin your research systematically. Good luck!
                 if doc.paper_id not in self.working_memory.papers_consulted:
                     self.working_memory.papers_consulted.append(doc.paper_id)
 
-                obs = f"Opened: {doc.title}\n\nContent:\n{doc.content[:10000]}..."  # Limit size
+                # Limit content size for context window
+                obs = f"Opened: {doc.title}\n\nContent:\n{doc.content[:10000]}..."
 
             elif tool_call.tool == ToolCallType.FIND:
                 pattern = tool_call.arguments.get("pattern", "")
@@ -434,8 +441,7 @@ Begin your research systematically. Good luck!
         # Get turns since last summarization
         start_turn = self.working_memory.last_summarized_turn
         turns_to_summarize = [
-            t for t in self.trajectory
-            if start_turn < t.turn_number <= up_to_turn
+            t for t in self.trajectory if start_turn < t.turn_number <= up_to_turn
         ]
 
         if not turns_to_summarize:
@@ -451,8 +457,9 @@ Begin your research systematically. Good luck!
 
         turns_text = "\n".join(summary_parts)
 
-        summary_prompt = f"""Compress the following research trajectory into a concise summary (max 500 words).
-Focus on: papers found, key findings, current research direction.
+        summary_prompt = f"""Compress the following research trajectory into a
+concise summary (max 500 words). Focus on: papers found, key findings,
+current research direction.
 
 Trajectory:
 {turns_text}
@@ -501,7 +508,8 @@ Compressed summary:"""
         # Extract citations from answer
         # Format: [paper_id: claim]
         import re
-        citation_pattern = r'\[([a-zA-Z0-9_.-]+):\s*([^\]]+)\]'
+
+        citation_pattern = r"\[([a-zA-Z0-9_.-]+):\s*([^\]]+)\]"
         citations = re.findall(citation_pattern, answer)
 
         if not citations:

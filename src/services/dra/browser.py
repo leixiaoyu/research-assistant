@@ -17,11 +17,8 @@ from src.models.dra import (
     ChunkType,
     FindResult,
     SearchResult,
-    ToolCall,
-    ToolCallType,
 )
 from src.services.dra.corpus_manager import CorpusManager
-from src.services.dra.search_engine import HybridSearchEngine
 
 logger = structlog.get_logger()
 
@@ -175,7 +172,9 @@ class ResearchBrowser:
             if section and chunk.section_type != section:
                 continue
 
-            content_parts.append(f"## {chunk.section_type.value.title()}\n\n{chunk.content}")
+            content_parts.append(
+                f"## {chunk.section_type.value.title()}\n\n{chunk.content}"
+            )
             total_tokens += chunk.token_count
 
         if not content_parts:
@@ -245,7 +244,7 @@ class ResearchBrowser:
 
         for doc in docs_to_search:
             # Split into sentences for context extraction
-            sentences = re.split(r'(?<=[.!?])\s+', doc.content)
+            sentences = re.split(r"(?<=[.!?])\s+", doc.content)
 
             for i, sentence in enumerate(sentences):
                 matches = list(regex.finditer(sentence))
@@ -312,7 +311,9 @@ class ResearchBrowser:
             else:
                 doc = self._opened_docs[cited_paper_id]
         except ValueError as e:
-            logger.warning("citation_check_paper_not_found", paper_id=cited_paper_id, error=str(e))
+            logger.warning(
+                "citation_check_paper_not_found", paper_id=cited_paper_id, error=str(e)
+            )
             return CitationCheck(
                 claim=claim,
                 cited_paper_id=cited_paper_id,
@@ -327,7 +328,7 @@ class ResearchBrowser:
         content_lower = doc.content.lower()
 
         # Extract key terms from claim (remove stopwords, punctuation)
-        key_terms = re.findall(r'\b\w{4,}\b', claim_lower)  # Words 4+ chars
+        key_terms = re.findall(r"\b\w{4,}\b", claim_lower)  # Words 4+ chars
         if not key_terms:
             return CitationCheck(
                 claim=claim,
@@ -345,10 +346,12 @@ class ResearchBrowser:
         best_sentence = ""
         best_score = 0.0
 
-        sentences = re.split(r'(?<=[.!?])\s+', doc.content)
+        sentences = re.split(r"(?<=[.!?])\s+", doc.content)
         for sentence in sentences:
             sentence_lower = sentence.lower()
-            sentence_terms_found = sum(1 for term in key_terms if term in sentence_lower)
+            sentence_terms_found = sum(
+                1 for term in key_terms if term in sentence_lower
+            )
             sentence_score = sentence_terms_found / len(key_terms)
 
             if sentence_score > best_score:

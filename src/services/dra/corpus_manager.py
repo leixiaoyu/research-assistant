@@ -13,9 +13,12 @@ import re
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import structlog
+
+if TYPE_CHECKING:
+    from src.utils.rate_limiter import RateLimiter
 from pydantic import BaseModel, Field, field_serializer
 
 from src.models.dra import ChunkType, CorpusChunk, CorpusConfig

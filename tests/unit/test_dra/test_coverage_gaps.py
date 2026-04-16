@@ -536,9 +536,11 @@ class TestCorpusManagerOSErrorHandling:
 
     def test_check_freshness_oserror_on_stat(self, tmp_path):
         """Test OSError when getting registry directory mtime."""
+        from src.models.dra import CorpusConfig
         from src.services.dra.corpus_manager import CorpusManager
 
-        manager = CorpusManager(base_dir=tmp_path)
+        config = CorpusConfig(corpus_dir=str(tmp_path))
+        manager = CorpusManager(config=config)
 
         # Create the papers directory then make it inaccessible
         papers_dir = tmp_path / "papers"
@@ -553,9 +555,11 @@ class TestCorpusManagerOSErrorHandling:
 
     def test_check_freshness_skips_non_directory_items(self, tmp_path):
         """Test that non-directory items in papers_dir are skipped (line 742)."""
+        from src.models.dra import CorpusConfig
         from src.services.dra.corpus_manager import CorpusManager
 
-        manager = CorpusManager(base_dir=tmp_path)
+        config = CorpusConfig(corpus_dir=str(tmp_path))
+        manager = CorpusManager(config=config)
 
         papers_dir = tmp_path / "papers"
         papers_dir.mkdir(exist_ok=True)

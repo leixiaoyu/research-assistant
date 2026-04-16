@@ -542,14 +542,18 @@ class TestCorpusManagerOSErrorHandling:
         config = CorpusConfig(corpus_dir=str(tmp_path))
         manager = CorpusManager(config=config)
 
-        # Create the papers directory then make it inaccessible
+        # Create the papers directory
         papers_dir = tmp_path / "papers"
         papers_dir.mkdir(exist_ok=True)
+
+        # Create a registry path
+        registry_path = tmp_path / "registry"
+        registry_path.mkdir(exist_ok=True)
 
         # Mock papers_dir.stat() to raise OSError
         with patch.object(Path, "stat", side_effect=OSError("Permission denied")):
             # Should handle OSError gracefully
-            result = manager.check_freshness()
+            result = manager.check_freshness(registry_path=registry_path)
             # Should still return a valid FreshnessResult
             assert result is not None
 
@@ -561,7 +565,10 @@ class TestCorpusManagerOSErrorHandling:
         config = CorpusConfig(corpus_dir=str(tmp_path))
         manager = CorpusManager(config=config)
 
-        papers_dir = tmp_path / "papers"
+        # Create registry path with papers subdirectory
+        registry_path = tmp_path / "registry"
+        registry_path.mkdir(exist_ok=True)
+        papers_dir = registry_path / "papers"
         papers_dir.mkdir(exist_ok=True)
 
         # Create a file (not directory) in papers_dir
@@ -573,7 +580,7 @@ class TestCorpusManagerOSErrorHandling:
         (paper_dir / "metadata.json").write_text('{"title": "Test"}')
 
         # Check freshness should skip the file and process only the directory
-        result = manager.check_freshness(deep_check=True)
+        result = manager.check_freshness(registry_path=registry_path, deep_check=True)
         assert result is not None
 
 

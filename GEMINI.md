@@ -233,33 +233,33 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
    **Scope:** This is **MANDATORY** for "Complex PRs" (involving code changes in `src/` or `tests/`, configuration updates, or architectural docs) and **RECOMMENDED** for all others.
 
    **Workflow:**
-   1. **Isolate:** Create a clean worktree:
+   1. **Isolate:** Create a clean worktree. **Always use the immutable pull ref** to ensure you are reviewing the exact code visible in the PR UI, regardless of branch name changes.
       ```bash
-      git fetch origin pull/ID/head:pr-ID
-      git worktree add ../pr-review-ID pr-ID
+      # Fetch the exact PR head OID
+      git fetch origin pull/ID/head:pr-review-ID
+      git worktree add ../pr-review-ID pr-review-ID
       cd ../pr-review-ID
       ```
-   2. **Initialize:** Set up the environment (crucial for accurate testing):
+   2. **Sync Verification:** Confirm the local HEAD OID matches the PR's current `headRefOid`.
+      ```bash
+      gh pr view ID --json headRefOid
+      git rev-parse HEAD
+      ```
+   3. **Initialize:** Set up the environment (crucial for accurate testing):
       ```bash
       python3.14 -m venv venv
       source venv/bin/activate
-      pip install -r requirements.txt
+      pip install -r requirements.txt -r requirements-dev.txt
       cp .env.template .env
-      # Add dummy keys to .env if needed for non-integration tests
       ```
-      *Note: This setup adds ~1-2 minutes per review but is essential to prevent false positives/negatives caused by dirty environments.*
-   3. **Verify:** Run the verification suite:
+   4. **Verify:** Run the verification suite:
       ```bash
       ./verify.sh
       ```
-      - **100% Pass Rate** for automated tests.
-      - **≥99% Coverage** per module.
-      - **Zero Formatting/Linting/Type Issues.**
-   4. **Cleanup:** Safely remove the worktree:
+   5. **Cleanup:** Safely remove the worktree:
       ```bash
       cd ..
       git worktree remove pr-review-ID
-      # Only if directory remains: rm -rf pr-review-ID
       ```
 
    **Environment Integrity Checks:**

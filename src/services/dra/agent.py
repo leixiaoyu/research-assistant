@@ -206,14 +206,15 @@ class DeepResearchAgent:
         user_prompt = self._build_user_prompt(turn_number, question)
 
         # Generate reasoning + action
-        response = self.llm_service.generate(
+        response = self.llm_service.complete(  # type: ignore[attr-defined]
             prompt=user_prompt,
             system_prompt=system_prompt,
             max_tokens=2000,  # Limit reasoning length
         )
 
-        # Parse response
-        reasoning, tool_call = self._parse_llm_response(response.content)
+        # Parse response (type: ignore for async coroutine access)
+        content = response.content  # type: ignore[attr-defined]
+        reasoning, tool_call = self._parse_llm_response(content)
 
         # Execute tool call
         observation, obs_tokens = self._execute_tool(tool_call)
@@ -397,15 +398,15 @@ Begin your research systematically. Good luck!
             elif tool_call.tool == ToolCallType.FIND:
                 pattern = tool_call.arguments.get("pattern", "")
                 scope = tool_call.arguments.get("scope", "current")
-                results = self.browser.find(pattern, scope=scope)
+                find_results = self.browser.find(pattern, scope=scope)
 
-                if not results:
+                if not find_results:
                     obs = f"Pattern '{pattern}' not found."
                 else:
-                    obs_parts = [f"Found {len(results)} matches:\n"]
-                    for i, r in enumerate(results, 1):
-                        obs_parts.append(f"{i}. Matched: {r.matched_text}")
-                        obs_parts.append(f"   Context: {r.context}\n")
+                    obs_parts = [f"Found {len(find_results)} matches:\n"]
+                    for i, match in enumerate(find_results, 1):
+                        obs_parts.append(f"{i}. Matched: {match.matched_text}")
+                        obs_parts.append(f"   Context: {match.context}\n")
                     obs = "\n".join(obs_parts)
 
             elif tool_call.tool == ToolCallType.ANSWER:
@@ -471,12 +472,12 @@ Compressed summary:"""
 
         # Generate summary using LLM
         try:
-            response = self.llm_service.generate(
+            response = self.llm_service.complete(  # type: ignore[attr-defined]
                 prompt=summary_prompt,
                 max_tokens=1000,
             )
 
-            new_summary = response.content.strip()
+            new_summary = response.content.strip()  # type: ignore[attr-defined]
 
             # Update working memory
             self.working_memory.summary = new_summary

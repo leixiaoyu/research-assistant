@@ -426,3 +426,108 @@ class TestResearchPipelinePhase2WithCrossSynthesis:
         finally:
             for p in patches.values():
                 p.stop()
+
+
+class TestPipelineCleanup:
+    """Test pipeline cleanup behavior (Bug #4 fix)."""
+
+    @pytest.mark.asyncio
+    async def test_run_closes_discovery_service_on_success(self, mock_config):
+        """Test that run() closes discovery_service after successful completion."""
+        pipeline = ResearchPipeline()
+
+        # Create mock discovery service with close method
+        mock_discovery_service = AsyncMock()
+        mock_discovery_service.close = AsyncMock()
+
+        # Create mock context with required attributes
+        mock_context = MagicMock()
+        mock_context.discovery_service = mock_discovery_service
+        mock_context.config = mock_config
+        mock_context.errors = []
+
+        # Mock phase results
+        mock_discovery_result = MagicMock()
+        mock_discovery_result.topics_processed = 1
+        mock_discovery_result.topics_failed = 0
+        mock_discovery_result.total_papers = 5
+
+        mock_extraction_result = MagicMock()
+        mock_extraction_result.total_papers_processed = 5
+        mock_extraction_result.total_papers_with_extraction = 5
+        mock_extraction_result.total_tokens_used = 1000
+        mock_extraction_result.total_cost_usd = 0.01
+        mock_extraction_result.output_files = []
+
+        mock_cross_result = MagicMock()
+        mock_cross_result.report = None
+
+        with (
+            patch.object(
+                pipeline, "_create_context", new_callable=AsyncMock
+            ) as mock_create,
+            patch.object(pipeline, "_create_discovery_phase") as mock_disc_phase,
+            patch("src.orchestration.pipeline.ExtractionPhase") as mock_ext_phase,
+            patch("src.orchestration.pipeline.SynthesisPhase") as mock_synth_phase,
+            patch("src.orchestration.pipeline.CrossSynthesisPhase") as mock_cross_phase,
+        ):
+            mock_create.return_value = mock_context
+
+            # Setup discovery phase mock
+            mock_disc_instance = AsyncMock()
+            mock_disc_instance.run.return_value = mock_discovery_result
+            mock_disc_phase.return_value = mock_disc_instance
+
+            # Setup extraction phase mock
+            mock_ext_instance = AsyncMock()
+            mock_ext_instance.run.return_value = mock_extraction_result
+            mock_ext_phase.return_value = mock_ext_instance
+
+            # Setup synthesis phase mock
+            mock_synth_instance = AsyncMock()
+            mock_synth_phase.return_value = mock_synth_instance
+
+            # Setup cross-synthesis phase mock
+            mock_cross_instance = AsyncMock()
+            mock_cross_instance.run.return_value = mock_cross_result
+            mock_cross_phase.return_value = mock_cross_instance
+
+            await pipeline.run()
+
+        # Verify close was called
+        mock_discovery_service.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_run_closes_discovery_service_on_exception(self, mock_config):
+        """Test finally block closes discovery_service even on exception."""
+        pipeline = ResearchPipeline()
+
+        # Create mock discovery service with close method
+        mock_discovery_service = AsyncMock()
+        mock_discovery_service.close = AsyncMock()
+
+        # Create mock context
+        mock_context = MagicMock()
+        mock_context.discovery_service = mock_discovery_service
+        mock_context.config = mock_config
+
+        with (
+            patch.object(
+                pipeline, "_create_context", new_callable=AsyncMock
+            ) as mock_create,
+            patch.object(pipeline, "_create_discovery_phase") as mock_disc_phase,
+        ):
+            mock_create.return_value = mock_context
+
+            # Setup discovery phase to raise exception
+            mock_disc_instance = AsyncMock()
+            mock_disc_instance.run.side_effect = RuntimeError("Phase failed")
+            mock_disc_phase.return_value = mock_disc_instance
+
+            # Should not raise - exception is caught in run()
+            result = await pipeline.run()
+
+        # Verify close was still called despite exception
+        mock_discovery_service.close.assert_called_once()
+        # Verify the error was recorded
+        assert len(result.errors) > 0

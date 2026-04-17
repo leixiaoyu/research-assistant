@@ -678,3 +678,30 @@ class TestDiscoveryPhasePhase71Integration:
         topic_result = result.topic_results[0]
         assert topic_result.discovery_stats is None
         assert topic_result.success is False
+
+    @pytest.mark.asyncio
+    async def test_execute_paper_with_invalid_date(
+        self, mock_context, sample_topic, sample_scored_papers
+    ):
+        """Test execute handles paper with invalid publication date format."""
+        mock_context.config.research_topics = [sample_topic]
+        mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
+            topic_slug="machine-learning"
+        )
+
+        # Modify first paper to have an invalid date string
+        sample_scored_papers[0].publication_date = "NOT-A-DATE"
+
+        # Mock discover() to return DiscoveryAPIResult
+        discovery_result = make_discovery_result(sample_scored_papers)
+        mock_context.discovery_service.discover = AsyncMock(
+            return_value=discovery_result
+        )
+
+        phase = DiscoveryPhase(mock_context)
+        result = await phase.execute()
+
+        assert result.topics_processed == 1
+        assert result.total_papers == 2
+        # Paper should still be included, but its date might be None or default
+        # Our primary goal here is to hit the 'except' block in DiscoveryPhase.run()

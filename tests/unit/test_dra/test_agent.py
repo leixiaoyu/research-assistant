@@ -2,11 +2,11 @@
 
 import time
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.models.dra import AgentLimits, ResearchResult, ToolCallType, Turn
+from src.models.dra import AgentLimits, ToolCallType, Turn
 from src.services.dra.agent import DeepResearchAgent, WorkingMemory
 from src.services.dra.browser import ResearchBrowser, CitationCheck
 
@@ -364,8 +364,6 @@ class TestDeepResearchAgent:
 
     def test_execute_tool_unknown_tool(self, agent):
         """Test executing unknown tool."""
-        from src.models.dra import ToolCall
-
         # Create a tool call with an unknown tool (mock it)
         tool_call = MagicMock()
         tool_call.tool = "unknown_tool"
@@ -450,7 +448,8 @@ class TestDeepResearchAgent:
 
         agent._summarize_trajectory(up_to_turn=5)
 
-        assert agent.working_memory.summary == "Summarized trajectory: Found 3 papers on topic X."
+        expected_summary = "Summarized trajectory: Found 3 papers on topic X."
+        assert agent.working_memory.summary == expected_summary
         assert agent.working_memory.last_summarized_turn == 5
         assert agent.working_memory.token_count > 0
 
@@ -539,7 +538,10 @@ class TestDeepResearchAgent:
         def slow_complete(*args, **kwargs):
             time.sleep(2)  # Sleep 2 seconds
             resp = MagicMock()
-            resp.content = 'Reasoning: Test\nAction: {"tool": "search", "arguments": {"query": "test"}}'
+            resp.content = (
+                "Reasoning: Test\n"
+                'Action: {"tool": "search", "arguments": {"query": "test"}}'
+            )
             return resp
 
         mock_llm_service.complete.side_effect = slow_complete
@@ -569,7 +571,9 @@ class TestDeepResearchAgent:
         assert result.answer is None
         assert result.exhausted is True
 
-    def test_research_context_limit_exceeded(self, agent, mock_llm_service, mock_browser):
+    def test_research_context_limit_exceeded(
+        self, agent, mock_llm_service, mock_browser
+    ):
         """Test research stops when context limit exceeded."""
         agent.limits.max_context_tokens = 100  # Very small limit
 
@@ -609,7 +613,9 @@ class TestDeepResearchAgent:
         assert result.exhausted is True
         assert result.answer is None
 
-    def test_research_triggers_summarization_every_10_turns(self, agent, mock_llm_service, mock_browser):
+    def test_research_triggers_summarization_every_10_turns(
+        self, agent, mock_llm_service, mock_browser
+    ):
         """Test research triggers summarization every 10 turns."""
         agent.limits.max_turns = 25
 
@@ -627,17 +633,20 @@ class TestDeepResearchAgent:
         """
 
         # First 15 turns search, then answer
-        mock_llm_service.complete.side_effect = [search_response] * 15 + [answer_response]
+        responses = [search_response] * 15 + [answer_response]
+        mock_llm_service.complete.side_effect = responses
         mock_browser.search.return_value = []
 
-        with patch.object(agent, '_summarize_trajectory') as mock_summarize:
-            result = agent.research("Test question")
+        with patch.object(agent, "_summarize_trajectory") as mock_summarize:
+            agent.research("Test question")
 
             # Should be called at turn 10
             assert mock_summarize.call_count == 1
             mock_summarize.assert_called_with(up_to_turn=10)
 
-    def test_research_corpus_freshness_warning(self, agent, mock_llm_service, mock_browser):
+    def test_research_corpus_freshness_warning(
+        self, agent, mock_llm_service, mock_browser
+    ):
         """Test research logs warning for stale corpus."""
         # Set paper count very low
         mock_browser.corpus_manager.paper_count = 5
@@ -649,12 +658,15 @@ class TestDeepResearchAgent:
         """
         mock_llm_service.complete.return_value = answer_response
 
-        with patch('src.services.dra.agent.logger') as mock_logger:
+        with patch("src.services.dra.agent.logger") as mock_logger:
             agent.research("Test question")
 
             # Should log warning about stale corpus
-            warning_calls = [call for call in mock_logger.warning.call_args_list
-                           if 'corpus_may_be_stale' in str(call)]
+            warning_calls = [
+                call
+                for call in mock_logger.warning.call_args_list
+                if "corpus_may_be_stale" in str(call)
+            ]
             assert len(warning_calls) > 0
 
     def test_validate_citations_in_answer(self, agent, mock_browser):

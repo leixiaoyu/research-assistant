@@ -618,7 +618,6 @@ class TestEmbeddingModelRateLimiter:
 
     def test_encode_with_rate_limiter_no_event_loop(self):
         """Test rate limiter when no event loop exists (RuntimeError path)."""
-        import asyncio
         from unittest.mock import AsyncMock
 
         model = EmbeddingModel(batch_size=2)
@@ -662,7 +661,6 @@ class TestEmbeddingModelRateLimiter:
 
     def test_encode_with_rate_limiter_running_loop(self):
         """Test rate limiter when event loop is already running (warning path)."""
-        import asyncio
         from unittest.mock import AsyncMock
 
         model = EmbeddingModel(batch_size=2)

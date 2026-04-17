@@ -1,11 +1,10 @@
 """Unit tests for Phase 8 DRA research browser."""
 
-import re
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from src.models.dra import ChunkType, FindResult, SearchResult
+from src.models.dra import ChunkType, SearchResult
 from src.services.dra.browser import CitationCheck, OpenedDocument, ResearchBrowser
 from src.services.dra.corpus_manager import CorpusManager, PaperRecord
 
@@ -380,7 +379,7 @@ class TestResearchBrowser:
         with pytest.raises(ValueError, match="Document limit exceeded"):
             browser.open("paper3")
 
-    def test_open_same_paper_twice_no_limit_increase(self, browser, mock_corpus_manager):
+    def test_open_same_paper_twice_no_limit_inc(self, browser, mock_corpus_manager):
         """Test opening same paper twice doesn't increase document count."""
         paper_record = PaperRecord(
             paper_id="paper1",
@@ -716,6 +715,8 @@ class TestResearchBrowser:
         )
 
         assert check_low.found is True
+        # Verify high threshold check was executed (variable used)
+        assert check_high is not None
 
     def test_close_document(self, browser):
         """Test closing an opened document."""

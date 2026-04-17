@@ -4,12 +4,11 @@ import json
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from src.models.dra import (
-    ContextualTip,
     ResearchResult,
     ToolCallType,
     TrajectoryInsights,
@@ -565,7 +564,9 @@ class TestTrajectoryCollector:
 
         # Should include the expert seed
         assert len(filtered) >= 1
-        expert_records = [t for t in filtered if t.trajectory_id.startswith("expert_seed_")]
+        expert_records = [
+            t for t in filtered if t.trajectory_id.startswith("expert_seed_")
+        ]
         assert len(expert_records) == 1
 
     def test_filter_quality_require_answer_true(self, collector):
@@ -920,7 +921,7 @@ class TestTrajectoryCollector:
         collector._save_trajectory(record)
 
         # Should load only valid file
-        with patch('src.services.dra.trajectory.logger') as mock_logger:
+        with patch("src.services.dra.trajectory.logger") as mock_logger:
             trajectories = collector._load_all_trajectories()
 
             assert len(trajectories) == 1

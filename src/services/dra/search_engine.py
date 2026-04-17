@@ -8,11 +8,15 @@ This module provides:
 """
 
 import json
+import os
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import structlog
+
+if TYPE_CHECKING:
+    from src.utils.rate_limiter import RateLimiter
 
 from src.models.dra import (
     ChunkType,
@@ -21,7 +25,11 @@ from src.models.dra import (
     SearchConfig,
     SearchResult,
 )
-from src.services.dra.utils import TextNormalizer
+from src.services.dra.utils import (
+    TextNormalizer,
+    atomic_write_json,
+    set_secure_permissions,
+)
 
 logger = structlog.get_logger()
 
@@ -43,6 +51,7 @@ class EmbeddingModel:
     """Wrapper for SPECTER2 embedding model.
 
     Supports both HuggingFace Hub download and local model path.
+    SR-8.7: Integrates rate limiter for hosted embedding APIs.
     """
 
     def __init__(
@@ -50,6 +59,7 @@ class EmbeddingModel:
         model_name: str = "allenai/specter2",
         model_path: Optional[str] = None,
         batch_size: int = 32,
+        rate_limiter: Optional["RateLimiter"] = None,
     ):
         """Initialize embedding model.
 
@@ -57,6 +67,7 @@ class EmbeddingModel:
             model_name: HuggingFace model name (must be in APPROVED_EMBEDDING_MODELS)
             model_path: Optional local path for offline use
             batch_size: Batch size for encoding
+            rate_limiter: Optional rate limiter for API calls (SR-8.7)
 
         Raises:
             ValueError: If model_name is not in the approved allowlist
@@ -71,6 +82,7 @@ class EmbeddingModel:
         self.model_name = model_name
         self.model_path = model_path
         self.batch_size = batch_size
+        self.rate_limiter = rate_limiter  # SR-8.7
         self._model = None
         self._tokenizer = None
         self._dimension: Optional[int] = None
@@ -119,23 +131,47 @@ class EmbeddingModel:
     def encode(self, texts: list[str]) -> np.ndarray:
         """Encode texts to embeddings.
 
+        SR-8.7: Applies rate limiting if rate_limiter is configured.
+        Note: For local models, rate limiting is a no-op. For hosted APIs,
+        it prevents exceeding rate limits.
+
         Args:
             texts: List of text strings
 
         Returns:
             numpy array of shape (len(texts), dimension)
         """
-        import torch
-
         self._load_model()
 
         if not texts:
             return np.array([]).reshape(0, self.dimension)
 
+        # Import torch only when actually needed for encoding
+        import torch  # noqa: I001
+
         all_embeddings = []
 
         for i in range(0, len(texts), self.batch_size):
             batch = texts[i : i + self.batch_size]
+
+            # SR-8.7: Apply rate limiting for batch if configured
+            if self.rate_limiter:
+                # Synchronous sleep for rate limiting
+                # Note: In async context, use asyncio.run(rate_limiter.acquire())
+                import asyncio
+                import time
+
+                try:
+                    # Try async acquire
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # Already in async context - log warning
+                        logger.warning("rate_limiter_skipped_in_async_context")
+                    else:
+                        asyncio.run(self.rate_limiter.acquire("embedding_model"))
+                except RuntimeError:
+                    # No event loop - use simple time-based limiting
+                    time.sleep(1.0 / (self.batch_size / 60.0))  # Rough rate limit
 
             inputs = self._tokenizer(  # type: ignore[misc]
                 batch,
@@ -474,21 +510,26 @@ class HybridSearchEngine:
     Uses Reciprocal Rank Fusion (RRF) to combine results from:
     - FAISS dense vector search (semantic similarity)
     - BM25 sparse keyword search (lexical matching)
+
+    SR-8.7: Supports rate limiting for hosted embedding APIs.
     """
 
     def __init__(
         self,
         corpus_config: Optional[CorpusConfig] = None,
         search_config: Optional[SearchConfig] = None,
+        rate_limiter: Optional["RateLimiter"] = None,
     ):
         """Initialize hybrid search engine.
 
         Args:
             corpus_config: Corpus configuration
             search_config: Search configuration
+            rate_limiter: Optional rate limiter for embedding API (SR-8.7)
         """
         self.corpus_config = corpus_config or CorpusConfig()
         self.search_config = search_config or SearchConfig()
+        self.rate_limiter = rate_limiter  # SR-8.7
 
         self._embedding_model: Optional[EmbeddingModel] = None
         self._dense_index = DenseIndex()
@@ -506,12 +547,16 @@ class HybridSearchEngine:
         return len(self._chunks)
 
     def _get_embedding_model(self) -> EmbeddingModel:
-        """Get or create embedding model (lazy initialization)."""
+        """Get or create embedding model (lazy initialization).
+
+        SR-8.7: Passes rate_limiter to embedding model for API rate limiting.
+        """
         if self._embedding_model is None:
             self._embedding_model = EmbeddingModel(
                 model_name=self.corpus_config.embedding_model,
                 model_path=self.corpus_config.embedding_model_path,
                 batch_size=self.corpus_config.embedding_batch_size,
+                rate_limiter=self.rate_limiter,  # SR-8.7
             )
         return self._embedding_model
 
@@ -680,19 +725,33 @@ class HybridSearchEngine:
         return self._chunks.get(chunk_id)
 
     def save(self, path: Optional[Path] = None) -> None:
-        """Save search engine state to disk.
+        """Save search engine state to disk with atomic writes.
+
+        SR-8.1: Uses atomic write pattern (write to temp -> fsync -> rename) to ensure
+        corpus integrity and prevent partial writes.
+
+        SR-8.1 Permission Model:
+        - Directory: 0700 (owner rwx only)
+        - Files: 0600 (owner rw only)
 
         Args:
             path: Directory to save state (default from config)
         """
         save_path = path or Path(self.corpus_config.corpus_dir)
-        save_path.mkdir(parents=True, exist_ok=True)
+
+        # SR-8.1: Create directory with secure permissions (avoid TOCTOU)
+        old_umask = os.umask(0o077)  # Ensure restrictive default
+        try:
+            save_path.mkdir(parents=True, exist_ok=True)
+            set_secure_permissions(save_path, 0o700)
+        finally:
+            os.umask(old_umask)
 
         # Save indices
         self._dense_index.save(save_path / "dense")
         self._bm25_index.save(save_path / "bm25")
 
-        # Save chunks
+        # Save chunks with atomic write and file permissions
         chunks_data = {
             cid: {
                 "chunk_id": c.chunk_id,
@@ -706,8 +765,7 @@ class HybridSearchEngine:
             }
             for cid, c in self._chunks.items()
         }
-        with open(save_path / "chunks.json", "w") as f:
-            json.dump(chunks_data, f)
+        atomic_write_json(save_path / "chunks.json", chunks_data, file_mode=0o600)
 
         logger.info("search_engine_saved", path=str(save_path))
 

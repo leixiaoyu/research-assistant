@@ -8,13 +8,18 @@ This module provides:
 """
 
 import json
+import os
 import re
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import structlog
-from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from src.utils.rate_limiter import RateLimiter
+from pydantic import BaseModel, Field, field_serializer
 
 from src.models.dra import ChunkType, CorpusChunk, CorpusConfig
 from src.services.dra.search_engine import HybridSearchEngine
@@ -22,13 +27,61 @@ from src.services.dra.utils import (
     ChunkBuilder,
     SectionParser,
     TokenCounter,
+    atomic_write_json,
     compute_checksum,
+    set_secure_permissions,
 )
 
 # Pattern for valid paper IDs (alphanumeric, hyphen, underscore, dot)
 VALID_PAPER_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_.-]+$")
 
 logger = structlog.get_logger()
+
+
+class FreshnessStatus(str, Enum):
+    """Freshness status for machine-to-machine interfaces.
+
+    Provides an enum for agents to make decisions without parsing strings.
+    """
+
+    FRESH = "fresh"  # Corpus is up-to-date
+    STALE = "stale"  # Corpus needs refresh
+    EMPTY_CORPUS = "empty_corpus"  # No corpus data, registry has papers
+    NO_REGISTRY = "no_registry"  # Registry not found
+
+
+class FreshnessResult(BaseModel):
+    """Result of corpus freshness check.
+
+    Used to determine if corpus needs refresh before agent operations.
+
+    Attributes:
+        is_fresh: True if corpus is up-to-date with registry
+        status: Machine-readable freshness status enum
+        corpus_updated: Last corpus update timestamp (None if no corpus)
+        registry_updated: Last registry update timestamp (None if no registry)
+        stale_by_seconds: How many seconds the corpus is behind (0 if fresh)
+        recommendation: Human-readable recommendation
+        papers_to_refresh: Number of papers that need refreshing (if known)
+    """
+
+    is_fresh: bool = Field(..., description="Whether corpus is fresh")
+    status: FreshnessStatus = Field(
+        default=FreshnessStatus.FRESH, description="Machine-readable status"
+    )
+    corpus_updated: Optional[datetime] = Field(
+        default=None, description="Corpus last update time"
+    )
+    registry_updated: Optional[datetime] = Field(
+        default=None, description="Registry last update time"
+    )
+    stale_by_seconds: float = Field(
+        default=0.0, ge=0.0, description="Seconds behind registry"
+    )
+    recommendation: str = Field(default="", description="Action recommendation")
+    papers_to_refresh: int = Field(
+        default=0, ge=0, description="Papers needing refresh"
+    )
 
 
 class CorpusStats(BaseModel):
@@ -52,19 +105,10 @@ class CorpusStats(BaseModel):
         default_factory=lambda: datetime.now(UTC), description="Last update timestamp"
     )
 
-    def to_dict(self) -> dict:
-        """Convert to dictionary (JSON-serializable)."""
-        data = self.model_dump()
-        data["last_updated"] = self.last_updated.isoformat()
-        return data
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "CorpusStats":
-        """Create from dictionary."""
-        if data.get("last_updated") and isinstance(data["last_updated"], str):
-            data = data.copy()
-            data["last_updated"] = datetime.fromisoformat(data["last_updated"])
-        return cls.model_validate(data)
+    @field_serializer("last_updated")
+    def serialize_datetime(self, dt: datetime) -> str:
+        """Serialize datetime to ISO format for JSON."""
+        return dt.isoformat()
 
 
 class PaperRecord(BaseModel):
@@ -88,19 +132,10 @@ class PaperRecord(BaseModel):
     )
     metadata: dict = Field(default_factory=dict, description="Additional metadata")
 
-    def to_dict(self) -> dict:
-        """Convert to dictionary (JSON-serializable)."""
-        data = self.model_dump()
-        data["ingested_at"] = self.ingested_at.isoformat()
-        return data
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "PaperRecord":
-        """Create from dictionary."""
-        if data.get("ingested_at") and isinstance(data["ingested_at"], str):
-            data = data.copy()
-            data["ingested_at"] = datetime.fromisoformat(data["ingested_at"])
-        return cls.model_validate(data)
+    @field_serializer("ingested_at")
+    def serialize_datetime(self, dt: datetime) -> str:
+        """Serialize datetime to ISO format for JSON."""
+        return dt.isoformat()
 
 
 class CorpusManager:
@@ -108,21 +143,26 @@ class CorpusManager:
 
     Integrates with the paper registry to ingest markdown content
     into searchable chunks with embeddings.
+
+    SR-8.7: Supports rate limiting for hosted embedding APIs.
     """
 
     def __init__(
         self,
         config: Optional[CorpusConfig] = None,
         search_engine: Optional[HybridSearchEngine] = None,
+        rate_limiter: Optional["RateLimiter"] = None,
     ):
         """Initialize corpus manager.
 
         Args:
             config: Corpus configuration
             search_engine: Search engine instance (created if not provided)
+            rate_limiter: Optional rate limiter for embedding API (SR-8.7)
         """
         self.config = config or CorpusConfig()
         self.corpus_dir = Path(self.config.corpus_dir)
+        self.rate_limiter = rate_limiter  # SR-8.7
 
         self._search_engine = search_engine
         self._section_parser = SectionParser()
@@ -138,13 +178,17 @@ class CorpusManager:
 
     @property
     def search_engine(self) -> HybridSearchEngine:
-        """Get or create search engine."""
+        """Get or create search engine.
+
+        SR-8.7: Passes rate_limiter to search engine for embedding API rate limiting.
+        """
         if self._search_engine is None:
             from src.models.dra import SearchConfig
 
             self._search_engine = HybridSearchEngine(
                 corpus_config=self.config,
                 search_config=SearchConfig(),
+                rate_limiter=self.rate_limiter,  # SR-8.7
             )
         return self._search_engine
 
@@ -487,25 +531,45 @@ class CorpusManager:
         )
 
     def save(self, path: Optional[Path] = None) -> None:
-        """Save corpus state to disk.
+        """Save corpus state to disk with atomic writes.
+
+        Uses atomic write pattern (write to temp -> fsync -> rename) to ensure
+        corpus integrity per SR-8.1 security requirement.
+
+        SR-8.1 Permission Model:
+        - Directory: 0700 (owner rwx only)
+        - Files: 0600 (owner rw only)
 
         Args:
             path: Directory to save (default from config)
         """
         save_path = path or self.corpus_dir
-        save_path.mkdir(parents=True, exist_ok=True)
+
+        # SR-8.1: Create directory with secure permissions (avoid TOCTOU)
+        # Using umask prevents the permission window vulnerability
+        old_umask = os.umask(0o077)  # Ensure restrictive default
+        try:
+            save_path.mkdir(parents=True, exist_ok=True)
+            # Set directory permissions (mkdir may not honor mode)
+            set_secure_permissions(save_path, 0o700)
+        finally:
+            os.umask(old_umask)
 
         # Save search engine
         self.search_engine.save(save_path)
 
-        # Save paper records
-        papers_data = {pid: record.to_dict() for pid, record in self._papers.items()}
-        with open(save_path / "papers.json", "w") as f:
-            json.dump(papers_data, f, indent=2)
+        # SR-8.1: Atomic write for paper records with file permissions
+        papers_data = {
+            pid: record.model_dump(mode="json") for pid, record in self._papers.items()
+        }
+        papers_path = save_path / "papers.json"
+        atomic_write_json(papers_path, papers_data, file_mode=0o600)
 
-        # Save stats
-        with open(save_path / "stats.json", "w") as f:
-            json.dump(self._stats.to_dict(), f, indent=2)
+        # SR-8.1: Atomic write for stats with file permissions
+        stats_path = save_path / "stats.json"
+        atomic_write_json(
+            stats_path, self._stats.model_dump(mode="json"), file_mode=0o600
+        )
 
         logger.info(
             "corpus_saved",
@@ -528,21 +592,22 @@ class CorpusManager:
         # Load search engine
         self.search_engine.load(load_path)
 
-        # Load paper records
+        # Load paper records using Pydantic v2 model_validate
         papers_path = load_path / "papers.json"
         if papers_path.exists():
             with open(papers_path) as f:
                 papers_data = json.load(f)
             self._papers = {
-                pid: PaperRecord.from_dict(data) for pid, data in papers_data.items()
+                pid: PaperRecord.model_validate(data)
+                for pid, data in papers_data.items()
             }
 
-        # Load stats
+        # Load stats using Pydantic v2 model_validate
         stats_path = load_path / "stats.json"
         if stats_path.exists():
             with open(stats_path) as f:
                 stats_data = json.load(f)
-            self._stats = CorpusStats.from_dict(stats_data)
+            self._stats = CorpusStats.model_validate(stats_data)
 
         logger.info(
             "corpus_loaded",
@@ -582,3 +647,249 @@ class CorpusManager:
             "search_ready": self.search_engine.is_ready,
             "issues": issues,
         }
+
+    def check_freshness(
+        self,
+        registry_path: Path,
+        deep_check: bool = False,
+        verify_checksums: bool = False,
+    ) -> FreshnessResult:
+        """Check if corpus is fresh relative to the registry.
+
+        Compares the corpus last_updated timestamp against the registry's
+        most recent modification time to determine if the corpus needs
+        refreshing before agent operations.
+
+        Performance Optimization (SR-8.1):
+            By default, uses a fast timestamp-based check that avoids O(N)
+            stat() calls. Set deep_check=True to perform per-paper validation
+            when precise counts are needed.
+
+        Containerized Environment Support:
+            File modification times (mtime) can be unreliable in containers,
+            Docker volumes, or when files are restored from backup. Set
+            verify_checksums=True to use content-based change detection
+            instead of mtime. This is slower but more reliable.
+
+        Note:
+            This check is not atomic. If the registry is being modified
+            concurrently (e.g., by another process ingesting papers), results
+            may be inconsistent. For production use with concurrent writers,
+            consider a registry-level lock or version counter.
+
+        Args:
+            registry_path: Path to the registry directory
+            deep_check: If True, perform per-paper freshness validation (slower)
+            verify_checksums: If True, use checksum comparison instead of mtime
+                for modified paper detection (recommended for containers)
+
+        Returns:
+            FreshnessResult with freshness status and recommendation
+        """
+        papers_dir = registry_path / "papers"
+
+        # Check if registry exists
+        if not papers_dir.exists():
+            logger.warning("freshness_check_no_registry", path=str(registry_path))
+            return FreshnessResult(
+                is_fresh=True,  # No registry = nothing to refresh from
+                status=FreshnessStatus.NO_REGISTRY,
+                corpus_updated=self._stats.last_updated if self._papers else None,
+                registry_updated=None,
+                recommendation="Registry not found. No refresh needed.",
+            )
+
+        # Fast path: Get registry directory mtime for quick comparison
+        # This avoids O(N) stat() calls for the common "already fresh" case
+        try:
+            registry_dir_mtime = datetime.fromtimestamp(
+                papers_dir.stat().st_mtime, tz=UTC
+            )
+        except OSError:
+            registry_dir_mtime = None
+
+        corpus_updated = self._stats.last_updated if self._papers else None
+
+        # Short-circuit: If corpus is newer than registry dir and no deep check needed
+        if (
+            not deep_check
+            and corpus_updated is not None
+            and registry_dir_mtime is not None
+            and corpus_updated >= registry_dir_mtime
+        ):
+            logger.debug(
+                "freshness_short_circuit",
+                corpus_updated=corpus_updated.isoformat(),
+                registry_dir_mtime=registry_dir_mtime.isoformat(),
+            )
+            return FreshnessResult(
+                is_fresh=True,
+                status=FreshnessStatus.FRESH,
+                corpus_updated=corpus_updated,
+                registry_updated=registry_dir_mtime,
+                stale_by_seconds=0.0,
+                recommendation="Corpus is up-to-date with registry.",
+                papers_to_refresh=0,
+            )
+
+        # Full check: Iterate through papers for precise status
+        registry_updated: Optional[datetime] = None
+        papers_to_refresh = 0
+        paper_ids_in_corpus = set(self._papers.keys())  # O(1) lookups
+
+        for paper_dir in papers_dir.iterdir():
+            if not paper_dir.is_dir():
+                continue
+
+            # Check metadata.json or content.md modification time
+            for check_file in ["metadata.json", "content.md"]:
+                file_path = paper_dir / check_file
+                if file_path.exists():
+                    mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=UTC)
+                    if registry_updated is None or mtime > registry_updated:
+                        registry_updated = mtime
+                    break
+
+            # Count papers not in corpus or modified since ingestion
+            paper_id = paper_dir.name
+            if paper_id not in paper_ids_in_corpus:
+                papers_to_refresh += 1
+            else:
+                # Check if paper was modified after ingestion
+                paper_record = self._papers[paper_id]
+                content_path = paper_dir / "content.md"
+                if content_path.exists():
+                    if verify_checksums:
+                        # Checksum-based: More reliable for containers/Docker
+                        try:
+                            content = content_path.read_text(encoding="utf-8")
+                            current_checksum = compute_checksum(content)
+                            if current_checksum != paper_record.checksum:
+                                papers_to_refresh += 1
+                        except (OSError, UnicodeDecodeError):
+                            # If we can't read the file, assume it needs refresh
+                            papers_to_refresh += 1
+                    else:
+                        # mtime-based: Faster but unreliable in containers
+                        content_mtime = datetime.fromtimestamp(
+                            content_path.stat().st_mtime, tz=UTC
+                        )
+                        if content_mtime > paper_record.ingested_at:
+                            papers_to_refresh += 1
+
+        # No papers in registry
+        if registry_updated is None:
+            return FreshnessResult(
+                is_fresh=True,
+                status=FreshnessStatus.FRESH,
+                corpus_updated=corpus_updated,
+                registry_updated=None,
+                recommendation="Registry is empty. No refresh needed.",
+            )
+
+        # Corpus is empty - definitely stale if registry has papers
+        if corpus_updated is None:
+            stale_seconds = (datetime.now(UTC) - registry_updated).total_seconds()
+            return FreshnessResult(
+                is_fresh=False,
+                status=FreshnessStatus.EMPTY_CORPUS,
+                corpus_updated=None,
+                registry_updated=registry_updated,
+                stale_by_seconds=max(0.0, stale_seconds),
+                recommendation="Corpus is empty. Run ensure_fresh() to build corpus.",
+                papers_to_refresh=papers_to_refresh,
+            )
+
+        # Compare timestamps
+        if registry_updated > corpus_updated:
+            stale_seconds = (registry_updated - corpus_updated).total_seconds()
+            return FreshnessResult(
+                is_fresh=False,
+                status=FreshnessStatus.STALE,
+                corpus_updated=corpus_updated,
+                registry_updated=registry_updated,
+                stale_by_seconds=stale_seconds,
+                recommendation=f"Corpus is stale by {stale_seconds:.0f}s. "
+                f"{papers_to_refresh} paper(s) need refreshing.",
+                papers_to_refresh=papers_to_refresh,
+            )
+
+        # Corpus is fresh
+        return FreshnessResult(
+            is_fresh=True,
+            status=FreshnessStatus.FRESH,
+            corpus_updated=corpus_updated,
+            registry_updated=registry_updated,
+            stale_by_seconds=0.0,
+            recommendation="Corpus is up-to-date with registry.",
+            papers_to_refresh=0,
+        )
+
+    def ensure_fresh(
+        self,
+        registry_path: Path,
+        auto_refresh: bool = True,
+        force: bool = False,
+        verify_checksums: bool = False,
+    ) -> FreshnessResult:
+        """Ensure corpus is fresh before agent operations.
+
+        This is the main entry point for agent startup. It checks freshness
+        and optionally triggers an incremental refresh if the corpus is stale.
+
+        Args:
+            registry_path: Path to the registry directory
+            auto_refresh: If True, automatically refresh stale corpus
+            force: If True, refresh even if corpus appears fresh
+            verify_checksums: If True, use checksum comparison instead of mtime
+                for modified paper detection (recommended for containers)
+
+        Returns:
+            FreshnessResult with final freshness status
+        """
+        # Check current freshness
+        result = self.check_freshness(registry_path, verify_checksums=verify_checksums)
+
+        logger.info(
+            "freshness_check_result",
+            is_fresh=result.is_fresh,
+            stale_by_seconds=result.stale_by_seconds,
+            papers_to_refresh=result.papers_to_refresh,
+        )
+
+        # If fresh and not forced, return immediately
+        if result.is_fresh and not force:
+            return result
+
+        # If auto_refresh is disabled, just return the stale result
+        if not auto_refresh:
+            logger.warning(
+                "corpus_stale_no_auto_refresh",
+                stale_by_seconds=result.stale_by_seconds,
+                papers_to_refresh=result.papers_to_refresh,
+            )
+            return result
+
+        # Perform incremental refresh
+        logger.info(
+            "corpus_auto_refresh_starting",
+            papers_to_refresh=result.papers_to_refresh,
+        )
+
+        ingested = self.ingest_from_registry(registry_path, force=force)
+
+        logger.info(
+            "corpus_auto_refresh_complete",
+            papers_ingested=ingested,
+        )
+
+        # Return updated freshness result
+        return FreshnessResult(
+            is_fresh=True,
+            status=FreshnessStatus.FRESH,
+            corpus_updated=self._stats.last_updated,
+            registry_updated=result.registry_updated,
+            stale_by_seconds=0.0,
+            recommendation=f"Corpus refreshed. {ingested} paper(s) ingested.",
+            papers_to_refresh=0,
+        )

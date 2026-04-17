@@ -1,12 +1,21 @@
 """Unit tests for Phase 8 DRA utility functions."""
 
+import json
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
 from src.models.dra import ChunkType, CorpusChunk
 from src.services.dra.utils import (
     ChunkBuilder,
     SectionParser,
     TextNormalizer,
     TokenCounter,
+    atomic_write_json,
     compute_checksum,
+    set_secure_permissions,
     validate_chunk_integrity,
 )
 
@@ -517,3 +526,172 @@ class TestValidateChunkIntegrity:
             checksum=checksum,
         )
         assert validate_chunk_integrity(chunk) is False
+
+
+class TestAtomicWriteJson:
+    """Tests for atomic_write_json function (SR-8.1)."""
+
+    def test_writes_valid_json(self):
+        """Test that atomic_write_json writes valid JSON."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = Path(tmpdir) / "test.json"
+            data = {"key": "value", "number": 42}
+
+            atomic_write_json(target_path, data)
+
+            assert target_path.exists()
+            with open(target_path) as f:
+                loaded = json.load(f)
+            assert loaded == data
+
+    def test_writes_with_indentation(self):
+        """Test that atomic_write_json uses proper indentation."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = Path(tmpdir) / "test.json"
+            data = {"key": "value"}
+
+            atomic_write_json(target_path, data, indent=2)
+
+            content = target_path.read_text()
+            assert "\n" in content  # Indented JSON has newlines
+
+    def test_overwrites_existing_file(self):
+        """Test that atomic_write_json overwrites existing files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = Path(tmpdir) / "test.json"
+            target_path.write_text('{"old": "data"}')
+
+            atomic_write_json(target_path, {"new": "data"})
+
+            with open(target_path) as f:
+                loaded = json.load(f)
+            assert loaded == {"new": "data"}
+
+    def test_no_temp_files_left_on_success(self):
+        """Test that no temp files are left after successful write."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = Path(tmpdir) / "test.json"
+
+            atomic_write_json(target_path, {"key": "value"})
+
+            files = list(Path(tmpdir).iterdir())
+            assert len(files) == 1
+            assert files[0].name == "test.json"
+
+    def test_cleans_up_temp_file_on_json_error(self):
+        """Test that temp files are cleaned up on JSON serialization error."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = Path(tmpdir) / "test.json"
+
+            # Create a non-serializable object
+            class NotSerializable:
+                pass
+
+            with pytest.raises(TypeError):
+                atomic_write_json(target_path, {"bad": NotSerializable()})
+
+            # No temp files should remain
+            files = list(Path(tmpdir).iterdir())
+            assert len(files) == 0
+
+    def test_cleans_up_temp_file_on_rename_error(self):
+        """Test that temp files are cleaned up if rename fails."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = Path(tmpdir) / "test.json"
+
+            with patch("pathlib.Path.rename", side_effect=OSError("Rename failed")):
+                with pytest.raises(OSError):
+                    atomic_write_json(target_path, {"key": "value"})
+
+            # Temp file should be cleaned up
+            files = list(Path(tmpdir).iterdir())
+            assert len(files) == 0
+
+    def test_complex_data_structures(self):
+        """Test atomic_write_json with complex nested data."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = Path(tmpdir) / "test.json"
+            data = {
+                "papers": [
+                    {"id": "paper1", "chunks": ["c1", "c2"]},
+                    {"id": "paper2", "chunks": ["c3"]},
+                ],
+                "stats": {"total": 2, "updated": "2026-01-01"},
+            }
+
+            atomic_write_json(target_path, data)
+
+            with open(target_path) as f:
+                loaded = json.load(f)
+            assert loaded == data
+
+    def test_sets_file_permissions_with_file_mode(self):
+        """Test atomic_write_json sets file permissions when file_mode given."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = Path(tmpdir) / "secure.json"
+
+            # Write with SR-8.1 secure file permissions (0600)
+            atomic_write_json(target_path, {"sensitive": "data"}, file_mode=0o600)
+
+            # Verify file permissions
+            mode = target_path.stat().st_mode & 0o777
+            assert mode == 0o600
+
+    def test_no_file_mode_uses_default_permissions(self):
+        """Test that omitting file_mode doesn't change permissions."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = Path(tmpdir) / "default.json"
+
+            # Write without file_mode
+            atomic_write_json(target_path, {"key": "value"})
+
+            # File should exist (permissions depend on umask)
+            assert target_path.exists()
+
+
+class TestSetSecurePermissions:
+    """Tests for set_secure_permissions function (SR-8.1)."""
+
+    def test_sets_directory_permissions(self):
+        """Test that set_secure_permissions sets correct mode."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_dir = Path(tmpdir) / "secure_dir"
+            test_dir.mkdir()
+
+            set_secure_permissions(test_dir, 0o700)
+
+            # Check permissions (on Unix systems)
+            mode = test_dir.stat().st_mode & 0o777
+            assert mode == 0o700
+
+    def test_sets_file_permissions(self):
+        """Test that set_secure_permissions works on files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_file = Path(tmpdir) / "secure_file.txt"
+            test_file.write_text("test")
+
+            set_secure_permissions(test_file, 0o600)
+
+            mode = test_file.stat().st_mode & 0o777
+            assert mode == 0o600
+
+    def test_handles_chmod_error_gracefully(self):
+        """Test that chmod errors are logged but don't raise."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_path = Path(tmpdir) / "test"
+            test_path.mkdir()
+
+            with patch("os.chmod", side_effect=OSError("Permission denied")):
+                # Should not raise, just log warning
+                set_secure_permissions(test_path, 0o700)
+
+    def test_default_mode_is_0700(self):
+        """Test that default mode is 0o700."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_dir = Path(tmpdir) / "default_mode"
+            test_dir.mkdir()
+
+            set_secure_permissions(test_dir)  # Use default
+
+            mode = test_dir.stat().st_mode & 0o777
+            assert mode == 0o700

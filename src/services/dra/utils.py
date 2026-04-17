@@ -5,11 +5,16 @@ This module provides:
 - Chunk building with overlap
 - Token counting
 - Text normalization for BM25
+- Atomic file operations (SR-8.1)
 """
 
 import hashlib
+import json
+import os
 import re
-from typing import Optional
+import tempfile
+from pathlib import Path
+from typing import Any, Optional
 
 import structlog
 
@@ -512,3 +517,72 @@ def validate_chunk_integrity(chunk: CorpusChunk) -> bool:
 
     computed = compute_checksum(chunk.content)
     return computed == chunk.checksum
+
+
+def atomic_write_json(
+    target_path: Path,
+    data: Any,
+    indent: int = 2,
+    file_mode: Optional[int] = None,
+) -> None:
+    """Write JSON data atomically using temp file + fsync + rename.
+
+    SR-8.1: Ensures corpus integrity by preventing partial writes.
+    Uses fsync for crash durability before atomic rename.
+
+    Args:
+        target_path: Final destination path
+        data: Data to serialize as JSON
+        indent: JSON indentation level (default 2 for readability)
+        file_mode: File permission mode (e.g., 0o600 for owner rw only)
+
+    Raises:
+        OSError: If write or rename fails
+        TypeError: If data is not JSON serializable
+    """
+    # Write to temp file in same directory (required for atomic rename)
+    temp_fd, temp_path_str = tempfile.mkstemp(
+        dir=target_path.parent,
+        prefix=f".{target_path.name}.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(temp_fd, "w") as f:
+            json.dump(data, f, indent=indent)
+            # Flush Python buffers to OS
+            f.flush()
+            # Sync to disk for crash durability (SR-8.1)
+            os.fsync(f.fileno())
+        # Atomic rename (POSIX guarantees atomicity on same filesystem)
+        temp_path = Path(temp_path_str)
+        temp_path.rename(target_path)
+        # SR-8.1: Set secure file permissions after rename (0600 for sensitive data)
+        if file_mode is not None:
+            set_secure_permissions(target_path, file_mode)
+    except (OSError, TypeError, ValueError) as e:
+        # Clean up temp file on error
+        logger.warning(
+            "atomic_write_failed",
+            path=str(target_path),
+            error=str(e),
+        )
+        try:
+            Path(temp_path_str).unlink()
+        except OSError:
+            pass
+        raise
+
+
+def set_secure_permissions(path: Path, mode: int = 0o700) -> None:
+    """Set secure permissions on a path.
+
+    SR-8.1: Restricts directory/file permissions for security.
+
+    Args:
+        path: Path to set permissions on
+        mode: Permission mode (default 0o700 for owner-only access)
+    """
+    try:
+        os.chmod(path, mode)
+    except OSError as e:
+        logger.warning("chmod_failed", path=str(path), error=str(e))

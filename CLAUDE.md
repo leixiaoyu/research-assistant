@@ -451,6 +451,23 @@ Every feature must function **100% of the time** according to its specification 
 
 ## Development Setup
 
+### Quick Setup (Recommended)
+
+```bash
+# One-command setup - does everything
+./setup.sh
+```
+
+This unified setup script:
+1. Verifies Python 3.14+ is available
+2. Creates virtual environment
+3. Installs dependencies
+4. Configures Git aliases (worktree protection)
+5. Installs Git hooks (pre-commit verification)
+6. Creates .env from template
+
+### Manual Setup (Alternative)
+
 ```bash
 # Create virtual environment (requires Python 3.14+)
 python3.14 -m venv venv
@@ -462,7 +479,41 @@ pip install -r requirements.txt
 # Set up environment variables
 cp .env.template .env
 # Then edit .env and add your API keys
+
+# Install Git hooks (REQUIRED)
+./setup.sh --hooks
 ```
+
+### Git Hooks (Two-Tier Enforcement)
+
+The project uses a two-tier Git hook system optimized for developer experience:
+
+**Pre-commit Hook (~3 seconds):**
+- Fast lint checks only
+- Black formatting, Flake8 linting, Mypy types
+- Catches common issues immediately
+- Bypass: `git commit --no-verify`
+
+**Pre-push Hook (~90 seconds):**
+- Full verification before pushing to remote
+- Everything above PLUS full pytest with ≥99% coverage
+- Ensures quality before code reaches the repository
+- Bypass: `git push --no-verify`
+
+**Quick install:**
+```bash
+./setup.sh --hooks
+```
+
+**What each tier enforces:**
+
+| Check | Pre-commit | Pre-push |
+|-------|:----------:|:--------:|
+| Black formatting | ✅ | ✅ |
+| Flake8 linting | ✅ | ✅ |
+| Mypy type checking | ✅ | ✅ |
+| Pragma audit | ❌ | ✅ |
+| Pytest + coverage | ❌ | ✅ |
 
 ## Configuration Files
 

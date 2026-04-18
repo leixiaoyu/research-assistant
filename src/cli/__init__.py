@@ -13,6 +13,8 @@ Usage:
     python -m src.cli feedback rate <paper_id> <rating>
     python -m src.cli feedback similar <paper_id>
     python -m src.cli feedback analytics
+    python -m src.cli research "What are the key techniques?"
+    python -m src.cli research --question-file questions.txt
 """
 
 import typer
@@ -24,6 +26,7 @@ from src.cli.schedule import schedule_app, schedule_command
 from src.cli.health import health_command
 from src.cli.synthesize import synthesize_command
 from src.cli.feedback import app as feedback_app
+from src.cli.research import research_app
 
 # Create main app
 app = typer.Typer(help="ARISP: Automated Research Ingestion & Synthesis Pipeline")
@@ -38,6 +41,7 @@ app.command(name="synthesize")(synthesize_command)
 app.add_typer(catalog_app, name="catalog")
 app.add_typer(schedule_app, name="schedule")
 app.add_typer(feedback_app, name="feedback")
+app.add_typer(research_app, name="research")
 
 # Legacy command registrations for backward compatibility
 # These allow the old invocation style: python -m src.cli catalog show
@@ -57,4 +61,5 @@ __all__ = [
     "health_command",
     "synthesize_command",
     "feedback_app",
+    "research_app",
 ]

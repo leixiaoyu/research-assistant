@@ -24,6 +24,10 @@ from src.cli.utils import (
 
 logger = structlog.get_logger()
 
+# Truncation limits for verbose output
+REASONING_TRUNCATE_LIMIT = 500
+OBSERVATION_TRUNCATE_LIMIT = 300
+
 # Create research sub-application
 research_app = typer.Typer(help="Deep Research Agent commands")
 
@@ -308,14 +312,14 @@ def _format_result(result, verbose: bool = False) -> str:
                 [
                     f"### Turn {turn.turn_number}",
                     "",
-                    f"**Reasoning:** {turn.reasoning[:500]}..."
-                    if len(turn.reasoning) > 500
+                    f"**Reasoning:** {turn.reasoning[:REASONING_TRUNCATE_LIMIT]}..."
+                    if len(turn.reasoning) > REASONING_TRUNCATE_LIMIT
                     else f"**Reasoning:** {turn.reasoning}",
                     "",
                     f"**Action:** `{turn.action.tool.value}`({turn.action.arguments})",
                     "",
-                    f"**Observation:** {turn.observation[:300]}..."
-                    if len(turn.observation) > 300
+                    f"**Observation:** {turn.observation[:OBSERVATION_TRUNCATE_LIMIT]}..."
+                    if len(turn.observation) > OBSERVATION_TRUNCATE_LIMIT
                     else f"**Observation:** {turn.observation}",
                     "",
                 ]

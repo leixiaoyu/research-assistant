@@ -806,3 +806,26 @@ class TestCoverageGaps:
         assert "config_path" in sig.parameters
         assert "max_turns" in sig.parameters
         assert "verbose" in sig.parameters
+
+
+class TestCoverageGapsExecution:
+    """Execution tests that actually run code paths for coverage."""
+
+    @patch("src.cli.research.load_config")
+    def test_status_command_corpus_not_exists(self, mock_load_config, tmp_path):
+        """Execute status with non-existent corpus dir (lines 377-380)."""
+        mock_config = MagicMock()
+        mock_config.settings.dra_settings = MagicMock()
+        mock_config.settings.dra_settings.corpus_dir = str(
+            tmp_path / "nonexistent_corpus"
+        )
+        mock_load_config.return_value = mock_config
+
+        # Use research_app with "status" subcommand
+        result = runner.invoke(research_app, ["status"])
+
+        # Should warn about non-existent directory
+        assert (
+            "not found" in result.stdout.lower()
+            or "Run corpus ingestion" in result.stdout
+        )

@@ -165,10 +165,20 @@ def research_command(
             display_info("Add llm_settings to your config file")
             raise typer.Exit(code=1)
 
-        llm_service = LLMService(
+        # Convert LLMSettings to LLMConfig for LLMService
+        from src.models.llm import CostLimits, LLMConfig
+
+        llm_config = LLMConfig(
             provider=llm_settings.provider,
             model=llm_settings.model,
-            api_key=llm_settings.api_key,
+            api_key=llm_settings.api_key or "",
+            max_tokens=llm_settings.max_tokens,
+            temperature=llm_settings.temperature,
+            timeout=llm_settings.timeout,
+        )
+        llm_service = LLMService(
+            config=llm_config,
+            cost_limits=CostLimits(),
         )
         display_success(f"✓ LLM service initialized ({llm_settings.provider})")
     except Exception as e:
@@ -312,18 +322,22 @@ def _format_result(result, verbose: bool = False) -> str:
                 [
                     f"### Turn {turn.turn_number}",
                     "",
-                    f"**Reasoning:** {turn.reasoning[:REASONING_TRUNCATE_LIMIT]}..."
-                    if len(turn.reasoning) > REASONING_TRUNCATE_LIMIT
-                    else f"**Reasoning:** {turn.reasoning}",
+                    (
+                        f"**Reasoning:** {turn.reasoning[:REASONING_TRUNCATE_LIMIT]}..."
+                        if len(turn.reasoning) > REASONING_TRUNCATE_LIMIT
+                        else f"**Reasoning:** {turn.reasoning}"
+                    ),
                     "",
                     f"**Action:** `{turn.action.tool.value}`({turn.action.arguments})",
                     "",
                     (
-                        f"**Observation:** "
-                        f"{turn.observation[:OBSERVATION_TRUNCATE_LIMIT]}..."
-                    )
-                    if len(turn.observation) > OBSERVATION_TRUNCATE_LIMIT
-                    else f"**Observation:** {turn.observation}",
+                        (
+                            f"**Observation:** "
+                            f"{turn.observation[:OBSERVATION_TRUNCATE_LIMIT]}..."
+                        )
+                        if len(turn.observation) > OBSERVATION_TRUNCATE_LIMIT
+                        else f"**Observation:** {turn.observation}"
+                    ),
                     "",
                 ]
             )
@@ -370,15 +384,15 @@ def status_command(
 
         corpus_config = CorpusConfig(corpus_dir=str(corpus_dir))
         corpus_manager = CorpusManager(config=corpus_config)
-        stats = corpus_manager.get_stats()
+        stats = corpus_manager.stats
 
         display_success(f"✓ Corpus directory: {corpus_dir}")
-        display_info(f"  Papers: {stats.paper_count}")
-        display_info(f"  Chunks: {stats.chunk_count}")
-        display_info(f"  Index status: {'Ready' if stats.index_ready else 'Not built'}")
+        display_info(f"  Papers: {stats.total_papers}")
+        display_info(f"  Chunks: {stats.total_chunks}")
+        display_info(f"  Tokens: {stats.total_tokens:,}")
 
-        if stats.last_refresh:
-            display_info(f"  Last refresh: {stats.last_refresh}")
+        if stats.last_updated:
+            display_info(f"  Last updated: {stats.last_updated}")
 
     except Exception as e:
         display_error(f"Failed to read corpus: {e}")
@@ -408,8 +422,10 @@ def research_single_command(
     ),
 ) -> None:
     """Execute a single research question (convenience wrapper)."""
-    # Create a mock context and delegate
-    ctx = typer.Context(research_command)
+    # Create a mock context and delegate.
+    # Note: Type ignore needed because @handle_errors decorator changes
+    # the function type, but this works at runtime for Typer delegation.
+    ctx = typer.Context(research_command)  # type: ignore[arg-type]
     research_command(
         ctx=ctx,
         question=question,

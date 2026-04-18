@@ -7,7 +7,6 @@ from typer.testing import CliRunner
 from src.cli import app
 from src.cli.research import research_app, _format_result
 
-
 runner = CliRunner()
 
 
@@ -59,9 +58,7 @@ class TestQuestionFileProcessing:
 
         mock_load_config.return_value = MagicMock()
 
-        result = runner.invoke(
-            research_app, ["--question-file", str(question_file)]
-        )
+        result = runner.invoke(research_app, ["--question-file", str(question_file)])
 
         assert result.exit_code == 1
         assert "No questions found" in result.stdout
@@ -328,8 +325,7 @@ class TestResearchCommandExecution:
 
         assert result.exit_code == 0
         assert (
-            "Answer produced" in result.stdout
-            or "attention" in result.stdout.lower()
+            "Answer produced" in result.stdout or "attention" in result.stdout.lower()
         )
 
     @patch("src.services.dra.agent.DeepResearchAgent")
@@ -634,8 +630,8 @@ class TestCLICodeCoverage:
         source = inspect.getsource(status_command)
         # Verify key status command elements
         assert "CorpusManager" in source
-        assert "get_stats" in source
-        assert "paper_count" in source
+        assert ".stats" in source  # Uses stats property
+        assert "total_papers" in source  # CorpusStats attribute
 
     def test_display_functions_imported(self):
         """Test display functions are available."""

@@ -10,6 +10,7 @@ Note: This module contains multi-line prompt strings that intentionally
 exceed line length limits for LLM readability. Line length warnings
 are suppressed for prompt content.
 """
+
 # flake8: noqa: E501
 
 from typing import Optional

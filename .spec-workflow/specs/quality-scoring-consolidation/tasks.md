@@ -204,8 +204,9 @@ Tasks are organized by implementation phase as defined in the design document.
 **Acceptance Criteria:**
 - [x] DiscoveryPhase calls `discover()` based on config
 - [x] `multi_source_enabled=True` → mode=DEEP
-- [x] `enhanced_enabled=True` → mode=STANDARD
-- [x] Neither enabled → mode=SURFACE
+- [x] `settings.enhanced_discovery is not None` → mode=STANDARD
+- [x] Neither configured → mode=SURFACE
+- [x] Precedence: multi_source (DEEP) > enhanced_discovery (STANDARD) > SURFACE
 - [x] Use DiscoveryResult.metrics directly (no separate stats)
 - [x] Preserve source_breakdown for reporting
 

@@ -266,11 +266,14 @@ class DiscoveryPhase(PipelinePhase[DiscoveryResult]):
                 result.phase72_stats.papers_after_dedup = len(result.papers)
 
             # Use DiscoveryResult.metrics directly for stats
+            # Note: filtered_count can be negative if citation exploration adds papers
+            # after papers_retrieved was captured, so we clamp to 0
             result.discovery_stats = DiscoveryStats(
                 total_discovered=discovery_result.metrics.papers_retrieved,
                 new_count=len(result.papers),
-                filtered_count=discovery_result.metrics.papers_retrieved
-                - len(result.papers),
+                filtered_count=max(
+                    0, discovery_result.metrics.papers_retrieved - len(result.papers)
+                ),
                 filter_breakdown={},
                 incremental_query=(
                     resolved_timeframe.is_incremental if resolved_timeframe else False

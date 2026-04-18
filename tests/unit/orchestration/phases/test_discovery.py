@@ -407,7 +407,7 @@ class TestDiscoveryPhasePhase71Integration:
 
     @pytest.mark.asyncio
     async def test_force_full_timeframe_overrides_incremental(
-        self, mock_context, sample_papers
+        self, mock_context, sample_scored_papers
     ):
         """Test force_full_timeframe bypasses incremental discovery."""
         # Enable incremental discovery
@@ -423,9 +423,14 @@ class TestDiscoveryPhasePhase71Integration:
         )
 
         mock_context.config.research_topics = [topic]
-        mock_context.discovery_service.search.return_value = sample_papers
         mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
             topic_slug="machine-learning"
+        )
+
+        # Mock discover() to return proper DiscoveryAPIResult with valid metrics
+        discovery_result = make_discovery_result(sample_scored_papers)
+        mock_context.discovery_service.discover = AsyncMock(
+            return_value=discovery_result
         )
 
         phase = DiscoveryPhase(mock_context)

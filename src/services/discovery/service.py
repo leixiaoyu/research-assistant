@@ -161,6 +161,38 @@ class DiscoveryService:
         self._metrics_collector = MetricsCollector()
         self._result_merger = ResultMerger()
 
+    async def close(self) -> None:
+        """Close all provider HTTP sessions to prevent resource leaks.
+
+        This should be called when the DiscoveryService is no longer needed,
+        especially in long-running applications to avoid aiohttp session leaks.
+
+        Suppresses InterruptedError during cleanup to prevent noise in logs
+        when the process is terminated by signals (e.g., launchd shutdown).
+        """
+        for provider_type, provider in self.providers.items():
+            if hasattr(provider, "close") and callable(provider.close):
+                try:
+                    await provider.close()
+                    logger.debug(
+                        "provider_session_closed",
+                        provider=provider_type.value,
+                    )
+                except InterruptedError:
+                    # Suppress InterruptedError during shutdown (Bug #4)
+                    # This commonly occurs when marker-pdf cleanup is interrupted
+                    # by process termination signals (SIGTERM from launchd)
+                    logger.debug(
+                        "provider_close_interrupted",
+                        provider=provider_type.value,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "provider_close_failed",
+                        provider=provider_type.value,
+                        error=str(e),
+                    )
+
     # =========================================================================
     # Backward Compatibility: Delegate to internal components
     # =========================================================================
@@ -1068,7 +1100,8 @@ class DiscoveryService:
                 ) + len(result)
                 all_papers.extend(result)
 
-        papers_retrieved = len(all_papers)
+        # Note: papers_retrieved is captured after citation exploration
+        # to include all papers in the count
 
         # Step 3: Citation exploration (if enabled and SS available)
         forward_citations_found = 0
@@ -1118,6 +1151,12 @@ class DiscoveryService:
                 forward=forward_citations_found,
                 backward=backward_citations_found,
             )
+
+            # Clean up: close the citation explorer session
+            await explorer.close()
+
+        # Capture papers_retrieved after citation exploration to include all papers
+        papers_retrieved = len(all_papers)
 
         # Step 4: Deduplication
         deduplicated_papers: List[PaperMetadata] = []

@@ -829,3 +829,323 @@ class TestCoverageGapsExecution:
             "not found" in result.stdout.lower()
             or "Run corpus ingestion" in result.stdout
         )
+
+
+class TestDirectFunctionCalls:
+    """Direct function call tests to cover hard-to-reach paths."""
+
+    def test_research_command_subcommand_returns_early(self):
+        """Test line 85: early return when subcommand is invoked."""
+        from pathlib import Path
+
+        import typer
+
+        from src.cli.research import research_command
+
+        # Create mock context with invoked_subcommand set
+        mock_ctx = MagicMock(spec=typer.Context)
+        mock_ctx.invoked_subcommand = "status"
+
+        # Call should return early without doing anything
+        result = research_command(
+            ctx=mock_ctx,
+            question=None,
+            question_file=None,
+            config_path=Path("config.yaml"),
+            max_turns=50,
+            output_file=None,
+            verbose=False,
+        )
+
+        # Should return None (early return)
+        assert result is None
+
+    def test_research_command_both_question_and_file_error(self, tmp_path):
+        """Test lines 93-94: error when both question and file provided."""
+        from pathlib import Path
+
+        import pytest
+        import typer
+
+        from src.cli.research import research_command
+
+        # Create mock context
+        mock_ctx = MagicMock()
+        mock_ctx.invoked_subcommand = None
+
+        question_file = tmp_path / "questions.txt"
+        question_file.write_text("Question 1\n")
+
+        # Should raise Exit with code 1
+        with pytest.raises(typer.Exit) as exc_info:
+            research_command(
+                ctx=mock_ctx,
+                question="A question?",
+                question_file=question_file,
+                config_path=Path("config.yaml"),
+                max_turns=50,
+                output_file=None,
+                verbose=False,
+            )
+
+        assert exc_info.value.exit_code == 1
+
+    @patch("src.cli.research.load_config")
+    def test_research_command_import_error(self, mock_load_config, tmp_path):
+        """Test lines 126-129: ImportError handling."""
+        import builtins
+        from pathlib import Path
+
+        import pytest
+        import typer
+
+        from src.cli.research import research_command
+
+        mock_ctx = MagicMock()
+        mock_ctx.invoked_subcommand = None
+
+        mock_config = MagicMock()
+        mock_load_config.return_value = mock_config
+
+        # Save original import function
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if "dra" in name and "src" in name:
+                raise ImportError("Test import error")
+            return original_import(name, *args, **kwargs)
+
+        with patch.object(builtins, "__import__", mock_import):
+            with pytest.raises(typer.Exit) as exc_info:
+                research_command(
+                    ctx=mock_ctx,
+                    question="Test question?",
+                    question_file=None,
+                    config_path=Path("config.yaml"),
+                    max_turns=50,
+                    output_file=None,
+                    verbose=False,
+                )
+
+            assert exc_info.value.exit_code == 1
+
+    @patch("src.services.dra.agent.DeepResearchAgent")
+    @patch("src.services.llm.service.LLMService")
+    @patch("src.services.dra.browser.ResearchBrowser")
+    @patch("src.services.dra.corpus_manager.CorpusManager")
+    @patch("src.cli.research.load_config")
+    def test_research_command_output_file(
+        self,
+        mock_load_config,
+        mock_corpus_manager,
+        mock_browser,
+        mock_llm_service,
+        mock_agent,
+        tmp_path,
+    ):
+        """Test lines 239-240: output file writing."""
+        from pathlib import Path
+
+        from src.cli.research import research_command
+        from src.models.dra import ResearchResult
+
+        mock_ctx = MagicMock()
+        mock_ctx.invoked_subcommand = None
+
+        output_file = tmp_path / "results.md"
+
+        mock_config = MagicMock()
+        mock_config.settings.dra_settings = None
+        mock_config.settings.llm_settings.provider = "anthropic"
+        mock_config.settings.llm_settings.model = "claude-3"
+        mock_config.settings.llm_settings.api_key = "test-key"
+        mock_config.settings.llm_settings.max_tokens = 4096
+        mock_config.settings.llm_settings.temperature = 0.7
+        mock_config.settings.llm_settings.timeout = 30
+        mock_load_config.return_value = mock_config
+
+        mock_manager = MagicMock()
+        mock_manager.paper_count = 50
+        mock_corpus_manager.return_value = mock_manager
+
+        mock_result = ResearchResult(
+            question="Test?",
+            answer="Answer.",
+            total_turns=2,
+            papers_consulted=["paper1"],
+            trajectory=[],
+            exhausted=False,
+            duration_seconds=10.0,
+            total_tokens=1000,
+        )
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.research.return_value = mock_result
+        mock_agent.return_value = mock_agent_instance
+
+        # Call directly with output_file
+        research_command(
+            ctx=mock_ctx,
+            question="Test?",
+            question_file=None,
+            config_path=Path("config.yaml"),
+            max_turns=50,
+            output_file=output_file,
+            verbose=False,
+        )
+
+        # Output file should be written
+        assert output_file.exists()
+        content = output_file.read_text()
+        assert "Test?" in content
+
+    @patch("src.services.dra.agent.DeepResearchAgent")
+    @patch("src.services.llm.service.LLMService")
+    @patch("src.services.dra.browser.ResearchBrowser")
+    @patch("src.services.dra.corpus_manager.CorpusManager")
+    @patch("src.cli.research.load_config")
+    def test_research_command_verbose_mode(
+        self,
+        mock_load_config,
+        mock_corpus_manager,
+        mock_browser,
+        mock_llm_service,
+        mock_agent,
+    ):
+        """Test line 208: verbose mode message."""
+        from pathlib import Path
+
+        from src.cli.research import research_command
+        from src.models.dra import ResearchResult
+
+        mock_ctx = MagicMock()
+        mock_ctx.invoked_subcommand = None
+
+        mock_config = MagicMock()
+        mock_config.settings.dra_settings = None
+        mock_config.settings.llm_settings.provider = "anthropic"
+        mock_config.settings.llm_settings.model = "claude-3"
+        mock_config.settings.llm_settings.api_key = "test-key"
+        mock_config.settings.llm_settings.max_tokens = 4096
+        mock_config.settings.llm_settings.temperature = 0.7
+        mock_config.settings.llm_settings.timeout = 30
+        mock_load_config.return_value = mock_config
+
+        mock_manager = MagicMock()
+        mock_manager.paper_count = 50
+        mock_corpus_manager.return_value = mock_manager
+
+        mock_result = ResearchResult(
+            question="Test?",
+            answer="Answer.",
+            total_turns=2,
+            papers_consulted=[],
+            trajectory=[],
+            exhausted=False,
+            duration_seconds=10.0,
+            total_tokens=1000,
+        )
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.research.return_value = mock_result
+        mock_agent.return_value = mock_agent_instance
+
+        # Call with verbose=True (line 208 should execute)
+        research_command(
+            ctx=mock_ctx,
+            question="Test?",
+            question_file=None,
+            config_path=Path("config.yaml"),
+            max_turns=50,
+            output_file=None,
+            verbose=True,
+        )
+
+        # Just verify it ran without error
+
+    @patch("src.services.dra.corpus_manager.CorpusManager")
+    @patch("src.cli.research.load_config")
+    def test_status_command_success_path(
+        self, mock_load_config, mock_corpus_manager, tmp_path
+    ):
+        """Test lines 382-395: status command success."""
+        from datetime import UTC, datetime
+        from pathlib import Path
+
+        from src.cli.research import status_command
+
+        # Create corpus directory
+        corpus_dir = tmp_path / "corpus"
+        corpus_dir.mkdir()
+
+        mock_config = MagicMock()
+        mock_config.settings.dra_settings = MagicMock()
+        mock_config.settings.dra_settings.corpus_dir = str(corpus_dir)
+        mock_load_config.return_value = mock_config
+
+        mock_stats = MagicMock()
+        mock_stats.total_papers = 100
+        mock_stats.total_chunks = 500
+        mock_stats.total_tokens = 50000
+        mock_stats.last_updated = datetime.now(UTC)
+
+        mock_manager = MagicMock()
+        mock_manager.stats = mock_stats
+        mock_corpus_manager.return_value = mock_manager
+
+        # Call directly (should not raise)
+        status_command(config_path=Path("config.yaml"))
+
+    @patch("src.services.dra.corpus_manager.CorpusManager")
+    @patch("src.cli.research.load_config")
+    def test_status_command_no_last_updated(
+        self, mock_load_config, mock_corpus_manager, tmp_path
+    ):
+        """Test line 394 branch: no last_updated."""
+        from pathlib import Path
+
+        from src.cli.research import status_command
+
+        # Create corpus directory
+        corpus_dir = tmp_path / "corpus"
+        corpus_dir.mkdir()
+
+        mock_config = MagicMock()
+        mock_config.settings.dra_settings = MagicMock()
+        mock_config.settings.dra_settings.corpus_dir = str(corpus_dir)
+        mock_load_config.return_value = mock_config
+
+        mock_stats = MagicMock()
+        mock_stats.total_papers = 50
+        mock_stats.total_chunks = 200
+        mock_stats.total_tokens = 25000
+        mock_stats.last_updated = None  # No last_updated
+
+        mock_manager = MagicMock()
+        mock_manager.stats = mock_stats
+        mock_corpus_manager.return_value = mock_manager
+
+        # Call directly (should not raise)
+        status_command(config_path=Path("config.yaml"))
+
+    @patch("src.services.dra.corpus_manager.CorpusManager")
+    @patch("src.cli.research.load_config")
+    def test_status_command_exception(
+        self, mock_load_config, mock_corpus_manager, tmp_path
+    ):
+        """Test lines 397-398: exception handling."""
+        from pathlib import Path
+
+        from src.cli.research import status_command
+
+        # Create corpus directory
+        corpus_dir = tmp_path / "corpus"
+        corpus_dir.mkdir()
+
+        mock_config = MagicMock()
+        mock_config.settings.dra_settings = MagicMock()
+        mock_config.settings.dra_settings.corpus_dir = str(corpus_dir)
+        mock_load_config.return_value = mock_config
+
+        mock_corpus_manager.side_effect = Exception("Test error")
+
+        # Call directly (should not raise, just display error)
+        status_command(config_path=Path("config.yaml"))

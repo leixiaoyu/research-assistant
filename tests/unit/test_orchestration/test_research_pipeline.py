@@ -311,6 +311,152 @@ class TestResearchPipelinePhase72:
         assert phase.aggregation_config == aggregation_config
 
 
+class TestResearchPipelineDiscoveryModeWiring:
+    """End-to-end wiring from pipeline config → DiscoveryPhase → discover() mode.
+
+    The unit tests in ``tests/unit/orchestration/phases/test_discovery.py``
+    exercise the mode-selection ladder in isolation. These tests close the
+    integration gap by verifying that a pipeline built from a real
+    ``ResearchConfig`` actually passes the expected ``mode`` kwarg all the
+    way through to ``DiscoveryService.discover()``.
+    """
+
+    def _make_context_with_settings(self, settings_overrides):
+        """Construct a minimal context with configurable settings."""
+        from src.models.discovery import DiscoveryMode  # noqa: F401
+
+        mock_context = MagicMock()
+        # Apply all Phase 7.2 defaults to None unless overridden.
+        mock_context.config.settings.query_expansion = settings_overrides.get(
+            "query_expansion"
+        )
+        mock_context.config.settings.citation_exploration = settings_overrides.get(
+            "citation_exploration"
+        )
+        mock_context.config.settings.aggregation = settings_overrides.get("aggregation")
+        mock_context.config.settings.enhanced_discovery = settings_overrides.get(
+            "enhanced_discovery"
+        )
+        # Disable filters / incremental for deterministic mode assertion.
+        mock_context.config.settings.discovery_filter_settings = MagicMock(
+            enabled=False, register_at_discovery=False
+        )
+        mock_context.config.settings.incremental_discovery_settings = MagicMock(
+            enabled=False
+        )
+        mock_context.config.research_topics = []
+        mock_context.errors = []
+        mock_context.catalog_service = MagicMock()
+        mock_context.discovery_service = AsyncMock()
+        mock_context.registry_service = None
+        mock_context.add_error = MagicMock()
+        mock_context.add_discovered_papers = MagicMock()
+        return mock_context
+
+    @pytest.mark.asyncio
+    async def test_pipeline_with_enhanced_discovery_triggers_standard_mode(self):
+        """Config sets `enhanced_discovery` → pipeline → phase → discover(STANDARD)."""
+        from src.models.config import (
+            EnhancedDiscoveryConfig,
+            ResearchTopic,
+            TimeframeRecent,
+        )
+        from src.models.discovery import (
+            DiscoveryResult as DiscoveryAPIResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+        )
+
+        pipeline = ResearchPipeline()
+        mock_context = self._make_context_with_settings(
+            {"enhanced_discovery": EnhancedDiscoveryConfig()}
+        )
+        mock_context.config.research_topics = [
+            ResearchTopic(
+                query="quantum computing", timeframe=TimeframeRecent(value="7d")
+            )
+        ]
+        mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
+            topic_slug="quantum-computing"
+        )
+        mock_context.discovery_service.discover = AsyncMock(
+            return_value=DiscoveryAPIResult(
+                papers=[],
+                metrics=DiscoveryMetrics(
+                    papers_retrieved=0,
+                    papers_after_dedup=0,
+                    papers_after_quality_filter=0,
+                    papers_after_relevance_filter=0,
+                    providers_queried=[],
+                    avg_relevance_score=0.0,
+                    avg_quality_score=0.0,
+                    pipeline_duration_ms=1,
+                ),
+                queries_used=[],
+                source_breakdown={},
+                mode=DiscoveryMode.STANDARD,
+            )
+        )
+        pipeline._context = mock_context
+
+        # Pipeline builds phase from context; phase reads enhanced_discovery.
+        phase = pipeline._create_discovery_phase()
+        assert phase.multi_source_enabled is False
+        await phase.execute()
+
+        mock_context.discovery_service.discover.assert_called_once()
+        call_mode = mock_context.discovery_service.discover.call_args[1]["mode"]
+        assert call_mode == DiscoveryMode.STANDARD
+
+    @pytest.mark.asyncio
+    async def test_pipeline_without_enhanced_discovery_triggers_surface_mode(self):
+        """No config → pipeline → phase → discover(SURFACE)."""
+        from src.models.config import ResearchTopic, TimeframeRecent
+        from src.models.discovery import (
+            DiscoveryResult as DiscoveryAPIResult,
+            DiscoveryMetrics,
+            DiscoveryMode,
+        )
+
+        pipeline = ResearchPipeline()
+        mock_context = self._make_context_with_settings({})  # all None
+        mock_context.config.research_topics = [
+            ResearchTopic(
+                query="quantum computing", timeframe=TimeframeRecent(value="7d")
+            )
+        ]
+        mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
+            topic_slug="quantum-computing"
+        )
+        mock_context.discovery_service.discover = AsyncMock(
+            return_value=DiscoveryAPIResult(
+                papers=[],
+                metrics=DiscoveryMetrics(
+                    papers_retrieved=0,
+                    papers_after_dedup=0,
+                    papers_after_quality_filter=0,
+                    papers_after_relevance_filter=0,
+                    providers_queried=[],
+                    avg_relevance_score=0.0,
+                    avg_quality_score=0.0,
+                    pipeline_duration_ms=1,
+                ),
+                queries_used=[],
+                source_breakdown={},
+                mode=DiscoveryMode.SURFACE,
+            )
+        )
+        pipeline._context = mock_context
+
+        phase = pipeline._create_discovery_phase()
+        assert phase.multi_source_enabled is False
+        await phase.execute()
+
+        mock_context.discovery_service.discover.assert_called_once()
+        call_mode = mock_context.discovery_service.discover.call_args[1]["mode"]
+        assert call_mode == DiscoveryMode.SURFACE
+
+
 class TestResearchPipelineProcessTopic:
     """Tests for _process_topic method."""
 

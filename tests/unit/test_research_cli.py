@@ -1149,3 +1149,84 @@ class TestDirectFunctionCalls:
 
         # Call directly (should not raise, just display error)
         status_command(config_path=Path("config.yaml"))
+
+    @patch("src.cli.research.load_config")
+    def test_status_command_corpus_not_exists_direct(self, mock_load_config, tmp_path):
+        """Test lines 378-380: corpus dir not exists (direct call)."""
+        from pathlib import Path
+
+        from src.cli.research import status_command
+
+        mock_config = MagicMock()
+        mock_config.settings.dra_settings = MagicMock()
+        mock_config.settings.dra_settings.corpus_dir = str(tmp_path / "nonexistent_dir")
+        mock_load_config.return_value = mock_config
+
+        # Call directly - should return early without error
+        status_command(config_path=Path("config.yaml"))
+
+    @patch("src.services.dra.agent.DeepResearchAgent")
+    @patch("src.services.llm.service.LLMService")
+    @patch("src.services.dra.browser.ResearchBrowser")
+    @patch("src.services.dra.corpus_manager.CorpusManager")
+    @patch("src.cli.research.load_config")
+    def test_research_command_question_file_branch(
+        self,
+        mock_load_config,
+        mock_corpus_manager,
+        mock_browser,
+        mock_llm_service,
+        mock_agent,
+        tmp_path,
+    ):
+        """Test lines 100->115: question_file branch."""
+        from pathlib import Path
+
+        from src.cli.research import research_command
+        from src.models.dra import ResearchResult
+
+        mock_ctx = MagicMock()
+        mock_ctx.invoked_subcommand = None
+
+        # Create question file
+        question_file = tmp_path / "questions.txt"
+        question_file.write_text("Question from file?\n# Comment\n")
+
+        mock_config = MagicMock()
+        mock_config.settings.dra_settings = None
+        mock_config.settings.llm_settings.provider = "anthropic"
+        mock_config.settings.llm_settings.model = "claude-3"
+        mock_config.settings.llm_settings.api_key = "test-key"
+        mock_config.settings.llm_settings.max_tokens = 4096
+        mock_config.settings.llm_settings.temperature = 0.7
+        mock_config.settings.llm_settings.timeout = 30
+        mock_load_config.return_value = mock_config
+
+        mock_manager = MagicMock()
+        mock_manager.paper_count = 50
+        mock_corpus_manager.return_value = mock_manager
+
+        mock_result = ResearchResult(
+            question="Question from file?",
+            answer="Answer.",
+            total_turns=2,
+            papers_consulted=[],
+            trajectory=[],
+            exhausted=False,
+            duration_seconds=10.0,
+            total_tokens=1000,
+        )
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.research.return_value = mock_result
+        mock_agent.return_value = mock_agent_instance
+
+        # Call with question_file instead of question (covers elif branch)
+        research_command(
+            ctx=mock_ctx,
+            question=None,  # No question
+            question_file=question_file,  # Use file instead
+            config_path=Path("config.yaml"),
+            max_turns=50,
+            output_file=None,
+            verbose=False,
+        )

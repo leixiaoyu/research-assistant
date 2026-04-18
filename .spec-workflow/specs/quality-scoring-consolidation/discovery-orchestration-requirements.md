@@ -190,10 +190,11 @@ This document extends the Quality Scoring Consolidation specification to address
 
 1. WHEN `DiscoveryPhase.execute()` runs THEN it SHALL call `DiscoveryService.discover()` with appropriate mode based on config
 2. WHEN `multi_source_enabled=True` THEN the phase SHALL use `mode=DEEP`
-3. WHEN `multi_source_enabled=False` AND `enhanced_enabled=True` THEN the phase SHALL use `mode=STANDARD`
-4. WHEN neither is enabled THEN the phase SHALL use `mode=SURFACE`
-5. WHEN discovery completes THEN the phase SHALL use `DiscoveryResult.metrics` directly (no separate stats collection)
-6. WHEN discovery completes THEN the phase SHALL preserve `DiscoveryResult.source_breakdown` for reporting
+3. WHEN `multi_source_enabled=False` AND `settings.enhanced_discovery is not None` THEN the phase SHALL use `mode=STANDARD`
+4. WHEN neither is configured THEN the phase SHALL use `mode=SURFACE`
+5. Precedence: `multi_source_enabled` (DEEP) SHALL take precedence over `enhanced_discovery` (STANDARD) when both are set
+6. WHEN discovery completes THEN the phase SHALL use `DiscoveryResult.metrics` directly (no separate stats collection)
+7. WHEN discovery completes THEN the phase SHALL preserve `DiscoveryResult.source_breakdown` for reporting
 
 ## Non-Functional Requirements
 

@@ -14,6 +14,7 @@ from src.models.config import (
     ResearchTopic,
     TimeframeRecent,
     DiscoveryFilterSettings,
+    EnhancedDiscoveryConfig,
     IncrementalDiscoverySettings,
 )
 from src.models.discovery import (
@@ -30,7 +31,12 @@ from src.services.providers.base import APIError
 
 @pytest.fixture
 def mock_context():
-    """Create mock pipeline context."""
+    """Create mock pipeline context.
+
+    Mirrors a production-default ``GlobalSettings`` shape:
+    no Phase 6 ``enhanced_discovery`` is configured, so DiscoveryPhase
+    selects ``DiscoveryMode.SURFACE`` unless a test overrides it.
+    """
     context = MagicMock(spec=PipelineContext)
     context.config = MagicMock()
     context.config.research_topics = []
@@ -44,6 +50,10 @@ def mock_context():
             enabled=False,
         )
     )
+    # Production default: no Phase 6 enhanced discovery → SURFACE mode.
+    # Explicit None avoids MagicMock's truthy-attribute default masking the
+    # real branch under test.
+    context.config.settings.enhanced_discovery = None
     context.discovery_service = AsyncMock()
     context.catalog_service = MagicMock()
     context.registry_service = None
@@ -228,9 +238,8 @@ class TestDiscoveryPhase:
         mock_context.discovery_service.discover.assert_called_once()
         call_args = mock_context.discovery_service.discover.call_args
         assert call_args[1]["topic"] == "machine learning"
-        # Mode defaults to STANDARD when neither multi_source nor
-        # enhanced_enabled is set
-        assert call_args[1]["mode"] == DiscoveryMode.STANDARD
+        # Default: no multi_source, no enhanced_discovery → SURFACE mode.
+        assert call_args[1]["mode"] == DiscoveryMode.SURFACE
 
     @pytest.mark.asyncio
     async def test_execute_topic_api_error(self, mock_context, sample_topic):
@@ -705,3 +714,86 @@ class TestDiscoveryPhasePhase71Integration:
         assert result.total_papers == 2
         # Paper should still be included, but its date might be None or default
         # Our goal is to hit the 'except ValueError' in _convert_scored_to_metadata()
+
+
+class TestDiscoveryPhaseModeSelection:
+    """Explicit coverage of DiscoveryPhase → DiscoveryMode selection.
+
+    DiscoveryPhase chooses which discover() mode to invoke based on two
+    typed config inputs:
+      - ``multi_source_enabled`` (constructor arg, driven by Phase 7.2
+        query_expansion/citation_exploration config)
+      - ``settings.enhanced_discovery`` (Phase 6 config object; ``None``
+        means "not configured")
+
+    These tests assert each branch deterministically, without relying on
+    MagicMock attribute truthiness.
+    """
+
+    async def _run_and_capture_mode(
+        self, mock_context, sample_topic, sample_scored_papers, **phase_kwargs
+    ) -> DiscoveryMode:
+        """Execute a phase and return the mode passed to discover()."""
+        mock_context.config.research_topics = [sample_topic]
+        mock_context.catalog_service.get_or_create_topic.return_value = MagicMock(
+            topic_slug="machine-learning"
+        )
+        discovery_result = make_discovery_result(sample_scored_papers)
+        mock_context.discovery_service.discover = AsyncMock(
+            return_value=discovery_result
+        )
+
+        phase = DiscoveryPhase(mock_context, **phase_kwargs)
+        await phase.execute()
+
+        mock_context.discovery_service.discover.assert_called_once()
+        return mock_context.discovery_service.discover.call_args[1]["mode"]
+
+    @pytest.mark.asyncio
+    async def test_surface_mode_when_no_features_configured(
+        self, mock_context, sample_topic, sample_scored_papers
+    ):
+        """Default config (no multi_source, no enhanced_discovery) → SURFACE."""
+        # Fixture already sets enhanced_discovery = None.
+        mode = await self._run_and_capture_mode(
+            mock_context, sample_topic, sample_scored_papers
+        )
+        assert mode == DiscoveryMode.SURFACE
+
+    @pytest.mark.asyncio
+    async def test_standard_mode_when_enhanced_discovery_configured(
+        self, mock_context, sample_topic, sample_scored_papers
+    ):
+        """Non-None settings.enhanced_discovery → STANDARD mode."""
+        mock_context.config.settings.enhanced_discovery = EnhancedDiscoveryConfig()
+        mode = await self._run_and_capture_mode(
+            mock_context, sample_topic, sample_scored_papers
+        )
+        assert mode == DiscoveryMode.STANDARD
+
+    @pytest.mark.asyncio
+    async def test_deep_mode_when_multi_source_enabled(
+        self, mock_context, sample_topic, sample_scored_papers
+    ):
+        """multi_source_enabled=True → DEEP mode."""
+        mode = await self._run_and_capture_mode(
+            mock_context,
+            sample_topic,
+            sample_scored_papers,
+            multi_source_enabled=True,
+        )
+        assert mode == DiscoveryMode.DEEP
+
+    @pytest.mark.asyncio
+    async def test_multi_source_takes_precedence_over_enhanced_discovery(
+        self, mock_context, sample_topic, sample_scored_papers
+    ):
+        """When both flags are set, multi_source (DEEP) wins."""
+        mock_context.config.settings.enhanced_discovery = EnhancedDiscoveryConfig()
+        mode = await self._run_and_capture_mode(
+            mock_context,
+            sample_topic,
+            sample_scored_papers,
+            multi_source_enabled=True,
+        )
+        assert mode == DiscoveryMode.DEEP

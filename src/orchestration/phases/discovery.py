@@ -219,11 +219,14 @@ class DiscoveryPhase(PipelinePhase[DiscoveryResult]):
                 multi_source=self.multi_source_enabled,
             )
 
-            # Phase 8: Use unified discover() API based on configuration
-            # Determine discovery mode from config flags
+            # Phase 8: Use unified discover() API based on typed config.
+            # Mode selection precedence:
+            #   - Phase 7.2 multi-source (query expansion / citations) → DEEP
+            #   - Phase 6 enhanced_discovery configured → STANDARD
+            #   - Otherwise → SURFACE (fast single-provider default)
             if self.multi_source_enabled:
                 mode = DiscoveryMode.DEEP
-            elif getattr(self.context.config.settings, "enhanced_enabled", False):
+            elif self.context.config.settings.enhanced_discovery is not None:
                 mode = DiscoveryMode.STANDARD
             else:
                 mode = DiscoveryMode.SURFACE

@@ -318,7 +318,10 @@ def _format_result(result, verbose: bool = False) -> str:
                     "",
                     f"**Action:** `{turn.action.tool.value}`({turn.action.arguments})",
                     "",
-                    f"**Observation:** {turn.observation[:OBSERVATION_TRUNCATE_LIMIT]}..."
+                    (
+                        f"**Observation:** "
+                        f"{turn.observation[:OBSERVATION_TRUNCATE_LIMIT]}..."
+                    )
                     if len(turn.observation) > OBSERVATION_TRUNCATE_LIMIT
                     else f"**Observation:** {turn.observation}",
                     "",

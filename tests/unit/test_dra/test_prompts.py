@@ -1,7 +1,5 @@
 """Unit tests for Phase 8 DRA prompts module."""
 
-import pytest
-
 from src.models.dra import ContextualTip
 from src.services.dra.prompts import (
     BASE_SYSTEM_PROMPT,
@@ -229,7 +227,9 @@ class TestBuildSystemPrompt:
         """Test only top 5 tips are included."""
         tips = [
             ContextualTip(
-                context=f"context{i}", strategy=f"strategy{i}", confidence=0.5 + i * 0.05
+                context=f"context{i}",
+                strategy=f"strategy{i}",
+                confidence=0.5 + i * 0.05,
             )
             for i in range(8)
         ]
@@ -274,7 +274,10 @@ class TestBuildUserPrompt:
         prompt = build_user_prompt(
             question="Test question",
             turn_number=5,
-            working_memory_summary="Found 3 papers about transformers. Key finding: attention is important.",
+            working_memory_summary=(
+                "Found 3 papers about transformers. "
+                "Key finding: attention is important."
+            ),
         )
 
         assert "**Working Memory (Compressed Summary of Earlier Turns):**" in prompt

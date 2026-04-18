@@ -1,9 +1,7 @@
 """Unit tests for Phase 8 DRA CLI research commands."""
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 from typer.testing import CliRunner
 
 from src.cli import app
@@ -329,7 +327,10 @@ class TestResearchCommandExecution:
         )
 
         assert result.exit_code == 0
-        assert "Answer produced" in result.stdout or "attention" in result.stdout.lower()
+        assert (
+            "Answer produced" in result.stdout
+            or "attention" in result.stdout.lower()
+        )
 
     @patch("src.services.dra.agent.DeepResearchAgent")
     @patch("src.services.llm.service.LLMService")

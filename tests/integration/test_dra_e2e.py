@@ -1,8 +1,7 @@
 """Integration tests for Phase 8 DRA end-to-end flow."""
 
 from datetime import UTC, datetime
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -17,9 +16,9 @@ from src.models.dra import (
     ToolCallType,
     Turn,
 )
-from src.services.dra.agent import DeepResearchAgent, WorkingMemory
-from src.services.dra.browser import CitationCheck, OpenedDocument, ResearchBrowser
-from src.services.dra.corpus_manager import CorpusManager, CorpusStats, PaperRecord
+from src.services.dra.agent import DeepResearchAgent
+from src.services.dra.browser import OpenedDocument, ResearchBrowser
+from src.services.dra.corpus_manager import CorpusManager, PaperRecord
 from src.services.dra.prompts import (
     BASE_SYSTEM_PROMPT,
     build_system_prompt,
@@ -184,7 +183,9 @@ class TestDRAComponentIntegration:
     def test_agent_working_memory_in_prompts(self, agent):
         """Test working memory is included in user prompts."""
         # Set up working memory
-        agent.working_memory.summary = "Found 5 papers about transformers. Key topics: attention, BERT."
+        agent.working_memory.summary = (
+            "Found 5 papers about transformers. Key topics: attention, BERT."
+        )
         agent.working_memory.papers_consulted = ["paper1", "paper2"]
 
         # Build user prompt
@@ -311,7 +312,7 @@ class TestDRAResearchSession:
 
         mock_corpus_manager.search_engine.search.return_value = []
 
-        result = agent.research("Test question")
+        _ = agent.research("Test question")
 
         # Should have summarized at turn 10
         assert agent.working_memory.last_summarized_turn == 10
@@ -503,7 +504,10 @@ class TestDRAWorkingMemory:
 
     def test_working_memory_included_in_prompt(self):
         """Test working memory summary is included in user prompt."""
-        summary = "Discovered 3 papers on attention. Key finding: self-attention enables parallel processing."
+        summary = (
+            "Discovered 3 papers on attention. "
+            "Key finding: self-attention enables parallel processing."
+        )
 
         prompt = build_user_prompt(
             question="How does self-attention work?",

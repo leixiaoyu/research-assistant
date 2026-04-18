@@ -704,4 +704,4 @@ class TestDiscoveryPhasePhase71Integration:
         assert result.topics_processed == 1
         assert result.total_papers == 2
         # Paper should still be included, but its date might be None or default
-        # Our primary goal here is to hit the 'except' block in DiscoveryPhase.run()
+        # Our goal is to hit the 'except ValueError' in _convert_scored_to_metadata()

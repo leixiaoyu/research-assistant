@@ -31,17 +31,17 @@ if [ "$MAJOR" -lt 3 ] || ([ "$MAJOR" -eq 3 ] && [ "$MINOR" -lt 14 ]); then
     exit 1
 fi
 
-echo "🐍 Using Python: $($PYTHON_CMD --version)"
+echo "🐍 Using Python: $("$PYTHON_CMD" --version)"
 echo ""
 
 echo "🔍 Running Black (formatting)..."
-$PYTHON_CMD -m black --check src/ tests/
+"$PYTHON_CMD" -m black --check src/ tests/
 
 echo "🔍 Running Flake8 (linting)..."
-$PYTHON_CMD -m flake8 src/ tests/
+"$PYTHON_CMD" -m flake8 src/ tests/
 
 echo "🔍 Running Mypy (type checking)..."
-$PYTHON_CMD -m mypy src/
+"$PYTHON_CMD" -m mypy src/
 
 echo "🔍 Running Pragma Audit..."
 # Comprehensive pragma audit across all code
@@ -138,7 +138,7 @@ fi
 # Phase spec validation
 if [ -f "scripts/validate_phase_specs.py" ]; then
     echo "   Running phase spec validation..."
-    if $PYTHON_CMD scripts/validate_phase_specs.py; then
+    if "$PYTHON_CMD" scripts/validate_phase_specs.py; then
         echo "   ✓ Phase specifications valid"
     else
         echo "   ⚠ Phase spec issues found (non-blocking in Phase A)"
@@ -150,6 +150,6 @@ fi
 echo "🧪 Running Tests with Coverage (>=99% required, branch coverage enabled)..."
 # Use absolute path for coverage to ensure consistency
 # Note: branch coverage is now enabled in pyproject.toml
-$PYTHON_CMD -m pytest --cov=src --cov-branch --cov-report=term-missing --cov-fail-under=99 tests/
+"$PYTHON_CMD" -m pytest --cov=src --cov-branch --cov-report=term-missing --cov-fail-under=99 tests/
 
 echo "✅ All checks passed!"

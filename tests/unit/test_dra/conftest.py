@@ -13,7 +13,13 @@ import pytest
 
 
 def _create_mock_transformers():
-    """Create mock transformers module."""
+    """Create mock transformers module.
+
+    Simulates:
+    - AutoModel.from_pretrained(): Returns model with hidden_size=768
+    - AutoTokenizer.from_pretrained(): Returns tokenizer with
+      input_ids/attention_mask
+    """
     mock_transformers = MagicMock()
 
     # Mock AutoModel
@@ -36,7 +42,14 @@ def _create_mock_transformers():
 
 
 def _create_mock_faiss():
-    """Create mock faiss module."""
+    """Create mock faiss module.
+
+    Simulates:
+    - IndexFlatIP: Returns mock index with search() returning scores [0.9, 0.8]
+      and indices [0, 1]
+    - normalize_L2: No-op (modifies array in place)
+    - read_index/write_index: No-op file operations
+    """
     mock_faiss = MagicMock()
 
     # Mock IndexFlatIP
@@ -58,7 +71,11 @@ def _create_mock_faiss():
 
 
 def _create_mock_rank_bm25():
-    """Create mock rank_bm25 module."""
+    """Create mock rank_bm25 module.
+
+    Simulates:
+    - BM25Okapi: Returns instance with get_scores() returning [0.5, 0.8, 0.3]
+    """
     mock_rank_bm25 = MagicMock()
 
     # Mock BM25Okapi
@@ -70,7 +87,11 @@ def _create_mock_rank_bm25():
 
 
 def _create_mock_torch():
-    """Create mock torch module."""
+    """Create mock torch module.
+
+    Simulates:
+    - no_grad(): Context manager for inference mode (no-op)
+    """
     mock_torch = MagicMock()
 
     # Mock no_grad context manager
@@ -97,6 +118,9 @@ def mock_ml_dependencies(monkeypatch):
 
     Only mocks modules that are not actually installed.
     Checks are performed at fixture invocation time for reliability.
+
+    Note: Cleanup is handled automatically by pytest's monkeypatch fixture,
+    which restores sys.modules to its original state after each test.
     """
     # Check at fixture invocation time for more reliable behavior
     if not _is_module_importable("transformers"):

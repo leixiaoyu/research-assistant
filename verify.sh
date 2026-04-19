@@ -3,37 +3,45 @@ set -e
 
 # ARISP Quality Verification Script
 # This script runs all checks required for PR approval.
-# IMPORTANT: Run this script inside an activated virtual environment.
+# Automatically uses venv Python if available for complete dependency coverage.
 
-# Detect Python 3.14 command
-if command -v python3.14 &> /dev/null; then
+# Get repository root
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+# Detect Python 3.14 command - prefer venv Python for full dependency coverage
+if [ -f "$REPO_ROOT/venv/bin/python3.14" ]; then
+    PYTHON_CMD="$REPO_ROOT/venv/bin/python3.14"
+elif [ -f "$REPO_ROOT/venv/bin/python3" ]; then
+    PYTHON_CMD="$REPO_ROOT/venv/bin/python3"
+elif command -v python3.14 &> /dev/null; then
     PYTHON_CMD="python3.14"
 elif command -v python3 &> /dev/null; then
     PYTHON_CMD="python3"
-    # Verify it's Python 3.14+
-    PYTHON_VERSION=$($PYTHON_CMD --version 2>&1 | awk '{print $2}')
-    MAJOR=$(echo $PYTHON_VERSION | cut -d. -f1)
-    MINOR=$(echo $PYTHON_VERSION | cut -d. -f2)
-    if [ "$MAJOR" -lt 3 ] || ([ "$MAJOR" -eq 3 ] && [ "$MINOR" -lt 14 ]); then
-        echo "❌ Error: Python 3.14+ required, found $PYTHON_VERSION"
-        exit 1
-    fi
 else
     echo "❌ Error: Python 3.14+ not found. Please install Python 3.14 or higher."
     exit 1
 fi
 
-echo "🐍 Using Python: $($PYTHON_CMD --version)"
+# Verify Python version is 3.14+
+PYTHON_VERSION=$($PYTHON_CMD --version 2>&1 | awk '{print $2}')
+MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
+MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
+if [ "$MAJOR" -lt 3 ] || ([ "$MAJOR" -eq 3 ] && [ "$MINOR" -lt 14 ]); then
+    echo "❌ Error: Python 3.14+ required, found $PYTHON_VERSION"
+    exit 1
+fi
+
+echo "🐍 Using Python: $("$PYTHON_CMD" --version)"
 echo ""
 
 echo "🔍 Running Black (formatting)..."
-$PYTHON_CMD -m black --check src/ tests/
+"$PYTHON_CMD" -m black --check src/ tests/
 
 echo "🔍 Running Flake8 (linting)..."
-$PYTHON_CMD -m flake8 src/ tests/
+"$PYTHON_CMD" -m flake8 src/ tests/
 
 echo "🔍 Running Mypy (type checking)..."
-$PYTHON_CMD -m mypy src/
+"$PYTHON_CMD" -m mypy src/
 
 echo "🔍 Running Pragma Audit..."
 # Comprehensive pragma audit across all code
@@ -130,7 +138,7 @@ fi
 # Phase spec validation
 if [ -f "scripts/validate_phase_specs.py" ]; then
     echo "   Running phase spec validation..."
-    if $PYTHON_CMD scripts/validate_phase_specs.py; then
+    if "$PYTHON_CMD" scripts/validate_phase_specs.py; then
         echo "   ✓ Phase specifications valid"
     else
         echo "   ⚠ Phase spec issues found (non-blocking in Phase A)"
@@ -142,6 +150,6 @@ fi
 echo "🧪 Running Tests with Coverage (>=99% required, branch coverage enabled)..."
 # Use absolute path for coverage to ensure consistency
 # Note: branch coverage is now enabled in pyproject.toml
-$PYTHON_CMD -m pytest --cov=src --cov-branch --cov-report=term-missing --cov-fail-under=99 tests/
+"$PYTHON_CMD" -m pytest --cov=src --cov-branch --cov-report=term-missing --cov-fail-under=99 tests/
 
 echo "✅ All checks passed!"

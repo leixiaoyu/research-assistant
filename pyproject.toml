@@ -55,7 +55,12 @@ python_version = "3.14"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
+# ignore_missing_imports: Allows imports from packages without type stubs
+# disable_error_code: Suppresses "import-untyped" errors that aren't caught by ignore_missing_imports
+# Both are needed: ignore_missing_imports handles missing stubs, disable_error_code handles typed
+# packages that import from untyped dependencies (e.g., yaml importing from libyaml)
 ignore_missing_imports = true
+disable_error_code = ["import-untyped"]
 plugins = ["pydantic.mypy"]
 
 [tool.pydantic-mypy]

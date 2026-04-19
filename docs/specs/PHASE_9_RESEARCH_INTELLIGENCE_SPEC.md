@@ -1,11 +1,11 @@
 # Phase 9: Research Intelligence Layer Specification
 
-**Version:** 1.1
-**Status:** 📋 Ready for Team Review
+**Version:** 1.2
+**Status:** 📋 Revised per Team Feedback
 **Timeline:** 12-14 weeks (4 milestones)
 **Author:** Claude Code
 **Created:** 2026-04-18
-**Last Updated:** 2026-04-18
+**Last Updated:** 2026-04-19
 
 **Dependencies:**
 - Phase 8 Complete (Deep Research Agent with corpus, browser, agent loop)
@@ -319,6 +319,13 @@ class PaperSource(str, Enum):
     SEMANTIC_SCHOLAR = "semantic_scholar"
     HUGGINGFACE = "huggingface"
     OPENALEX = "openalex"
+
+# MVP Scope: Only ARXIV has RSS/Atom feeds enabling efficient monitoring.
+# Other sources require polling with API rate limits:
+# - SEMANTIC_SCHOLAR: No feed, requires search API polling (rate limited)
+# - HUGGINGFACE: Daily papers endpoint, but no subscription filtering
+# - OPENALEX: No feed, requires works API polling
+# Post-MVP: Add polling-based monitors with careful rate limit management.
 ```
 
 **Scenario: Create Subscription**
@@ -515,20 +522,39 @@ class CrawlDirection(str, Enum):
     BOTH = "both"
 ```
 
-**Crawling Algorithm:**
+**Ranking Function (for top_k selection):**
+```python
+def sort_by_influence(papers: list[Paper]) -> list[Paper]:
+    """Sort papers by influence for deterministic top_k selection.
+
+    Ranking criteria (descending priority):
+    1. influentialCitationCount (Semantic Scholar metric)
+    2. citationCount (fallback)
+    3. publicationDate (recency tiebreaker)
+    """
+    return sorted(papers, key=lambda p: (
+        p.influential_citation_count or 0,
+        p.citation_count or 0,
+        p.publication_date or date.min
+    ), reverse=True)
+```
+
+**Crawling Algorithm (BFS):**
 ```
 function crawl(seed_paper_id, config):
     visited = {seed_paper_id}
-    queue = [(seed_paper_id, 0)]  # (paper_id, depth)
+    queue = deque([(seed_paper_id, 0)])  # (paper_id, depth) - use deque for BFS
 
     while queue not empty:
-        paper_id, depth = queue.pop()
+        paper_id, depth = queue.popleft()  # BFS: popleft() ensures shortest paths
         if depth >= config.max_depth:
             continue
 
         if config.direction in [BACKWARD, BOTH]:
             references = fetch_references(paper_id)
-            for ref in top_k(references, config.max_papers_per_level):
+            # Rank by: influentialCitationCount DESC, citationCount DESC, year DESC
+            ranked_refs = sort_by_influence(references)
+            for ref in top_k(ranked_refs, config.max_papers_per_level):
                 if ref.id not in visited:
                     add_to_graph(ref)
                     queue.append((ref.id, depth + 1))
@@ -536,7 +562,9 @@ function crawl(seed_paper_id, config):
 
         if config.direction in [FORWARD, BOTH]:
             citations = fetch_citations(paper_id)
-            for cite in top_k(citations, config.max_papers_per_level):
+            # Rank by: influentialCitationCount DESC, citationCount DESC, year DESC
+            ranked_cites = sort_by_influence(citations)
+            for cite in top_k(ranked_cites, config.max_papers_per_level):
                 if cite.id not in visited:
                     add_to_graph(cite)
                     queue.append((cite.id, depth + 1))
@@ -782,9 +810,14 @@ class QueryType(str, Enum):
 **Example Queries:**
 ```
 Q: "Which methods achieve BLEU > 40 on WMT14?"
-→ QueryType.AGGREGATION
+→ QueryType.RELATION_SEARCH (filter query, not aggregation)
 → Filter: entity_type=RESULT, dataset=WMT14, metric=BLEU, value>40
 → Return: List of (method, result, paper) tuples
+
+Q: "What is the average BLEU score across all LoRA papers?"
+→ QueryType.AGGREGATION (GROUP BY with AVG function)
+→ Filter: method=LoRA, metric=BLEU
+→ Return: Single aggregated value
 
 Q: "Compare LoRA and full fine-tuning"
 → QueryType.COMPARISON
@@ -1108,12 +1141,19 @@ class EdgeType(str, Enum):
 
 ### 8.3 Schema Design (SQLite Version)
 
+**Connection Initialization (REQUIRED):**
+```sql
+-- MUST be executed on every connection for referential integrity
+PRAGMA foreign_keys = ON;
+```
+
 ```sql
 -- Nodes table
 CREATE TABLE nodes (
     node_id TEXT PRIMARY KEY,
     node_type TEXT NOT NULL,
     properties JSON NOT NULL,
+    version INTEGER DEFAULT 1,  -- Optimistic concurrency control
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -1127,8 +1167,13 @@ CREATE TABLE edges (
     source_id TEXT NOT NULL REFERENCES nodes(node_id),
     target_id TEXT NOT NULL REFERENCES nodes(node_id),
     properties JSON,
+    version INTEGER DEFAULT 1,  -- Optimistic concurrency control
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Optimistic Locking Pattern:
+-- UPDATE nodes SET ..., version = version + 1 WHERE node_id = ? AND version = ?
+-- If rows_affected == 0, another worker modified the record; retry or abort.
 
 CREATE INDEX idx_edges_type ON edges(edge_type);
 CREATE INDEX idx_edges_source ON edges(source_id);
@@ -1676,11 +1721,15 @@ intelligence:
 
 **Merge Rules:**
 ```
-AUTO_MERGE:    Exact name + same type + same context
-AUTO_MERGE:    Name appears in other entity's alias list
+AUTO_MERGE:    Same paper_id + exact canonical_name (after normalization)
+AUTO_MERGE:    Name appears in other entity's alias list (explicit mapping)
+SUGGEST_MERGE: Exact name + same type + different paper (human review)
 SUGGEST_MERGE: Embedding similarity >0.9, no name match (human review)
 KEEP_SEPARATE: Ambiguous terms ("BERT", "Transformer", "Adam")
 ```
+
+**Note:** "Same context" is intentionally NOT used for AUTO_MERGE as context
+matching is non-deterministic. Context similarity triggers SUGGEST_MERGE instead.
 
 **Rationale:**
 - False merges corrupt the knowledge graph permanently

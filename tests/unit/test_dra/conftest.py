@@ -77,13 +77,6 @@ def _create_mock_torch():
     mock_torch.no_grad.return_value.__enter__ = MagicMock()
     mock_torch.no_grad.return_value.__exit__ = MagicMock()
 
-    # Mock tensor outputs
-    mock_output = MagicMock()
-    mock_output.last_hidden_state = MagicMock()
-    mock_output.last_hidden_state.__getitem__ = MagicMock(
-        return_value=MagicMock(numpy=MagicMock(return_value=np.random.rand(1, 768)))
-    )
-
     return mock_torch
 
 
@@ -98,29 +91,24 @@ def _is_module_importable(module_name: str) -> bool:
         return False
 
 
-# Check which modules need mocking (only mock if not actually available)
-_NEED_MOCK_TRANSFORMERS = not _is_module_importable("transformers")
-_NEED_MOCK_FAISS = not _is_module_importable("faiss")
-_NEED_MOCK_RANK_BM25 = not _is_module_importable("rank_bm25")
-_NEED_MOCK_TORCH = not _is_module_importable("torch")
-
-
 @pytest.fixture(autouse=True)
 def mock_ml_dependencies(monkeypatch):
     """Auto-use fixture to mock ML dependencies for DRA tests.
 
     Only mocks modules that are not actually installed.
+    Checks are performed at fixture invocation time for reliability.
     """
-    if _NEED_MOCK_TRANSFORMERS:
+    # Check at fixture invocation time for more reliable behavior
+    if not _is_module_importable("transformers"):
         monkeypatch.setitem(sys.modules, "transformers", _create_mock_transformers())
 
-    if _NEED_MOCK_FAISS:
+    if not _is_module_importable("faiss"):
         monkeypatch.setitem(sys.modules, "faiss", _create_mock_faiss())
 
-    if _NEED_MOCK_RANK_BM25:
+    if not _is_module_importable("rank_bm25"):
         monkeypatch.setitem(sys.modules, "rank_bm25", _create_mock_rank_bm25())
 
-    if _NEED_MOCK_TORCH:
+    if not _is_module_importable("torch"):
         monkeypatch.setitem(sys.modules, "torch", _create_mock_torch())
 
     yield

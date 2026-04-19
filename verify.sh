@@ -24,8 +24,8 @@ fi
 
 # Verify Python version is 3.14+
 PYTHON_VERSION=$($PYTHON_CMD --version 2>&1 | awk '{print $2}')
-MAJOR=$(echo $PYTHON_VERSION | cut -d. -f1)
-MINOR=$(echo $PYTHON_VERSION | cut -d. -f2)
+MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
+MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
 if [ "$MAJOR" -lt 3 ] || ([ "$MAJOR" -eq 3 ] && [ "$MINOR" -lt 14 ]); then
     echo "❌ Error: Python 3.14+ required, found $PYTHON_VERSION"
     exit 1

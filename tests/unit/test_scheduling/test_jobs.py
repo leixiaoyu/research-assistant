@@ -12,6 +12,7 @@ from src.scheduling.jobs import (
     CacheCleanupJob,
     CostReportJob,
     HealthCheckJob,
+    DRACorpusRefreshJob,
 )
 
 
@@ -608,3 +609,287 @@ class TestHealthCheckJob:
 
             # Status should be degraded
             assert result["status"] == "degraded"
+
+
+class TestDRACorpusRefreshJob:
+    """Tests for DRACorpusRefreshJob (Phase 8.5)."""
+
+    def test_init_with_defaults(self):
+        """Should initialize with default values."""
+        job = DRACorpusRefreshJob()
+
+        assert job.name == "dra_corpus_refresh"
+        assert job.corpus_data_dir == Path("./data/dra")
+        assert job.registry_path == Path("./data/registry")
+        assert job.force_reindex is False
+
+    def test_init_with_custom_values(self):
+        """Should initialize with custom values."""
+        job = DRACorpusRefreshJob(
+            corpus_data_dir=Path("/custom/corpus"),
+            registry_path=Path("/custom/registry"),
+            force_reindex=True,
+        )
+
+        assert job.corpus_data_dir == Path("/custom/corpus")
+        assert job.registry_path == Path("/custom/registry")
+        assert job.force_reindex is True
+
+    @pytest.mark.asyncio
+    async def test_run_registry_not_found(self):
+        """Should return skipped status when registry not found."""
+        job = DRACorpusRefreshJob(
+            registry_path=Path("/nonexistent/registry"),
+        )
+
+        result = await job.run()
+
+        assert result["status"] == "skipped"
+        assert "not found" in result["error"]
+        assert result["papers_ingested"] == 0
+
+    @pytest.mark.asyncio
+    async def test_run_success(self):
+        """Should successfully refresh corpus from registry."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir) / "registry"
+            registry_path.mkdir()
+            corpus_dir = Path(tmpdir) / "corpus"
+
+            job = DRACorpusRefreshJob(
+                corpus_data_dir=corpus_dir,
+                registry_path=registry_path,
+            )
+
+            # Mock CorpusManager at source
+            with patch(
+                "src.services.dra.corpus_manager.CorpusManager"
+            ) as mock_corpus_manager_class:
+                mock_manager = MagicMock()
+                mock_manager.ingest_from_registry.return_value = 5
+                mock_manager.stats.total_chunks = 100
+                mock_corpus_manager_class.return_value = mock_manager
+
+                result = await job.run()
+
+            assert result["status"] == "success"
+            assert result["papers_ingested"] == 5
+            assert result["corpus_size"] == 100
+            assert result["error"] is None
+
+    @pytest.mark.asyncio
+    async def test_run_handles_corpus_manager_error(self):
+        """Should handle errors from CorpusManager gracefully."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir) / "registry"
+            registry_path.mkdir()
+            corpus_dir = Path(tmpdir) / "corpus"
+
+            job = DRACorpusRefreshJob(
+                corpus_data_dir=corpus_dir,
+                registry_path=registry_path,
+            )
+
+            # Mock CorpusManager to raise error
+            with patch(
+                "src.services.dra.corpus_manager.CorpusManager"
+            ) as mock_corpus_manager_class:
+                mock_corpus_manager_class.side_effect = RuntimeError("Corpus error")
+
+                result = await job.run()
+
+            assert result["status"] == "error"
+            assert "Corpus error" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_run_with_force_reindex(self):
+        """Should pass force_reindex to corpus manager."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir) / "registry"
+            registry_path.mkdir()
+            corpus_dir = Path(tmpdir) / "corpus"
+
+            job = DRACorpusRefreshJob(
+                corpus_data_dir=corpus_dir,
+                registry_path=registry_path,
+                force_reindex=True,
+            )
+
+            with patch(
+                "src.services.dra.corpus_manager.CorpusManager"
+            ) as mock_corpus_manager_class:
+                mock_manager = MagicMock()
+                mock_manager.ingest_from_registry.return_value = 3
+                mock_manager.stats.total_chunks = 50
+                mock_corpus_manager_class.return_value = mock_manager
+
+                await job.run()
+
+                # Verify force=True was passed
+                mock_manager.ingest_from_registry.assert_called_once_with(
+                    registry_path=registry_path,
+                    force=True,
+                )
+
+
+class TestDailyResearchJobDRAIntegration:
+    """Tests for DailyResearchJob DRA integration (Phase 8.5)."""
+
+    def test_init_with_dra_refresh_enabled(self):
+        """Should initialize with DRA refresh enabled by default."""
+        job = DailyResearchJob()
+
+        assert job.enable_dra_refresh is True
+
+    def test_init_with_dra_refresh_disabled(self):
+        """Should allow disabling DRA refresh."""
+        job = DailyResearchJob(enable_dra_refresh=False)
+
+        assert job.enable_dra_refresh is False
+
+    @pytest.mark.asyncio
+    async def test_refresh_dra_corpus_disabled_via_constructor(self):
+        """Should skip DRA refresh when disabled via constructor."""
+        job = DailyResearchJob(enable_dra_refresh=False)
+
+        mock_config = MagicMock()
+        mock_config.settings.dra_daily = MagicMock()
+
+        result = await job._refresh_dra_corpus(mock_config)
+
+        assert result["status"] == "skipped"
+        assert "constructor" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_refresh_dra_corpus_no_config(self):
+        """Should skip DRA refresh when no dra_daily config."""
+        job = DailyResearchJob()
+
+        mock_config = MagicMock()
+        mock_config.settings.dra_daily = None
+
+        result = await job._refresh_dra_corpus(mock_config)
+
+        assert result["status"] == "skipped"
+        assert "No dra_daily settings" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_refresh_dra_corpus_disabled_in_config(self):
+        """Should skip DRA refresh when disabled in config."""
+        job = DailyResearchJob()
+
+        mock_config = MagicMock()
+        mock_config.settings.dra_daily.enable_corpus_refresh = False
+
+        result = await job._refresh_dra_corpus(mock_config)
+
+        assert result["status"] == "skipped"
+        assert "disabled in config" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_refresh_dra_corpus_registry_not_found(self):
+        """Should skip DRA refresh when registry not found."""
+        job = DailyResearchJob()
+
+        mock_config = MagicMock()
+        mock_config.settings.dra_daily.enable_corpus_refresh = True
+        mock_config.settings.dra_daily.corpus_data_dir = "/tmp/corpus"
+        mock_config.settings.dra_daily.registry_path = "/nonexistent/registry"
+        mock_config.settings.dra_daily.force_reindex = False
+
+        result = await job._refresh_dra_corpus(mock_config)
+
+        assert result["status"] == "skipped"
+        assert "Registry not found" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_refresh_dra_corpus_success(self):
+        """Should successfully refresh DRA corpus."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir) / "registry"
+            registry_path.mkdir()
+            corpus_dir = Path(tmpdir) / "corpus"
+
+            job = DailyResearchJob()
+
+            mock_config = MagicMock()
+            mock_config.settings.dra_daily.enable_corpus_refresh = True
+            mock_config.settings.dra_daily.corpus_data_dir = str(corpus_dir)
+            mock_config.settings.dra_daily.registry_path = str(registry_path)
+            mock_config.settings.dra_daily.force_reindex = False
+
+            with patch(
+                "src.services.dra.corpus_manager.CorpusManager"
+            ) as mock_corpus_manager_class:
+                mock_manager = MagicMock()
+                mock_manager.ingest_from_registry.return_value = 10
+                mock_manager.stats.total_chunks = 200
+                mock_corpus_manager_class.return_value = mock_manager
+
+                result = await job._refresh_dra_corpus(mock_config)
+
+            assert result["status"] == "success"
+            assert result["papers_ingested"] == 10
+            assert result["corpus_size"] == 200
+
+    @pytest.mark.asyncio
+    async def test_refresh_dra_corpus_handles_error(self):
+        """Should handle errors gracefully without raising."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir) / "registry"
+            registry_path.mkdir()
+            corpus_dir = Path(tmpdir) / "corpus"
+
+            job = DailyResearchJob()
+
+            mock_config = MagicMock()
+            mock_config.settings.dra_daily.enable_corpus_refresh = True
+            mock_config.settings.dra_daily.corpus_data_dir = str(corpus_dir)
+            mock_config.settings.dra_daily.registry_path = str(registry_path)
+            mock_config.settings.dra_daily.force_reindex = False
+
+            with patch(
+                "src.services.dra.corpus_manager.CorpusManager"
+            ) as mock_corpus_manager_class:
+                mock_corpus_manager_class.side_effect = RuntimeError("DRA error")
+
+                result = await job._refresh_dra_corpus(mock_config)
+
+            assert result["status"] == "error"
+            assert "DRA error" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_run_includes_dra_result(self):
+        """Should include DRA corpus refresh result in run output."""
+        from src.orchestration import PipelineResult
+        from src.models.notification import NotificationSettings
+
+        job = DailyResearchJob(enable_dra_refresh=False)
+
+        mock_config = MagicMock()
+        mock_config.settings.notification_settings = NotificationSettings()
+        mock_config.settings.dra_daily = None
+
+        with (
+            patch(
+                "src.services.config_manager.ConfigManager"
+            ) as mock_config_manager_class,
+            patch("src.orchestration.ResearchPipeline") as mock_pipeline_class,
+        ):
+            mock_config_manager = MagicMock()
+            mock_config_manager.load_config.return_value = mock_config
+            mock_config_manager_class.return_value = mock_config_manager
+
+            mock_result = PipelineResult()
+            mock_result.topics_processed = 1
+            mock_result.output_files = []
+            mock_result.errors = []
+
+            mock_pipeline = MagicMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_result)
+            mock_pipeline_class.return_value = mock_pipeline
+
+            result = await job.run()
+
+        assert "dra_corpus_refresh" in result
+        assert result["dra_corpus_refresh"]["status"] == "skipped"

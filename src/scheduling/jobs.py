@@ -12,6 +12,7 @@ Usage:
     await job.run()
 """
 
+import asyncio
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
@@ -357,9 +358,12 @@ class DailyResearchJob(BaseJob):
             )
 
             # Initialize corpus manager and ingest
+            # Use asyncio.to_thread to offload blocking ML/IO operations
+            # to a background thread, preventing event loop stalls
             corpus_config = CorpusConfig(corpus_dir=str(corpus_data_dir))
             corpus_manager = CorpusManager(config=corpus_config)
-            papers_ingested = corpus_manager.ingest_from_registry(
+            papers_ingested = await asyncio.to_thread(
+                corpus_manager.ingest_from_registry,
                 registry_path=registry_path,
                 force=dra_settings.force_reindex,
             )
@@ -647,7 +651,10 @@ class DRACorpusRefreshJob(BaseJob):
             )
 
             # Ingest papers from registry
-            papers_ingested = corpus_manager.ingest_from_registry(
+            # Use asyncio.to_thread to offload blocking ML/IO operations
+            # to a background thread, preventing event loop stalls
+            papers_ingested = await asyncio.to_thread(
+                corpus_manager.ingest_from_registry,
                 registry_path=self.registry_path,
                 force=self.force_reindex,
             )

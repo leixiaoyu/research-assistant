@@ -661,10 +661,16 @@ class TestDRACorpusRefreshJob:
                 registry_path=registry_path,
             )
 
-            # Mock CorpusManager at source
-            with patch(
-                "src.services.dra.corpus_manager.CorpusManager"
-            ) as mock_corpus_manager_class:
+            # Mock CorpusManager at source and asyncio.to_thread
+            with (
+                patch(
+                    "src.services.dra.corpus_manager.CorpusManager"
+                ) as mock_corpus_manager_class,
+                patch(
+                    "src.scheduling.jobs.asyncio.to_thread",
+                    side_effect=lambda func, *args, **kwargs: func(*args, **kwargs),
+                ),
+            ):
                 mock_manager = MagicMock()
                 mock_manager.ingest_from_registry.return_value = 5
                 mock_manager.stats.total_chunks = 100
@@ -690,10 +696,16 @@ class TestDRACorpusRefreshJob:
                 registry_path=registry_path,
             )
 
-            # Mock CorpusManager to raise error
-            with patch(
-                "src.services.dra.corpus_manager.CorpusManager"
-            ) as mock_corpus_manager_class:
+            # Mock CorpusManager to raise error and asyncio.to_thread
+            with (
+                patch(
+                    "src.services.dra.corpus_manager.CorpusManager"
+                ) as mock_corpus_manager_class,
+                patch(
+                    "src.scheduling.jobs.asyncio.to_thread",
+                    side_effect=lambda func, *args, **kwargs: func(*args, **kwargs),
+                ),
+            ):
                 mock_corpus_manager_class.side_effect = RuntimeError("Corpus error")
 
                 result = await job.run()
@@ -715,9 +727,15 @@ class TestDRACorpusRefreshJob:
                 force_reindex=True,
             )
 
-            with patch(
-                "src.services.dra.corpus_manager.CorpusManager"
-            ) as mock_corpus_manager_class:
+            with (
+                patch(
+                    "src.services.dra.corpus_manager.CorpusManager"
+                ) as mock_corpus_manager_class,
+                patch(
+                    "src.scheduling.jobs.asyncio.to_thread",
+                    side_effect=lambda func, *args, **kwargs: func(*args, **kwargs),
+                ),
+            ):
                 mock_manager = MagicMock()
                 mock_manager.ingest_from_registry.return_value = 3
                 mock_manager.stats.total_chunks = 50
@@ -818,9 +836,15 @@ class TestDailyResearchJobDRAIntegration:
             mock_config.settings.dra_daily.registry_path = str(registry_path)
             mock_config.settings.dra_daily.force_reindex = False
 
-            with patch(
-                "src.services.dra.corpus_manager.CorpusManager"
-            ) as mock_corpus_manager_class:
+            with (
+                patch(
+                    "src.services.dra.corpus_manager.CorpusManager"
+                ) as mock_corpus_manager_class,
+                patch(
+                    "src.scheduling.jobs.asyncio.to_thread",
+                    side_effect=lambda func, *args, **kwargs: func(*args, **kwargs),
+                ),
+            ):
                 mock_manager = MagicMock()
                 mock_manager.ingest_from_registry.return_value = 10
                 mock_manager.stats.total_chunks = 200
@@ -848,9 +872,15 @@ class TestDailyResearchJobDRAIntegration:
             mock_config.settings.dra_daily.registry_path = str(registry_path)
             mock_config.settings.dra_daily.force_reindex = False
 
-            with patch(
-                "src.services.dra.corpus_manager.CorpusManager"
-            ) as mock_corpus_manager_class:
+            with (
+                patch(
+                    "src.services.dra.corpus_manager.CorpusManager"
+                ) as mock_corpus_manager_class,
+                patch(
+                    "src.scheduling.jobs.asyncio.to_thread",
+                    side_effect=lambda func, *args, **kwargs: func(*args, **kwargs),
+                ),
+            ):
                 mock_corpus_manager_class.side_effect = RuntimeError("DRA error")
 
                 result = await job._refresh_dra_corpus(mock_config)

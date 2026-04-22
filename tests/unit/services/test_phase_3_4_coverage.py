@@ -41,13 +41,11 @@ class TestQualityScorerYAMLErrorHandling:
         """Test that ValueError from non-integer scores returns defaults."""
         # Create YAML with non-integer venue score
         invalid_yaml = tmp_path / "invalid_scores.yaml"
-        invalid_yaml.write_text(
-            """
+        invalid_yaml.write_text("""
 venues:
   NeurIPS: "not_a_number"
 default_score: 15
-"""
-        )
+""")
 
         venues, default = load_venue_scores(invalid_yaml)
 
@@ -59,13 +57,11 @@ default_score: 15
         """Test that ValueError from non-integer default_score returns defaults."""
         # Create YAML with non-integer default_score
         invalid_yaml = tmp_path / "invalid_default.yaml"
-        invalid_yaml.write_text(
-            """
+        invalid_yaml.write_text("""
 venues:
   NeurIPS: 30
 default_score: "fifteen"
-"""
-        )
+""")
 
         venues, default = load_venue_scores(invalid_yaml)
 
@@ -78,13 +74,11 @@ default_score: "fifteen"
         # Create YAML with venue score as a list (not an int)
         # This causes TypeError when int() is called on a list
         invalid_yaml = tmp_path / "list_score.yaml"
-        invalid_yaml.write_text(
-            """
+        invalid_yaml.write_text("""
 venues:
   NeurIPS: [30, 25]
 default_score: 15
-"""
-        )
+""")
 
         # int([30, 25]) raises TypeError
         venues, default = load_venue_scores(invalid_yaml)

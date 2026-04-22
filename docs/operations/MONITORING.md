@@ -132,6 +132,31 @@ arisp_pdf_downloads_total{status="success"}
 sum by (backend) (rate(arisp_pdf_conversions_total{status="success"}[1h]))
 ```
 
+#### Deep Research Agent (DRA)
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `arisp_dra_sessions_total` | `status` | Research sessions executed |
+| `arisp_dra_corpus_papers` | - | Papers indexed in DRA corpus |
+| `arisp_dra_corpus_chunks` | - | Chunks indexed in corpus |
+| `arisp_dra_corpus_refresh_duration_seconds` | - | Corpus refresh time |
+| `arisp_dra_trajectory_quality` | - | Average trajectory quality score |
+
+**Status labels:** `success`, `failed`, `exhausted`
+
+**Example queries:**
+```promql
+# DRA session success rate
+arisp_dra_sessions_total{status="success"}
+/ (arisp_dra_sessions_total{status="success"} + arisp_dra_sessions_total{status="failed"})
+
+# Corpus size
+arisp_dra_corpus_papers
+
+# Average trajectory quality
+avg_over_time(arisp_dra_trajectory_quality[24h])
+```
+
 #### Errors
 
 | Metric | Labels | Description |

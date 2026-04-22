@@ -1,7 +1,7 @@
 # ARISP System Architecture
-**Version:** 2.2
-**Status:** Phase 5.2 Complete - Modular Orchestration Architecture
-**Last Updated:** 2026-02-27
+**Version:** 3.0
+**Status:** Phase 8 Complete - Deep Research Agent Integration
+**Last Updated:** 2026-04-21
 
 ---
 
@@ -16,7 +16,8 @@
 8. [Observability](#observability)
 9. [Security](#security)
 10. [Deployment Architecture](#deployment-architecture)
-11. [Gap Resolution Matrix](#gap-resolution-matrix)
+11. [Deep Research Agent (DRA)](#deep-research-agent-dra)
+12. [Gap Resolution Matrix](#gap-resolution-matrix)
 
 ---
 
@@ -2712,6 +2713,131 @@ research_topics:
 │  │  - Alerting                               │ │
 │  └───────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────┘
+```
+
+---
+
+## Deep Research Agent (DRA)
+
+### Overview
+
+The Deep Research Agent (DRA) is an autonomous multi-turn research system that enables complex research queries over the paper corpus. Unlike single-shot discovery, DRA iteratively searches, opens papers, and synthesizes findings using a ReAct (Reasoning + Acting) architecture.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Deep Research Agent (DRA)                     │
+│                                                                   │
+│  ┌─────────────┐     ┌─────────────┐     ┌─────────────────┐   │
+│  │   Research  │────▶│   Agent     │────▶│   Trajectory    │   │
+│  │   Question  │     │   Loop      │     │   Storage       │   │
+│  └─────────────┘     └──────┬──────┘     └─────────────────┘   │
+│                             │                                    │
+│              ┌──────────────┼──────────────┐                    │
+│              ▼              ▼              ▼                    │
+│       ┌──────────┐   ┌──────────┐   ┌──────────┐              │
+│       │  search  │   │   open   │   │   find   │              │
+│       │ (corpus) │   │  (paper) │   │ (section)│              │
+│       └────┬─────┘   └────┬─────┘   └────┬─────┘              │
+│            │              │              │                      │
+│            └──────────────┼──────────────┘                      │
+│                           ▼                                      │
+│                   ┌───────────────┐                             │
+│                   │ Hybrid Search │                             │
+│                   │ FAISS + BM25  │                             │
+│                   └───────┬───────┘                             │
+│                           ▼                                      │
+│                   ┌───────────────┐                             │
+│                   │ Paper Corpus  │                             │
+│                   │ (from Registry)│                            │
+│                   └───────────────┘                             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Components
+
+#### Corpus Manager (`src/services/dra/corpus_manager.py`)
+- **Responsibility**: Index and manage the paper corpus
+- **Features**:
+  - SPECTER2 embeddings for semantic search
+  - Automatic chunking with configurable overlap
+  - Incremental indexing from registry
+  - Statistics and health monitoring
+
+#### Hybrid Search Service (`src/services/dra/hybrid_search.py`)
+- **Responsibility**: Combined semantic and keyword retrieval
+- **Features**:
+  - FAISS dense vector search (SPECTER2)
+  - BM25 sparse keyword search
+  - Reciprocal Rank Fusion (RRF) for result merging
+  - Configurable weights (default: 0.7 dense, 0.3 sparse)
+
+#### Agent Loop (`src/services/dra/agent.py`)
+- **Responsibility**: Execute multi-turn research sessions
+- **Architecture**: ReAct (Reasoning + Acting) pattern
+- **Browser Primitives**:
+  - `search(query)`: Search corpus for relevant chunks
+  - `open(paper_id)`: Open paper for detailed reading
+  - `find(section)`: Locate specific sections within papers
+- **Constraints**:
+  - Max turns: 50 (configurable)
+  - Max context: 128K tokens
+  - Max session duration: 600 seconds
+
+#### Trajectory Storage (`src/services/dra/trajectory_storage.py`)
+- **Responsibility**: Record and learn from research sessions
+- **Features**:
+  - Turn-by-turn session recording
+  - Quality scoring (0.0-1.0)
+  - Pattern analysis for learning
+  - Export to ShareGPT JSONL format
+
+### Daily Integration (Phase 8.5)
+
+DRA integrates with the daily research pipeline:
+
+```python
+# In DailyResearchJob
+async def _refresh_dra_corpus(self):
+    """Refresh DRA corpus after discovery."""
+    corpus_manager = CorpusManager(config=corpus_config)
+    papers_ingested = await asyncio.to_thread(
+        corpus_manager.ingest_from_registry,
+        registry_path=registry_path,
+        force=settings.force_reindex,
+    )
+```
+
+**Key Features**:
+- Automated corpus refresh after daily discovery
+- Fail-safe design (errors logged, never block pipeline)
+- Optional via `dra_daily` configuration setting
+- Uses `asyncio.to_thread()` for non-blocking execution
+
+### Configuration
+
+```yaml
+# In research_config.yaml
+settings:
+  dra_daily:
+    enable_corpus_refresh: true
+    corpus_data_dir: "./data/dra"
+    registry_path: "./data/registry"
+    force_reindex: false
+```
+
+### CLI Commands
+
+```bash
+# Research sessions
+python -m src.cli research "What are key innovations in attention?"
+python -m src.cli research status
+
+# Trajectory management
+python -m src.cli trajectories list
+python -m src.cli trajectories analyze
+python -m src.cli trajectories export --output data.jsonl
 ```
 
 ---

@@ -167,6 +167,40 @@ python -m src.cli run --config config/research_config.yaml
 python -m src.cli run --dry-run
 ```
 
+### Deep Research Agent (DRA) Jobs
+
+| Job | Schedule | Purpose |
+|-----|----------|---------|
+| `dra_corpus_refresh` | After daily_research | Refresh DRA corpus with new papers |
+
+### Manual DRA Operations
+
+To manually trigger corpus refresh:
+
+```bash
+# Check DRA status and corpus health
+python -m src.cli research status
+
+# View trajectory statistics
+python -m src.cli trajectories stats
+```
+
+### DRA Troubleshooting
+
+#### Corpus Not Updating
+
+1. Check registry has new papers: `python -m src.cli catalog show`
+2. Verify corpus directory exists: `ls -la ./data/dra/corpus`
+3. Check logs for errors: `docker-compose logs arisp | grep "dra_corpus"`
+4. Check DRA status: `python -m src.cli research status`
+
+#### Research Sessions Failing
+
+1. Check LLM configuration: `cat config/research_config.yaml | grep -A 5 llm_settings`
+2. Verify API key is set: `echo $LLM_API_KEY`
+3. Check corpus is populated: `python -m src.cli research status`
+4. Review session logs for specific errors
+
 ---
 
 ## Common Operations

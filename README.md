@@ -5,7 +5,7 @@
 [![Python 3.14](https://img.shields.io/badge/python-3.14-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Security: High](https://img.shields.io/badge/security-high-green.svg)](docs/security/)
-[![Test Coverage: 99.16%](https://img.shields.io/badge/coverage-99.16%25-brightgreen.svg)](tests/)
+[![Test Coverage: 99.07%](https://img.shields.io/badge/coverage-99.07%25-brightgreen.svg)](tests/)
 
 ## 🎯 Overview
 
@@ -15,7 +15,7 @@ ARISP automates the research process by:
 - 🤖 **Extracting** prompts, code, and insights using LLM (Claude/Gemini)
 - 📝 **Synthesizing** Obsidian-ready markdown briefs for engineering teams
 
-**✨ Phase 8 Complete:** Deep Research Agent (DRA) — autonomous multi-turn research with corpus infrastructure, browser primitives, ReAct agent loop, trajectory learning, and CLI integration. Plus Intelligence Services Consolidation, Human Feedback Loop (Phase 7.3), and 3,980 tests at 99.16% coverage!
+**✨ Phase 8 Complete:** Deep Research Agent (DRA) — autonomous multi-turn research with corpus infrastructure, browser primitives, ReAct agent loop, trajectory learning, and CLI integration. Plus Intelligence Services Consolidation, Human Feedback Loop (Phase 7.3), and 3,995 tests at 99.07% coverage!
 
 ## ✨ Key Features
 
@@ -281,7 +281,7 @@ output/
 
 ## 🏗️ Project Status
 
-**Current Status:** ✅ **Phase 8 Complete** - Deep Research Agent with corpus infrastructure, browser primitives, ReAct agent loop, trajectory learning, and CLI integration (PR #101). Full production pipeline with 3,980 tests at 99.16% coverage.
+**Current Status:** ✅ **Phase 8 Complete** - Deep Research Agent with corpus infrastructure, browser primitives, ReAct agent loop, trajectory learning, and CLI integration (PR #101). Full production pipeline with 3,995 tests at 99.07% coverage.
 
 **Next Phase:** 📋 **Phase 9: Research Intelligence Layer** - Proactive paper monitoring, citation graph intelligence, knowledge graph synthesis, and research frontier detection. See [Phase 9 Spec](docs/specs/PHASE_9_RESEARCH_INTELLIGENCE_SPEC.md).
 
@@ -316,7 +316,7 @@ output/
 ## 📊 Performance & Quality
 
 ### Current Metrics
-- ✅ **Test Coverage**: 99.16% (3,980 automated tests, 100% pass rate)
+- ✅ **Test Coverage**: 99.07% (3,995 automated tests, 100% pass rate)
 - ✅ **Security**: 22/22 requirements met across all layers
 - ✅ **Quality Gates**: Automated enforcement (Flake8, Black, Mypy, Pytest)
 - ✅ **Configuration Validation**: <1s
@@ -443,8 +443,7 @@ pytest tests/ --cov=src --cov-report=term
 
 # Deep Research Agent commands
 python -m src.cli research "What are the latest advances in attention mechanisms?"
-python -m src.cli corpus build          # Build corpus from registry
-python -m src.cli corpus stats          # View corpus statistics
+python -m src.cli research status       # Check DRA corpus status
 python -m src.cli trajectories list     # List research trajectories
 python -m src.cli trajectories analyze  # Analyze trajectory patterns
 python -m src.cli trajectories export   # Export to ShareGPT JSONL
@@ -483,4 +482,4 @@ timeframe:
 
 **Built with ❤️ for research teams who want to stay ahead**
 
-**Status**: Phase 8 Complete - Deep Research Agent with autonomous multi-turn research, trajectory learning, and CLI integration. 3,980 tests, 99.16% coverage 🚀
+**Status**: Phase 8 Complete - Deep Research Agent with autonomous multi-turn research, trajectory learning, and CLI integration. 3,995 tests, 99.07% coverage 🚀

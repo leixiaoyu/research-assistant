@@ -2,7 +2,7 @@
 
 **Version:** 1.0
 **Phase:** 8 (Complete)
-**Last Updated:** 2026-04-19
+**Last Updated:** 2026-04-21
 
 ---
 
@@ -56,10 +56,10 @@ The Deep Research Agent (DRA) is an autonomous research system that enables mult
 
 ```bash
 # 1. Build the corpus from your paper registry
-arisp research status  # Check if corpus exists
+python -m src.cli research status  # Check if corpus exists
 
 # 2. Run a research session
-arisp research "What are the key innovations in the Transformer architecture?"
+python -m src.cli research "What are the key innovations in the Transformer architecture?"
 
 # 3. View results
 # Results are displayed in the terminal with citations
@@ -69,13 +69,13 @@ arisp research "What are the key innovations in the Transformer architecture?"
 
 ```bash
 # Start with a focused question
-arisp research "How does self-attention compare to RNN-based sequence modeling?"
+python -m src.cli research "How does self-attention compare to RNN-based sequence modeling?"
 
 # Use verbose mode to see the reasoning process
-arisp research "What evidence supports attention mechanism effectiveness?" --verbose
+python -m src.cli research "What evidence supports attention mechanism effectiveness?" --verbose
 
 # Process multiple questions from a file
-arisp research --question-file my_questions.txt --output results.md
+python -m src.cli research --question-file my_questions.txt --output results.md
 ```
 
 ---
@@ -86,16 +86,16 @@ arisp research --question-file my_questions.txt --output results.md
 
 ```bash
 # Single question
-arisp research "Your research question here"
+python -m src.cli research "Your research question here"
 
 # With options
-arisp research "Question" --max-turns 30 --verbose
+python -m src.cli research "Question" --max-turns 30 --verbose
 
 # From file (one question per line)
-arisp research --question-file questions.txt
+python -m src.cli research --question-file questions.txt
 
 # Save output to file
-arisp research "Question" --output results.md
+python -m src.cli research "Question" --output results.md
 ```
 
 ### Command Options
@@ -137,7 +137,7 @@ to capture different aspects of relationships [paper2: methods].
 
 ```bash
 # Show corpus statistics and DRA readiness
-arisp research status
+python -m src.cli research status
 ```
 
 Output:
@@ -161,13 +161,13 @@ Trajectories record your research sessions for analysis and learning.
 
 ```bash
 # List recent trajectories
-arisp trajectories list
+python -m src.cli trajectories list
 
 # Filter by quality
-arisp trajectories list --min-quality 0.7
+python -m src.cli trajectories list --min-quality 0.7
 
 # Show detailed information
-arisp trajectories list --details --limit 10
+python -m src.cli trajectories list --details --limit 10
 ```
 
 Example output:
@@ -190,16 +190,16 @@ Found 15 trajectories
 
 ```bash
 # Analyze trajectory patterns
-arisp trajectories analyze
+python -m src.cli trajectories analyze
 
 # With higher quality threshold
-arisp trajectories analyze --min-quality 0.7
+python -m src.cli trajectories analyze --min-quality 0.7
 
 # Save analysis to file
-arisp trajectories analyze --output analysis.json
+python -m src.cli trajectories analyze --output analysis.json
 
 # Skip tip generation
-arisp trajectories analyze --no-tips
+python -m src.cli trajectories analyze --no-tips
 ```
 
 Example output:
@@ -238,23 +238,23 @@ Example output:
 
 ```bash
 # Export as JSONL (ShareGPT format for fine-tuning)
-arisp trajectories export --output training_data.jsonl
+python -m src.cli trajectories export --output training_data.jsonl
 
 # Export as JSON (full trajectory data)
-arisp trajectories export --output data.json --format json
+python -m src.cli trajectories export --output data.json --format json
 
 # Export as CSV (summary statistics)
-arisp trajectories export --output stats.csv --format csv
+python -m src.cli trajectories export --output stats.csv --format csv
 
 # Filter exports
-arisp trajectories export --output high_quality.jsonl --min-quality 0.8
-arisp trajectories export --output all_data.jsonl --include-failed
+python -m src.cli trajectories export --output high_quality.jsonl --min-quality 0.8
+python -m src.cli trajectories export --output all_data.jsonl --include-failed
 ```
 
 ### View Statistics
 
 ```bash
-arisp trajectories stats
+python -m src.cli trajectories stats
 ```
 
 Example output:
@@ -286,13 +286,13 @@ Example output:
 
 ```bash
 # Clear all (with confirmation)
-arisp trajectories clear
+python -m src.cli trajectories clear
 
 # Force clear without confirmation
-arisp trajectories clear --force
+python -m src.cli trajectories clear --force
 
 # Clear old trajectories only
-arisp trajectories clear --older-than 30  # Days
+python -m src.cli trajectories clear --older-than 30  # Days
 ```
 
 ---
@@ -378,7 +378,7 @@ export DRA_TRAJECTORY_DIR="./custom/trajectories"
 
 1. **Keep Corpus Fresh:** Run discovery regularly to add new papers
 2. **Quality Over Quantity:** A focused corpus often yields better results
-3. **Check Coverage:** Use `arisp research status` to verify corpus health
+3. **Check Coverage:** Use `python -m src.cli research status` to verify corpus health
 
 ### Trajectory Learning
 
@@ -396,10 +396,10 @@ export DRA_TRAJECTORY_DIR="./custom/trajectories"
 
 ```bash
 # Check corpus status
-arisp research status
+python -m src.cli research status
 
 # If empty, ensure papers are in registry
-arisp catalog show
+python -m src.cli catalog show
 
 # Corpus is automatically built from registry papers
 ```
@@ -449,11 +449,11 @@ mkdir -p ./data/dra/trajectories
 
 ```bash
 # Show all DRA commands
-arisp research --help
-arisp trajectories --help
+python -m src.cli research --help
+python -m src.cli trajectories --help
 
 # Check ARISP version and dependencies
-arisp health
+python -m src.cli health
 ```
 
 ---
@@ -462,12 +462,12 @@ arisp health
 
 ### CLI Commands
 
-#### `arisp research`
+#### `python -m src.cli research`
 
 Execute deep research sessions.
 
 ```bash
-arisp research [QUESTION] [OPTIONS]
+python -m src.cli research [QUESTION] [OPTIONS]
 ```
 
 | Argument/Option | Description |
@@ -479,20 +479,20 @@ arisp research [QUESTION] [OPTIONS]
 | `--output, -o` | Output file path |
 | `--verbose, -v` | Show detailed progress |
 
-#### `arisp research status`
+#### `python -m src.cli research status`
 
 Show DRA status and corpus statistics.
 
 ```bash
-arisp research status [OPTIONS]
+python -m src.cli research status [OPTIONS]
 ```
 
-#### `arisp trajectories list`
+#### `python -m src.cli trajectories list`
 
 List recorded trajectories.
 
 ```bash
-arisp trajectories list [OPTIONS]
+python -m src.cli trajectories list [OPTIONS]
 ```
 
 | Option | Description |
@@ -501,12 +501,12 @@ arisp trajectories list [OPTIONS]
 | `--min-quality, -q` | Minimum quality score filter |
 | `--details, -d` | Show detailed information |
 
-#### `arisp trajectories analyze`
+#### `python -m src.cli trajectories analyze`
 
 Analyze trajectory patterns.
 
 ```bash
-arisp trajectories analyze [OPTIONS]
+python -m src.cli trajectories analyze [OPTIONS]
 ```
 
 | Option | Description |
@@ -515,12 +515,12 @@ arisp trajectories analyze [OPTIONS]
 | `--tips/--no-tips` | Generate learning tips |
 | `--output, -o` | Output file (JSON) |
 
-#### `arisp trajectories export`
+#### `python -m src.cli trajectories export`
 
 Export trajectories.
 
 ```bash
-arisp trajectories export --output FILE [OPTIONS]
+python -m src.cli trajectories export --output FILE [OPTIONS]
 ```
 
 | Option | Description |
@@ -530,20 +530,20 @@ arisp trajectories export --output FILE [OPTIONS]
 | `--min-quality, -q` | Minimum quality score |
 | `--include-failed` | Include failed sessions |
 
-#### `arisp trajectories stats`
+#### `python -m src.cli trajectories stats`
 
 Show storage statistics.
 
 ```bash
-arisp trajectories stats [OPTIONS]
+python -m src.cli trajectories stats [OPTIONS]
 ```
 
-#### `arisp trajectories clear`
+#### `python -m src.cli trajectories clear`
 
 Clear trajectory storage.
 
 ```bash
-arisp trajectories clear [OPTIONS]
+python -m src.cli trajectories clear [OPTIONS]
 ```
 
 | Option | Description |

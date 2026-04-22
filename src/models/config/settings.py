@@ -25,6 +25,31 @@ from src.models.concurrency import ConcurrencyConfig
 from src.models.notification import NotificationSettings
 
 
+class DRADailySettings(BaseModel):
+    """DRA integration settings for daily runs (Phase 8.5).
+
+    Controls whether and how the Deep Research Agent integrates
+    with the daily research pipeline.
+    """
+
+    enable_corpus_refresh: bool = Field(
+        True,
+        description="Refresh DRA corpus after daily pipeline completes",
+    )
+    corpus_data_dir: str = Field(
+        "./data/dra",
+        description="Directory for DRA corpus storage",
+    )
+    registry_path: str = Field(
+        "./data/registry",
+        description="Path to global paper registry",
+    )
+    force_reindex: bool = Field(
+        False,
+        description="Force re-indexing of all papers (not just new ones)",
+    )
+
+
 class GlobalSettings(BaseModel):
     """Global pipeline settings"""
 
@@ -104,6 +129,11 @@ class GlobalSettings(BaseModel):
     arxiv_default_categories: List[str] = Field(
         default_factory=lambda: ["cs.CL", "cs.LG", "cs.AI"],
         description="Default ArXiv categories for structured queries (Phase 7 Fix I1)",
+    )
+    # Phase 8.5: DRA Daily Integration
+    dra_daily: Optional[DRADailySettings] = Field(
+        default=None,
+        description="DRA integration settings for daily runs (Phase 8.5)",
     )
 
 

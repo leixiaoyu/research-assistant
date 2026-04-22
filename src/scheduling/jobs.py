@@ -12,6 +12,7 @@ Usage:
     await job.run()
 """
 
+import asyncio
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
@@ -135,16 +136,19 @@ class DailyResearchJob(BaseJob):
         self,
         config_path: Optional[Path] = None,
         enable_phase2: bool = True,
+        enable_dra_refresh: bool = True,
     ):
         """Initialize daily research job.
 
         Args:
             config_path: Path to research config (default: config/research_config.yaml)
             enable_phase2: Enable Phase 2 PDF/LLM extraction (default: True)
+            enable_dra_refresh: Enable DRA corpus refresh after pipeline (Phase 8.5)
         """
         super().__init__("daily_research")
         self.config_path = config_path or Path("config/research_config.yaml")
         self.enable_phase2 = enable_phase2
+        self.enable_dra_refresh = enable_dra_refresh
 
     async def run(self) -> Dict[str, Any]:
         """Run the complete research pipeline.
@@ -195,7 +199,13 @@ class DailyResearchJob(BaseJob):
         # Phase 3.7 + 3.8: Send notifications with deduplication (fail-safe)
         await self._send_notifications(result, config, pipeline)
 
-        return result.to_dict()
+        # Phase 8.5: DRA corpus refresh (fail-safe)
+        dra_result = await self._refresh_dra_corpus(config)
+
+        # Include DRA result in response
+        result_dict = result.to_dict()
+        result_dict["dra_corpus_refresh"] = dra_result
+        return result_dict
 
     async def _send_notifications(
         self,
@@ -287,6 +297,98 @@ class DailyResearchJob(BaseJob):
                 error=str(e),
                 exc_info=True,
             )
+
+    async def _refresh_dra_corpus(self, config: Any) -> Dict[str, Any]:
+        """Refresh DRA corpus after pipeline completion (Phase 8.5).
+
+        DRA corpus refresh is fail-safe - errors are logged but never raised.
+
+        Args:
+            config: ResearchConfig with DRA settings.
+
+        Returns:
+            Dictionary with refresh results or skip reason.
+        """
+        result: Dict[str, Any] = {
+            "status": "skipped",
+            "papers_ingested": 0,
+            "error": None,
+        }
+
+        # Check if DRA refresh is enabled
+        if not self.enable_dra_refresh:
+            result["error"] = "DRA refresh disabled via constructor"
+            logger.debug("dra_corpus_refresh_disabled", reason="constructor_flag")
+            return result
+
+        # Check config-level DRA settings
+        dra_settings = getattr(config.settings, "dra_daily", None)
+        if dra_settings is None:
+            result["error"] = "No dra_daily settings in config"
+            logger.debug("dra_corpus_refresh_skipped", reason="no_config")
+            return result
+
+        if not dra_settings.enable_corpus_refresh:
+            result["error"] = "Corpus refresh disabled in config"
+            logger.debug("dra_corpus_refresh_disabled", reason="config_flag")
+            return result
+
+        try:
+            from src.models.dra import CorpusConfig
+            from src.services.dra.corpus_manager import CorpusManager
+
+            corpus_data_dir = Path(dra_settings.corpus_data_dir)
+            registry_path = Path(dra_settings.registry_path)
+
+            # Check if registry exists
+            if not registry_path.exists():
+                result["error"] = f"Registry not found: {registry_path}"
+                logger.warning(
+                    "dra_corpus_refresh_skipped",
+                    reason="registry_not_found",
+                    path=str(registry_path),
+                )
+                return result
+
+            logger.info(
+                "dra_corpus_refresh_starting",
+                corpus_dir=str(corpus_data_dir),
+                registry_path=str(registry_path),
+                force_reindex=dra_settings.force_reindex,
+            )
+
+            # Initialize corpus manager and ingest
+            # Use asyncio.to_thread to offload blocking ML/IO operations
+            # to a background thread, preventing event loop stalls
+            corpus_config = CorpusConfig(corpus_dir=str(corpus_data_dir))
+            corpus_manager = CorpusManager(config=corpus_config)
+            papers_ingested = await asyncio.to_thread(
+                corpus_manager.ingest_from_registry,
+                registry_path=registry_path,
+                force=dra_settings.force_reindex,
+            )
+
+            result["status"] = "success"
+            result["papers_ingested"] = papers_ingested
+            result["corpus_size"] = corpus_manager.stats.total_chunks
+
+            logger.info(
+                "dra_corpus_refresh_completed",
+                papers_ingested=papers_ingested,
+                corpus_size=result.get("corpus_size", 0),
+            )
+
+        except Exception as e:
+            # DRA refresh should never break the pipeline
+            result["status"] = "error"
+            result["error"] = str(e)
+            logger.error(
+                "dra_corpus_refresh_failed",
+                error=str(e),
+                exc_info=True,
+            )
+
+        return result
 
 
 class CacheCleanupJob(BaseJob):
@@ -478,5 +580,101 @@ class HealthCheckJob(BaseJob):
             )
         else:
             logger.info("health_check_passed", status=report.status.value)
+
+        return result
+
+
+class DRACorpusRefreshJob(BaseJob):
+    """DRA corpus refresh job (Phase 8.5).
+
+    Refreshes the Deep Research Agent corpus by ingesting new papers
+    from the global registry after daily pipeline runs.
+    """
+
+    def __init__(
+        self,
+        corpus_data_dir: Optional[Path] = None,
+        registry_path: Optional[Path] = None,
+        force_reindex: bool = False,
+    ):
+        """Initialize DRA corpus refresh job.
+
+        Args:
+            corpus_data_dir: Directory for DRA corpus storage
+            registry_path: Path to global paper registry
+            force_reindex: Force re-indexing of all papers
+        """
+        super().__init__("dra_corpus_refresh")
+        self.corpus_data_dir = corpus_data_dir or Path("./data/dra")
+        self.registry_path = registry_path or Path("./data/registry")
+        self.force_reindex = force_reindex
+
+    async def run(self) -> Dict[str, Any]:
+        """Refresh DRA corpus from registry.
+
+        Ingests new papers discovered since last refresh into the
+        searchable corpus for Deep Research Agent queries.
+
+        Returns:
+            Dictionary with refresh results
+        """
+        from src.models.dra import CorpusConfig
+        from src.services.dra.corpus_manager import CorpusManager
+
+        result: Dict[str, Any] = {
+            "papers_ingested": 0,
+            "corpus_size": 0,
+            "status": "success",
+            "error": None,
+        }
+
+        # Check if registry exists
+        if not self.registry_path.exists():
+            logger.warning(
+                "dra_corpus_refresh_skipped",
+                reason="registry_not_found",
+                path=str(self.registry_path),
+            )
+            result["status"] = "skipped"
+            result["error"] = "Registry directory not found"
+            return result
+
+        try:
+            # Initialize corpus manager with config
+            config = CorpusConfig(corpus_dir=str(self.corpus_data_dir))
+            corpus_manager = CorpusManager(config=config)
+
+            logger.info(
+                "dra_corpus_refresh_starting",
+                registry_path=str(self.registry_path),
+                force_reindex=self.force_reindex,
+            )
+
+            # Ingest papers from registry
+            # Use asyncio.to_thread to offload blocking ML/IO operations
+            # to a background thread, preventing event loop stalls
+            papers_ingested = await asyncio.to_thread(
+                corpus_manager.ingest_from_registry,
+                registry_path=self.registry_path,
+                force=self.force_reindex,
+            )
+
+            result["papers_ingested"] = papers_ingested
+            result["corpus_size"] = corpus_manager.stats.total_chunks
+
+            logger.info(
+                "dra_corpus_refresh_completed",
+                papers_ingested=papers_ingested,
+                corpus_size=result["corpus_size"],
+            )
+
+        except Exception as e:
+            result["status"] = "error"
+            result["error"] = str(e)
+            logger.error(
+                "dra_corpus_refresh_failed",
+                error=str(e),
+                exc_info=True,
+            )
 
         return result

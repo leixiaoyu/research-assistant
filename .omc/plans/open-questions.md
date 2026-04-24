@@ -94,10 +94,99 @@ This file tracks unresolved questions, decisions deferred to the user, and items
 
 ### Security Considerations
 
-- [ ] **Entity extraction content sanitization** - REQ SR-9.3 requires sanitizing extracted entities. Define allowed character patterns for entity names. Recommend: alphanumeric, spaces, hyphens, periods, parentheses only. Reject scripts, HTML, control characters.
+- [x] **Entity extraction content sanitization** - ✅ DECIDED (2026-04-24): Entity names MUST match pattern `^[A-Za-z0-9 .\-()]+$` (alphanumeric, spaces, hyphens, periods, parentheses only). Violations SHALL raise `ValueError` with descriptive message. Rationale: Prevents HTML/script injection, control character abuse, and Unicode homograph attacks while allowing standard scientific notation (e.g., "GPT-4", "α-helix (protein)", "BERT-base").
 
-- [ ] **Subscription limits enforcement** - SR-9.5 specifies max 50 subscriptions, 100 keywords, 1000 papers/cycle. Should violations raise exceptions or silently truncate? Recommend raising `SubscriptionLimitError` with clear message.
+**Resolution:**
+- **Regex pattern:** `r"^[A-Za-z0-9 .\-()]+$"` (enforced via Pydantic validator)
+- **Rejection behavior:** Raise `ValueError("Entity name contains disallowed characters")` on validation failure
+- **Scope:** Applied to all entity name fields: `entity_type`, `entity_value`, `relation_type` in extracted graph data
+
+**Implementation stub:**
+```python
+from pydantic import BaseModel, field_validator
+import re
+
+ENTITY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9 .\-()]+$")
+
+class ExtractedEntity(BaseModel):
+    """Represents an entity extracted from paper content."""
+    entity_type: str  # e.g., "Model", "Dataset", "Metric"
+    entity_value: str  # e.g., "GPT-4", "ImageNet", "F1-score"
+
+    @field_validator("entity_type", "entity_value")
+    @classmethod
+    def sanitize_entity_name(cls, v: str) -> str:
+        """Validate entity names against allowed character pattern."""
+        if not ENTITY_NAME_PATTERN.match(v):
+            raise ValueError(
+                f"Entity name contains disallowed characters: {v!r}. "
+                f"Allowed: alphanumeric, spaces, hyphens, periods, parentheses."
+            )
+        return v.strip()  # Also normalize whitespace
+```
+
+- [x] **Subscription limits enforcement** - ✅ DECIDED (2026-04-24): Violations SHALL raise `SubscriptionLimitError(ValueError)` with actionable message. Enforcement occurs in `SubscriptionManager.add_subscription()` BEFORE database write. Rationale: Fail-fast with clear error messages prevents silent data loss (truncation would hide issues) and allows CLI/API to display helpful guidance. Limits: 50 subscriptions/user, 100 keywords/subscription, 1000 papers/cycle.
+
+**Resolution:**
+- **Exception class:** `SubscriptionLimitError(ValueError)` - inherits ValueError for compatibility with validation error handling
+- **Exception message format:** "Subscription limit exceeded: {limit_type} (current: {current}, max: {max}). Remove inactive subscriptions or upgrade plan."
+- **Enforcement location:** `SubscriptionManager.add_subscription()` method, before INSERT operation
+- **Exact limits:**
+  - Max 50 subscriptions per user
+  - Max 100 keywords per subscription
+  - Max 1000 papers checked per monitoring cycle
+
+**Implementation stub:**
+```python
+class SubscriptionLimitError(ValueError):
+    """Raised when subscription limits are exceeded."""
+    def __init__(self, limit_type: str, current: int, max_allowed: int):
+        message = (
+            f"Subscription limit exceeded: {limit_type} "
+            f"(current: {current}, max: {max_allowed}). "
+            f"Remove inactive subscriptions or upgrade plan."
+        )
+        super().__init__(message)
+        self.limit_type = limit_type
+        self.current = current
+        self.max_allowed = max_allowed
+
+
+class SubscriptionManager:
+    """Manages research monitoring subscriptions."""
+    MAX_SUBSCRIPTIONS_PER_USER = 50
+    MAX_KEYWORDS_PER_SUBSCRIPTION = 100
+    MAX_PAPERS_PER_CYCLE = 1000
+
+    def add_subscription(
+        self,
+        user_id: str,
+        keywords: list[str],
+        sources: list[str],
+    ) -> str:
+        """Add new subscription with limit enforcement."""
+        # Check subscription count limit
+        current_count = self._count_user_subscriptions(user_id)
+        if current_count >= self.MAX_SUBSCRIPTIONS_PER_USER:
+            raise SubscriptionLimitError(
+                "subscriptions",
+                current_count,
+                self.MAX_SUBSCRIPTIONS_PER_USER
+            )
+
+        # Check keyword count limit
+        if len(keywords) > self.MAX_KEYWORDS_PER_SUBSCRIPTION:
+            raise SubscriptionLimitError(
+                "keywords per subscription",
+                len(keywords),
+                self.MAX_KEYWORDS_PER_SUBSCRIPTION
+            )
+
+        # Proceed with subscription creation...
+        subscription_id = self._create_subscription(user_id, keywords, sources)
+        return subscription_id
+```
 
 ---
 
-*Last updated: 2026-04-23 (3 Phase 9 decisions resolved, 1 revised per team review)*
+*Last updated: 2026-04-24 (5 Phase 9 decisions resolved: SR-9.3 entity sanitization, SR-9.5 subscription limits finalized)*

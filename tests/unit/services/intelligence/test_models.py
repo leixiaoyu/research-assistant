@@ -12,23 +12,26 @@ import pytest
 from datetime import datetime, timezone
 
 from src.services.intelligence.models import (
-    NodeType,
+    ENTITY_NAME_PATTERN,
     EdgeType,
-    GraphNode,
     GraphEdge,
+    GraphNode,
+    GraphStoreError,
+    EdgeNotFoundError,
+    NodeNotFoundError,
+    NodeType,
+    OptimisticLockError,
+    ReferentialIntegrityError,
+)
+from src.services.intelligence.models.frontier import GapType, TrendStatus
+from src.services.intelligence.models.knowledge import (
     EntityType,
-    TrendStatus,
-    GapType,
-    PaperSource,
     ExtractedEntity,
     ExtractedRelation,
+)
+from src.services.intelligence.models.monitoring import (
+    PaperSource,
     SubscriptionLimitError,
-    OptimisticLockError,
-    GraphStoreError,
-    NodeNotFoundError,
-    EdgeNotFoundError,
-    ReferentialIntegrityError,
-    ENTITY_NAME_PATTERN,
 )
 
 

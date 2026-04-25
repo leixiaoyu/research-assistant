@@ -49,7 +49,7 @@ echo "🔍 Running Pragma Audit..."
 
 # Total count across all source code
 TOTAL_PRAGMA_COUNT=$(grep -r "pragma: no cover" src/ --include="*.py" 2>/dev/null | wc -l | tr -d ' ')
-TOTAL_PRAGMA_LIMIT=85  # Overall limit for entire codebase (Phase 8 DRA adds 7, Intelligence Services adds 4)
+TOTAL_PRAGMA_LIMIT=102  # Overall limit for entire codebase (Phase 8 DRA adds 7, Phase 9 Intelligence adds 17: 13 Protocol abstracts + 4 defensive)
 
 echo "   Total pragma count: $TOTAL_PRAGMA_COUNT (limit: $TOTAL_PRAGMA_LIMIT)"
 

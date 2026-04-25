@@ -841,7 +841,8 @@ class SQLiteGraphStore:
             incoming: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
 
             cursor = conn.execute(
-                "SELECT source_id, target_id FROM edges WHERE edge_type = 'cites'"
+                "SELECT source_id, target_id FROM edges WHERE edge_type = ?",
+                (EdgeType.CITES.value,),
             )
             for row in cursor.fetchall():
                 source, target = row["source_id"], row["target_id"]

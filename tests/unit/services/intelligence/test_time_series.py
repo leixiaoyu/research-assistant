@@ -583,6 +583,46 @@ class TestClose:
         ts_store.close()  # Should not raise
 
 
+class TestTimeSeriesAdditionalEdgeCases:
+    """Tests folded in from former test_coverage_extras.py."""
+
+    def test_velocity_with_different_window(self, ts_store: TimeSeriesStore) -> None:
+        """Test velocity computation with custom window."""
+        today = date.today()
+
+        # Add data for 60 days, decreasing over time (so recent values are
+        # higher when ordered by date ascending)
+        for i in range(60):
+            ts_store.add_point(
+                "topic:test",
+                today - timedelta(days=i),
+                "count",
+                float(60 - i),
+            )
+
+        velocity = ts_store.compute_velocity("topic:test", "count", window_days=15)
+        assert velocity is not None
+        assert velocity > 0
+
+    def test_aggregate_returns_sorted(self, ts_store: TimeSeriesStore) -> None:
+        """Test aggregation returns results sorted by period."""
+        ts_store.add_point("topic:test", date(2024, 1, 15), "count", 15.0)
+        ts_store.add_point("topic:test", date(2024, 1, 5), "count", 5.0)
+        ts_store.add_point("topic:test", date(2024, 1, 25), "count", 25.0)
+
+        aggs = ts_store.aggregate(
+            "topic:test",
+            "count",
+            AggregationPeriod.DAILY,
+            date(2024, 1, 1),
+            date(2024, 1, 31),
+        )
+
+        assert len(aggs) == 3
+        assert aggs[0].period_start < aggs[1].period_start
+        assert aggs[1].period_start < aggs[2].period_start
+
+
 class TestTimeSeriesPathTraversalRejection:
     """Security tests: TimeSeriesStore must reject unsafe paths."""
 

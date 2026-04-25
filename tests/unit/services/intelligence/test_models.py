@@ -9,7 +9,7 @@ Tests cover:
 """
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.services.intelligence.models import (
     NodeType,
@@ -17,7 +17,6 @@ from src.services.intelligence.models import (
     GraphNode,
     GraphEdge,
     EntityType,
-    RelationType,
     TrendStatus,
     GapType,
     PaperSource,
@@ -275,24 +274,6 @@ class TestEntityType:
         assert actual == expected
 
 
-class TestRelationType:
-    """Tests for RelationType enum."""
-
-    def test_all_relation_types_defined(self) -> None:
-        """Verify all expected relation types are defined."""
-        expected = {
-            "achieves",
-            "uses",
-            "evaluates_on",
-            "improves",
-            "compares",
-            "extends",
-            "requires",
-        }
-        actual = {rt.value for rt in RelationType}
-        assert actual == expected
-
-
 class TestTrendStatus:
     """Tests for TrendStatus enum."""
 
@@ -443,20 +424,20 @@ class TestExtractedRelation:
         """Test creating a valid relation."""
         relation = ExtractedRelation(
             relation_id="rel:achieves:1:2",
-            relation_type=RelationType.ACHIEVES,
+            relation_type=EdgeType.ACHIEVES,
             source_entity_id="entity:method:lora",
             target_entity_id="entity:result:42bleu",
             paper_id="paper:arxiv:2301.12345",
             confidence=0.85,
         )
-        assert relation.relation_type == RelationType.ACHIEVES
+        assert relation.relation_type == EdgeType.ACHIEVES
         assert relation.confidence == 0.85
 
     def test_relation_with_context(self) -> None:
         """Test relation with context text."""
         relation = ExtractedRelation(
             relation_id="rel:test",
-            relation_type=RelationType.USES,
+            relation_type=EdgeType.USES,
             source_entity_id="entity:a",
             target_entity_id="entity:b",
             context="We use method A to achieve...",
@@ -558,3 +539,90 @@ class TestEntityNamePattern:
         ]
         for name in invalid:
             assert ENTITY_NAME_PATTERN.match(name) is None
+
+
+class TestModelAdditionalEdgeCases:
+    """Tests folded in from former test_coverage_extras.py."""
+
+    def test_graph_node_empty_properties(self) -> None:
+        """Test GraphNode with explicit empty properties."""
+        node = GraphNode(node_id="test:1", node_type=NodeType.PAPER, properties={})
+        assert node.properties == {}
+
+    def test_graph_edge_empty_properties(self) -> None:
+        """Test GraphEdge with explicit empty properties."""
+        edge = GraphEdge(
+            edge_id="edge:1",
+            edge_type=EdgeType.CITES,
+            source_id="paper:1",
+            target_id="paper:2",
+            properties={},
+        )
+        assert edge.properties == {}
+
+    def test_extracted_entity_optional_fields(self) -> None:
+        """Test ExtractedEntity with all optional fields populated."""
+        entity = ExtractedEntity(
+            entity_id="entity:1",
+            entity_type=EntityType.METHOD,
+            name="LoRA",
+            aliases=[],
+            description="Low-Rank Adaptation",
+            paper_id="paper:1",
+            section="methods",
+            confidence=0.95,
+        )
+        assert entity.description == "Low-Rank Adaptation"
+        assert entity.section == "methods"
+
+    def test_extracted_relation_optional_context(self) -> None:
+        """Test ExtractedRelation without context."""
+        relation = ExtractedRelation(
+            relation_id="rel:1",
+            relation_type=EdgeType.USES,
+            source_entity_id="entity:1",
+            target_entity_id="entity:2",
+            paper_id="paper:1",
+            confidence=0.8,
+        )
+        assert relation.context is None
+
+    def test_node_with_version_set(self) -> None:
+        """Test creating node with explicit version."""
+        node = GraphNode(node_id="test:1", node_type=NodeType.PAPER, version=5)
+        assert node.version == 5
+
+    def test_edge_with_version_set(self) -> None:
+        """Test creating edge with explicit version."""
+        edge = GraphEdge(
+            edge_id="edge:1",
+            edge_type=EdgeType.CITES,
+            source_id="paper:1",
+            target_id="paper:2",
+            version=3,
+        )
+        assert edge.version == 3
+
+    def test_node_with_timestamps_set(self) -> None:
+        """Test creating node with explicit timestamps."""
+        ts = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        node = GraphNode(
+            node_id="test:1",
+            node_type=NodeType.PAPER,
+            created_at=ts,
+            updated_at=ts,
+        )
+        assert node.created_at == ts
+        assert node.updated_at == ts
+
+    def test_edge_with_timestamp_set(self) -> None:
+        """Test creating edge with explicit timestamp."""
+        ts = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        edge = GraphEdge(
+            edge_id="edge:1",
+            edge_type=EdgeType.CITES,
+            source_id="paper:1",
+            target_id="paper:2",
+            created_at=ts,
+        )
+        assert edge.created_at == ts

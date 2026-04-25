@@ -248,21 +248,6 @@ class EntityType(str, Enum):
     HYPERPARAMETER = "hyperparam"  # e.g., "learning_rate=1e-4"
 
 
-class RelationType(str, Enum):
-    """Types of relations between entities (Milestone 9.3).
-
-    Used for knowledge graph edges.
-    """
-
-    ACHIEVES = "achieves"  # Method ACHIEVES Result on Dataset
-    USES = "uses"  # Paper USES Method
-    EVALUATES_ON = "evaluates_on"  # Model EVALUATES_ON Dataset
-    IMPROVES = "improves"  # Method A IMPROVES Method B
-    COMPARES = "compares"  # Paper COMPARES Method A to Method B
-    EXTENDS = "extends"  # Method A EXTENDS Method B
-    REQUIRES = "requires"  # Method REQUIRES Hyperparameter
-
-
 class TrendStatus(str, Enum):
     """Status of a research trend (Milestone 9.4)."""
 
@@ -409,7 +394,7 @@ class ExtractedRelation(BaseModel):
         max_length=256,
         description="Unique relation identifier",
     )
-    relation_type: RelationType = Field(..., description="Type of relation")
+    relation_type: EdgeType = Field(..., description="Type of relation")
     source_entity_id: str = Field(
         ...,
         min_length=1,

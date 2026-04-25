@@ -498,6 +498,109 @@ class TestMigrationPathTraversalRejection:
             MigrationManager(bad_path)
 
 
+class TestMigrationAdditionalEdgeCases:
+    """Tests folded in from former test_coverage_extras.py."""
+
+    def test_check_threshold_critical_at_100k(self, temp_db: Path) -> None:
+        """Test critical warning at 100K nodes threshold."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+
+        # Insert enough nodes to trigger critical threshold
+        conn = sqlite3.connect(str(temp_db))
+        try:
+            for i in range(MigrationManager.NODE_COUNT_MIGRATION_THRESHOLD):
+                conn.execute(
+                    "INSERT INTO nodes (node_id, node_type, properties) "
+                    "VALUES (?, 'paper', '{}')",
+                    (f"paper:{i}",),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        warning = manager.check_node_count_threshold()
+        assert warning is not None
+        assert "CRITICAL" in warning
+        assert "100,000" in warning
+
+    def test_get_node_count_history_with_limit(self, temp_db: Path) -> None:
+        """Test node count history respects limit."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+
+        for _ in range(10):
+            manager.check_node_count_threshold()
+
+        history = manager.get_node_count_history(limit=5)
+        assert len(history) == 5
+
+    def test_migration_sql_error_handling(self, temp_db: Path) -> None:
+        """Test migration rollback on SQL error."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+
+        # Create a migration with invalid SQL
+        bad_migration = Migration(
+            version=999,
+            name="bad_migration",
+            up="INVALID SQL STATEMENT",
+        )
+
+        conn = manager._get_connection()
+        try:
+            manager._ensure_migrations_table(conn)
+            with pytest.raises(sqlite3.OperationalError):
+                manager.apply_migration(conn, bad_migration)
+        finally:
+            conn.close()
+
+    def test_check_threshold_before_migration(self, temp_db: Path) -> None:
+        """Test check threshold when table doesn't exist."""
+        manager = MigrationManager(temp_db)
+        warning = manager.check_node_count_threshold()
+        assert warning is None
+
+    def test_get_node_count_history_before_migration(self, temp_db: Path) -> None:
+        """Test get history when table doesn't exist."""
+        manager = MigrationManager(temp_db)
+        history = manager.get_node_count_history()
+        assert history == []
+
+    def test_get_applied_migrations_db_not_exist(self) -> None:
+        """Test get_applied_migrations when db file doesn't exist."""
+        non_existent = Path(tempfile.gettempdir()) / "nonexistent_db_12345.db"
+        if non_existent.exists():
+            non_existent.unlink()
+        manager = MigrationManager(non_existent)
+        result = manager.get_applied_migrations()
+        assert result == []
+
+    def test_check_threshold_db_not_exist(self) -> None:
+        """Test check_node_count_threshold when db file doesn't exist."""
+        non_existent = Path(tempfile.gettempdir()) / "nonexistent_db_check_12345.db"
+        if non_existent.exists():
+            non_existent.unlink()
+        manager = MigrationManager(non_existent)
+        result = manager.check_node_count_threshold()
+        assert result is None
+
+    def test_get_node_count_history_db_not_exist(self) -> None:
+        """Test get_node_count_history when db file doesn't exist."""
+        non_existent = Path(tempfile.gettempdir()) / "nonexistent_db_history_12345.db"
+        if non_existent.exists():
+            non_existent.unlink()
+        manager = MigrationManager(non_existent)
+        result = manager.get_node_count_history()
+        assert result == []
+
+    def test_migrate_logs_when_pending(self, temp_db: Path) -> None:
+        """Test migrate logs when there are pending migrations."""
+        manager = MigrationManager(temp_db)
+        applied = manager.migrate()
+        assert applied >= 1
+
+
 class TestMigrationTransactionRollback:
     """Tests for atomic migration application with explicit rollback."""
 

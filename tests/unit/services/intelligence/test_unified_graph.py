@@ -801,6 +801,192 @@ class TestUpdateNodeErrorPaths:
         assert exc_info.value.actual_version == 1
 
 
+class TestGraphStoreAdditionalEdgeCases:
+    """Tests folded in from former test_coverage_extras.py."""
+
+    def test_add_node_with_complex_properties(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Test adding node with nested properties."""
+        props = {
+            "title": "Test",
+            "nested": {"key": "value"},
+            "list": [1, 2, 3],
+            "date": "2024-01-01",
+        }
+        graph_store.add_node("paper:1", NodeType.PAPER, props)
+
+        retrieved = graph_store.get_node("paper:1")
+        assert retrieved is not None
+        assert retrieved.properties["nested"]["key"] == "value"
+        assert retrieved.properties["list"] == [1, 2, 3]
+
+    def test_update_node_round_trip(self, graph_store: SQLiteGraphStore) -> None:
+        """Update succeeds and the new property is persisted."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        node = graph_store.update_node("paper:1", {"new": "prop"})
+        assert node.properties["new"] == "prop"
+
+    def test_add_edge_unique_constraint(self, graph_store: SQLiteGraphStore) -> None:
+        """Adding the same edge twice raises GraphStoreError."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        graph_store.add_node("paper:2", NodeType.PAPER, {})
+        graph_store.add_edge("e:1", "paper:1", "paper:2", EdgeType.CITES, {})
+        with pytest.raises(GraphStoreError, match="already exists"):
+            graph_store.add_edge("e:1", "paper:1", "paper:2", EdgeType.CITES, {})
+
+    def test_get_edges_incoming_with_filter(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Test getting incoming edges with type filter."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        graph_store.add_node("paper:2", NodeType.PAPER, {})
+        graph_store.add_node("entity:1", NodeType.ENTITY, {})
+        graph_store.add_edge("e:1", "paper:2", "paper:1", EdgeType.CITES, {})
+        graph_store.add_edge("e:2", "entity:1", "paper:1", EdgeType.MENTIONS, {})
+
+        edges = graph_store.get_edges(
+            "paper:1", direction="incoming", edge_type=EdgeType.CITES
+        )
+        assert len(edges) == 1
+        assert edges[0].edge_type == EdgeType.CITES
+
+    def test_get_edges_both_with_filter(self, graph_store: SQLiteGraphStore) -> None:
+        """Test getting both direction edges with type filter."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        graph_store.add_node("paper:2", NodeType.PAPER, {})
+        graph_store.add_node("paper:3", NodeType.PAPER, {})
+        graph_store.add_edge("e:1", "paper:1", "paper:2", EdgeType.CITES, {})
+        graph_store.add_edge("e:2", "paper:3", "paper:1", EdgeType.CITES, {})
+        graph_store.add_edge("e:3", "paper:1", "paper:3", EdgeType.CITED_BY, {})
+
+        edges = graph_store.get_edges(
+            "paper:1", direction="both", edge_type=EdgeType.CITES
+        )
+        assert len(edges) == 2
+
+    def test_shortest_path_source_not_found(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Test shortest path when source doesn't exist."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        path = graph_store.shortest_path("nonexistent", "paper:1")
+        assert path is None
+
+    def test_search_nodes_no_results(self, graph_store: SQLiteGraphStore) -> None:
+        """Test search nodes returns empty for no matches."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {"title": "Test"})
+        results = graph_store.search_nodes("title", "Nonexistent")
+        assert len(results) == 0
+
+    def test_traverse_with_multiple_edge_types(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Test traverse following multiple edge types."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        graph_store.add_node("paper:2", NodeType.PAPER, {})
+        graph_store.add_node("entity:1", NodeType.ENTITY, {})
+        graph_store.add_edge("e:1", "paper:1", "paper:2", EdgeType.CITES, {})
+        graph_store.add_edge("e:2", "paper:1", "entity:1", EdgeType.MENTIONS, {})
+
+        nodes = graph_store.traverse(
+            "paper:1", [EdgeType.CITES, EdgeType.MENTIONS], max_depth=1
+        )
+        assert len(nodes) == 2
+
+    def test_pagerank_with_cycles(self, graph_store: SQLiteGraphStore) -> None:
+        """Test PageRank handles cycles."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        graph_store.add_node("paper:2", NodeType.PAPER, {})
+        graph_store.add_node("paper:3", NodeType.PAPER, {})
+        graph_store.add_edge("e:1", "paper:1", "paper:2", EdgeType.CITES, {})
+        graph_store.add_edge("e:2", "paper:2", "paper:3", EdgeType.CITES, {})
+        graph_store.add_edge("e:3", "paper:3", "paper:1", EdgeType.CITES, {})
+
+        scores = graph_store.pagerank()
+        assert len(scores) == 3
+        values = list(scores.values())
+        assert max(values) - min(values) < 0.1
+
+    def test_pagerank_with_dangling_nodes(self, graph_store: SQLiteGraphStore) -> None:
+        """Test PageRank handles dangling nodes (no outgoing edges)."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        graph_store.add_node("paper:2", NodeType.PAPER, {})
+        graph_store.add_node("paper:3", NodeType.PAPER, {})
+        graph_store.add_edge("e:1", "paper:1", "paper:3", EdgeType.CITES, {})
+        graph_store.add_edge("e:2", "paper:2", "paper:3", EdgeType.CITES, {})
+
+        scores = graph_store.pagerank()
+        assert len(scores) == 3
+        assert scores["paper:3"] >= scores["paper:1"]
+
+    def test_initialize_with_threshold_warning(self, temp_db: Path) -> None:
+        """Test initialize logs warning when threshold exceeded."""
+        from src.services.intelligence.storage.migrations import MigrationManager
+
+        store = SQLiteGraphStore(temp_db)
+        store.initialize()
+
+        conn = sqlite3.connect(str(temp_db))
+        try:
+            for i in range(MigrationManager.NODE_COUNT_WARNING_THRESHOLD):
+                conn.execute(
+                    "INSERT INTO nodes (node_id, node_type, properties) "
+                    "VALUES (?, 'paper', '{}')",
+                    (f"paper:{i}",),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        store2 = SQLiteGraphStore(temp_db)
+        store2._initialized = False
+        store2.initialize()
+
+    def test_update_node_concurrent_modification_via_external_write(
+        self, graph_store: SQLiteGraphStore, temp_db: Path
+    ) -> None:
+        """An external bump of version causes optimistic-lock failure."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+
+        conn = sqlite3.connect(str(temp_db))
+        try:
+            conn.execute("UPDATE nodes SET version = 5 WHERE node_id = 'paper:1'")
+            conn.commit()
+        finally:
+            conn.close()
+
+        with pytest.raises(OptimisticLockError):
+            graph_store.update_node("paper:1", {"new": "prop"}, expected_version=1)
+
+    def test_traverse_no_neighbors_of_requested_type(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Traverse returns empty when no edges of requested type exist."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        graph_store.add_node("paper:2", NodeType.PAPER, {})
+        graph_store.add_edge("e:1", "paper:1", "paper:2", EdgeType.MENTIONS, {})
+        nodes = graph_store.traverse("paper:1", [EdgeType.CITES], max_depth=1)
+        assert len(nodes) == 0
+
+    def test_get_nodes_by_type_empty_result(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Empty result when no nodes of the requested type exist."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        nodes = graph_store.get_nodes_by_type(NodeType.ENTITY)
+        assert len(nodes) == 0
+
+    def test_add_node_duplicate_message_includes_node_id(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """The duplicate-add error mentions the conflicting node id."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        with pytest.raises(GraphStoreError) as exc_info:
+            graph_store.add_node("paper:1", NodeType.PAPER, {})
+        assert "paper:1" in str(exc_info.value)
+
+
 def _install_update_rowcount_proxy(
     graph_store: SQLiteGraphStore, version_after: object
 ) -> None:

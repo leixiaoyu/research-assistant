@@ -22,7 +22,7 @@ from typing import Callable, Optional
 
 import structlog
 
-from src.services.intelligence.storage.path_utils import sanitize_storage_path
+from src.storage.intelligence_graph.path_utils import sanitize_storage_path
 
 logger = structlog.get_logger()
 

@@ -28,8 +28,8 @@ from src.services.intelligence.models import (
     OptimisticLockError,
     ReferentialIntegrityError,
 )
-from src.services.intelligence.storage.migrations import MigrationManager
-from src.services.intelligence.storage.path_utils import sanitize_storage_path
+from src.storage.intelligence_graph.migrations import MigrationManager
+from src.storage.intelligence_graph.path_utils import sanitize_storage_path
 
 logger = structlog.get_logger()
 
@@ -217,25 +217,6 @@ class GraphStore(Protocol):
 
         Returns:
             List of nodes in path, or None if no path exists
-        """
-        ...  # pragma: no cover - Protocol abstract method
-
-    # Algorithms
-    def pagerank(
-        self,
-        node_type: Optional[NodeType] = None,
-        iterations: int = 20,
-        damping: float = 0.85,
-    ) -> dict[str, float]:
-        """Compute PageRank scores for nodes.
-
-        Args:
-            node_type: Filter by node type (optional)
-            iterations: Number of iterations
-            damping: Damping factor
-
-        Returns:
-            Dict mapping node_id to PageRank score
         """
         ...  # pragma: no cover - Protocol abstract method
 
@@ -803,22 +784,16 @@ class SQLiteGraphStore:
         finally:
             conn.close()
 
-    # Algorithms
+    # Algorithm primitives — exposed so GraphAlgorithms can read the
+    # raw graph without coupling the Protocol to specific algorithms.
 
-    def pagerank(
-        self,
-        node_type: Optional[NodeType] = None,
-        iterations: int = 20,
-        damping: float = 0.85,
-    ) -> dict[str, float]:
-        """Compute PageRank scores for nodes.
+    def _list_node_ids(self, node_type: Optional[NodeType] = None) -> list[str]:
+        """Return every node id, optionally filtered by node type.
 
-        This is a simple iterative implementation suitable for small graphs.
-        For large graphs (>100K nodes), migrate to Neo4j with native PageRank.
+        Used by ``GraphAlgorithms``; not part of the GraphStore Protocol.
         """
         conn = self._get_connection()
         try:
-            # Get all relevant nodes
             if node_type:
                 cursor = conn.execute(
                     "SELECT node_id FROM nodes WHERE node_type = ?",
@@ -826,43 +801,30 @@ class SQLiteGraphStore:
                 )
             else:
                 cursor = conn.execute("SELECT node_id FROM nodes")
+            return [row["node_id"] for row in cursor.fetchall()]
+        finally:
+            conn.close()
 
-            node_ids = [row["node_id"] for row in cursor.fetchall()]
+    def _list_edges_by_types(
+        self, edge_type_values: list[str]
+    ) -> list[tuple[str, str]]:
+        """Return ``(source_id, target_id)`` tuples for the given edge types.
 
-            if not node_ids:
-                return {}
-
-            n = len(node_ids)
-            scores = {node_id: 1.0 / n for node_id in node_ids}
-            node_set = set(node_ids)
-
-            # Build adjacency list (outgoing edges only for PageRank)
-            outgoing: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
-            incoming: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
-
+        Used by ``GraphAlgorithms``; not part of the GraphStore Protocol.
+        """
+        if not edge_type_values:
+            return []
+        conn = self._get_connection()
+        try:
+            placeholders = ",".join("?" * len(edge_type_values))
             cursor = conn.execute(
-                "SELECT source_id, target_id FROM edges WHERE edge_type = ?",
-                (EdgeType.CITES.value,),
+                f"""
+                SELECT source_id, target_id FROM edges
+                WHERE edge_type IN ({placeholders})
+                """,
+                tuple(edge_type_values),
             )
-            for row in cursor.fetchall():
-                source, target = row["source_id"], row["target_id"]
-                if source in node_set and target in node_set:
-                    outgoing[source].append(target)
-                    incoming[target].append(source)
-
-            # Iterative PageRank
-            for _ in range(iterations):
-                new_scores: dict[str, float] = {}
-                for node_id in node_ids:
-                    rank = (1 - damping) / n
-                    for source in incoming[node_id]:
-                        out_degree = len(outgoing[source])
-                        if out_degree > 0:
-                            rank += damping * scores[source] / out_degree
-                    new_scores[node_id] = rank
-                scores = new_scores
-
-            return scores
+            return [(row["source_id"], row["target_id"]) for row in cursor.fetchall()]
         finally:
             conn.close()
 

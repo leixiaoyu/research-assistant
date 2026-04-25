@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from src.services.intelligence.storage.time_series import (
+from src.storage.intelligence_graph.time_series import (
     AggregationPeriod,
     TimeSeriesPoint,
     TimeSeriesStore,

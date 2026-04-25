@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from src.services.intelligence.storage.migrations import (
+from src.storage.intelligence_graph.migrations import (
     MigrationManager,
     Migration,
     ALL_MIGRATIONS,
@@ -396,7 +396,7 @@ class TestDatabaseReset:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Test the identifier validator rejects injection-style names."""
-        from src.services.intelligence.storage.migrations import (
+        from src.storage.intelligence_graph.migrations import (
             _validate_identifier,
         )
 

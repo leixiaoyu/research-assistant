@@ -4,12 +4,14 @@ Tests cover:
 - GraphStore Protocol compliance
 - SQLiteGraphStore CRUD operations
 - Graph traversal (BFS)
-- PageRank computation
 - Optimistic locking (incl. concurrent-update race)
 - Foreign key enforcement
 - Path-traversal rejection
 - JSONPath-injection rejection
 - Edge cases and error handling
+
+PageRank tests now live in
+``tests/unit/storage/intelligence_graph/test_algorithms.py``.
 """
 
 import sqlite3
@@ -28,7 +30,7 @@ from src.services.intelligence.models import (
     OptimisticLockError,
     ReferentialIntegrityError,
 )
-from src.services.intelligence.storage.unified_graph import (
+from src.storage.intelligence_graph.unified_graph import (
     GraphStore,
     SQLiteGraphStore,
 )
@@ -493,53 +495,6 @@ class TestShortestPath:
         assert path is None
 
 
-class TestPageRank:
-    """Tests for PageRank computation."""
-
-    def test_pagerank_empty_graph(self, graph_store: SQLiteGraphStore) -> None:
-        """Test PageRank on empty graph."""
-        scores = graph_store.pagerank()
-        assert scores == {}
-
-    def test_pagerank_single_node(self, graph_store: SQLiteGraphStore) -> None:
-        """Test PageRank with single node."""
-        graph_store.add_node("paper:1", NodeType.PAPER, {})
-
-        scores = graph_store.pagerank()
-
-        assert len(scores) == 1
-        assert "paper:1" in scores
-
-    def test_pagerank_basic(self, graph_store: SQLiteGraphStore) -> None:
-        """Test PageRank on simple graph."""
-        graph_store.add_node("paper:1", NodeType.PAPER, {})
-        graph_store.add_node("paper:2", NodeType.PAPER, {})
-        graph_store.add_node("paper:3", NodeType.PAPER, {})
-        # paper:1 cites paper:3, paper:2 cites paper:3
-        graph_store.add_edge("e:1", "paper:1", "paper:3", EdgeType.CITES, {})
-        graph_store.add_edge("e:2", "paper:2", "paper:3", EdgeType.CITES, {})
-
-        scores = graph_store.pagerank()
-
-        assert len(scores) == 3
-        # paper:3 should have highest score (most cited)
-        assert scores["paper:3"] >= scores["paper:1"]
-        assert scores["paper:3"] >= scores["paper:2"]
-
-    def test_pagerank_filter_by_type(self, graph_store: SQLiteGraphStore) -> None:
-        """Test PageRank filtered by node type."""
-        graph_store.add_node("paper:1", NodeType.PAPER, {})
-        graph_store.add_node("paper:2", NodeType.PAPER, {})
-        graph_store.add_node("entity:1", NodeType.ENTITY, {})
-
-        scores = graph_store.pagerank(node_type=NodeType.PAPER)
-
-        assert len(scores) == 2
-        assert "paper:1" in scores
-        assert "paper:2" in scores
-        assert "entity:1" not in scores
-
-
 class TestMetrics:
     """Tests for graph metrics."""
 
@@ -894,35 +849,9 @@ class TestGraphStoreAdditionalEdgeCases:
         )
         assert len(nodes) == 2
 
-    def test_pagerank_with_cycles(self, graph_store: SQLiteGraphStore) -> None:
-        """Test PageRank handles cycles."""
-        graph_store.add_node("paper:1", NodeType.PAPER, {})
-        graph_store.add_node("paper:2", NodeType.PAPER, {})
-        graph_store.add_node("paper:3", NodeType.PAPER, {})
-        graph_store.add_edge("e:1", "paper:1", "paper:2", EdgeType.CITES, {})
-        graph_store.add_edge("e:2", "paper:2", "paper:3", EdgeType.CITES, {})
-        graph_store.add_edge("e:3", "paper:3", "paper:1", EdgeType.CITES, {})
-
-        scores = graph_store.pagerank()
-        assert len(scores) == 3
-        values = list(scores.values())
-        assert max(values) - min(values) < 0.1
-
-    def test_pagerank_with_dangling_nodes(self, graph_store: SQLiteGraphStore) -> None:
-        """Test PageRank handles dangling nodes (no outgoing edges)."""
-        graph_store.add_node("paper:1", NodeType.PAPER, {})
-        graph_store.add_node("paper:2", NodeType.PAPER, {})
-        graph_store.add_node("paper:3", NodeType.PAPER, {})
-        graph_store.add_edge("e:1", "paper:1", "paper:3", EdgeType.CITES, {})
-        graph_store.add_edge("e:2", "paper:2", "paper:3", EdgeType.CITES, {})
-
-        scores = graph_store.pagerank()
-        assert len(scores) == 3
-        assert scores["paper:3"] >= scores["paper:1"]
-
     def test_initialize_with_threshold_warning(self, temp_db: Path) -> None:
         """Test initialize logs warning when threshold exceeded."""
-        from src.services.intelligence.storage.migrations import MigrationManager
+        from src.storage.intelligence_graph.migrations import MigrationManager
 
         store = SQLiteGraphStore(temp_db)
         store.initialize()

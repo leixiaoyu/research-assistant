@@ -13,6 +13,8 @@ Migration Strategy:
 - Failed migrations rollback automatically
 """
 
+import os
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,7 +22,35 @@ from typing import Callable, Optional
 
 import structlog
 
+from src.services.intelligence.storage.path_utils import sanitize_storage_path
+
 logger = structlog.get_logger()
+
+
+# SQL identifier pattern: standard ASCII identifiers only.
+# Used to validate table names read from sqlite_master before interpolation.
+_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def _validate_identifier(name: str) -> str:
+    """Validate a SQL identifier against a strict whitelist pattern.
+
+    This guards against identifier injection when interpolating table names
+    into DDL/DML that cannot be parameterized (e.g., ``DROP TABLE``).
+
+    Args:
+        name: Candidate SQL identifier (e.g., a table name).
+
+    Returns:
+        The validated identifier (unchanged).
+
+    Raises:
+        ValueError: If the identifier does not match
+            ``^[a-zA-Z_][a-zA-Z0-9_]*$``.
+    """
+    if not isinstance(name, str) or not _IDENTIFIER_PATTERN.match(name):
+        raise ValueError(f"Invalid SQL identifier: {name!r}")
+    return name
 
 
 @dataclass
@@ -145,9 +175,11 @@ class MigrationManager:
         """Initialize migration manager.
 
         Args:
-            db_path: Path to SQLite database file.
+            db_path: Path to SQLite database file. Must reside under one of
+                the approved storage roots (``data/``, ``cache/``, or the
+                system temp directory). See ``sanitize_storage_path``.
         """
-        self.db_path = Path(db_path)
+        self.db_path = sanitize_storage_path(db_path)
         self._ensure_directory()
 
     def _ensure_directory(self) -> None:
@@ -155,13 +187,23 @@ class MigrationManager:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Get a database connection with foreign keys enabled.
+        """Get a database connection configured for safe concurrent access.
+
+        Pragmas applied:
+        - ``foreign_keys=ON``: referential integrity
+        - ``journal_mode=WAL``: writers don't block readers; better
+          concurrency
+        - ``synchronous=NORMAL``: durability vs. throughput trade-off
+        - ``busy_timeout=5000``: wait up to 5s for locks before failing
 
         Returns:
-            SQLite connection with PRAGMA foreign_keys = ON.
+            SQLite connection ready for use.
         """
         conn = sqlite3.connect(str(self.db_path))
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -209,15 +251,52 @@ class MigrationManager:
         current_version = self.get_current_version()
         return [m for m in ALL_MIGRATIONS if m.version > current_version]
 
+    @staticmethod
+    def _split_sql_statements(script: str) -> list[str]:
+        """Split a SQL script into individual statements.
+
+        SQLite's ``executescript`` runs in autocommit mode and cannot be
+        rolled back. To preserve atomicity we split on ``;`` and dispatch
+        statements individually inside a transaction.
+
+        Comments and blank lines are stripped. Statements that contain
+        BEGIN/COMMIT/ROLLBACK are not expected in migration scripts.
+
+        Args:
+            script: Raw SQL containing one or more statements.
+
+        Returns:
+            List of trimmed, non-empty SQL statements.
+        """
+        statements: list[str] = []
+        for raw in script.split(";"):
+            # Strip line comments and surrounding whitespace
+            cleaned_lines = []
+            for line in raw.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("--"):
+                    continue
+                cleaned_lines.append(stripped)
+            cleaned = " ".join(cleaned_lines).strip()
+            if cleaned:
+                statements.append(cleaned)
+        return statements
+
     def apply_migration(self, conn: sqlite3.Connection, migration: Migration) -> None:
         """Apply a single migration atomically.
+
+        Strategy: replace ``executescript`` (which auto-commits per
+        statement and cannot be rolled back) with explicit per-statement
+        execution inside a single transaction. If any statement fails the
+        whole migration is rolled back and the version is NOT recorded in
+        ``schema_migrations``.
 
         Args:
             conn: Database connection.
             migration: Migration to apply.
 
         Raises:
-            sqlite3.Error: If migration fails.
+            sqlite3.Error: If migration fails (changes are rolled back).
         """
         logger.info(
             "applying_migration",
@@ -226,8 +305,10 @@ class MigrationManager:
         )
 
         try:
+            conn.execute("BEGIN")
             if isinstance(migration.up, str):
-                conn.executescript(migration.up)
+                for statement in self._split_sql_statements(migration.up):
+                    conn.execute(statement)
             else:
                 migration.up(conn)
 
@@ -377,11 +458,26 @@ class MigrationManager:
         finally:
             conn.close()
 
+    # Environment flag required to authorize destructive reset. Without it,
+    # ``reset_database`` raises immediately to prevent accidental wipes.
+    DESTRUCTIVE_RESET_ENV_FLAG = "INTELLIGENCE_ALLOW_DESTRUCTIVE_RESET"
+
     def reset_database(self) -> None:
         """Reset database by removing all tables.
 
-        WARNING: This destroys all data. Use only for testing.
+        WARNING: This destroys all data. Gated behind the
+        ``INTELLIGENCE_ALLOW_DESTRUCTIVE_RESET=1`` environment variable to
+        prevent accidental wipes. Each table name is validated against a
+        strict identifier whitelist and double-quoted before interpolation
+        into the DDL to defend against identifier injection from a tampered
+        ``sqlite_master``.
         """
+        if os.environ.get(self.DESTRUCTIVE_RESET_ENV_FLAG) != "1":
+            raise RuntimeError(
+                "reset_database is destructive and disabled by default. "
+                f"Set {self.DESTRUCTIVE_RESET_ENV_FLAG}=1 to authorize."
+            )
+
         if not self.db_path.exists():
             return
 
@@ -394,12 +490,16 @@ class MigrationManager:
             cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = [row["name"] for row in cursor.fetchall()]
 
-            # Drop all tables
+            # Drop all tables (validated + quoted to guard against injection)
+            dropped = 0
             for table in tables:
-                if table != "sqlite_sequence":
-                    conn.execute(f"DROP TABLE IF EXISTS {table}")
+                if table == "sqlite_sequence":
+                    continue
+                safe_name = _validate_identifier(table)
+                conn.execute(f'DROP TABLE IF EXISTS "{safe_name}"')
+                dropped += 1
 
             conn.commit()
-            logger.info("database_reset", tables_dropped=len(tables))
+            logger.info("database_reset", tables_dropped=dropped)
         finally:
             conn.close()

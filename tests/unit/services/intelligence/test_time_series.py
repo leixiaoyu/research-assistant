@@ -19,6 +19,7 @@ from src.services.intelligence.storage.time_series import (
     TimeSeriesPoint,
     TimeSeriesStore,
 )
+from src.utils.security import SecurityError
 
 
 @pytest.fixture
@@ -481,6 +482,13 @@ class TestDeletion:
         )
         assert len(remaining) == 0
 
+    def test_delete_series_nonexistent_returns_zero(
+        self, ts_store: TimeSeriesStore
+    ) -> None:
+        """Deleting an unknown series returns 0 without logging."""
+        deleted = ts_store.delete_series("nonexistent:series")
+        assert deleted == 0
+
 
 class TestListing:
     """Tests for listing operations."""
@@ -573,3 +581,21 @@ class TestClose:
     def test_close_no_error(self, ts_store: TimeSeriesStore) -> None:
         """Test close method doesn't raise."""
         ts_store.close()  # Should not raise
+
+
+class TestTimeSeriesPathTraversalRejection:
+    """Security tests: TimeSeriesStore must reject unsafe paths."""
+
+    @pytest.mark.parametrize(
+        "bad_path",
+        [
+            "../../etc/passwd.db",
+            "/etc/passwd",
+            "/usr/bin/sqlite3.db",
+            "../../../shadow.db",
+        ],
+    )
+    def test_time_series_rejects_traversal_path(self, bad_path: str) -> None:
+        """TimeSeriesStore must reject paths outside approved roots."""
+        with pytest.raises(SecurityError):
+            TimeSeriesStore(bad_path)

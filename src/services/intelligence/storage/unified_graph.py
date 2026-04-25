@@ -9,6 +9,7 @@ This module provides:
 """
 
 import json
+import re
 import sqlite3
 from collections import deque
 from datetime import datetime, timezone
@@ -28,8 +29,15 @@ from src.services.intelligence.models import (
     ReferentialIntegrityError,
 )
 from src.services.intelligence.storage.migrations import MigrationManager
+from src.services.intelligence.storage.path_utils import sanitize_storage_path
 
 logger = structlog.get_logger()
+
+
+# Strict pattern for property keys used in JSONPath expressions.
+# Prevents JSONPath injection in search_nodes by ensuring only safe identifier
+# characters are used (alphanumeric, underscore, max 64 chars).
+_PROPERTY_KEY_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
 
 
 @runtime_checkable
@@ -294,9 +302,11 @@ class SQLiteGraphStore:
         """Initialize SQLite graph store.
 
         Args:
-            db_path: Path to SQLite database file.
+            db_path: Path to SQLite database file. Must reside under one of
+                the approved storage roots (``data/``, ``cache/``, or the
+                system temp directory). See ``sanitize_storage_path``.
         """
-        self.db_path = Path(db_path)
+        self.db_path = sanitize_storage_path(db_path)
         self._migration_manager = MigrationManager(self.db_path)
         self._initialized = False
 
@@ -320,10 +330,16 @@ class SQLiteGraphStore:
             logger.warning("node_count_threshold", message=warning)
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Get a database connection with foreign keys enabled.
+        """Get a database connection configured for safe concurrent access.
+
+        Pragmas applied:
+        - ``foreign_keys=ON``: referential integrity (CRITICAL)
+        - ``journal_mode=WAL``: writers don't block readers
+        - ``synchronous=NORMAL``: durability vs. throughput trade-off
+        - ``busy_timeout=5000``: wait up to 5s for locks before failing
 
         Returns:
-            SQLite connection with PRAGMA foreign_keys = ON.
+            SQLite connection ready for use.
 
         Raises:
             GraphStoreError: If store not initialized.
@@ -336,6 +352,9 @@ class SQLiteGraphStore:
         conn = sqlite3.connect(str(self.db_path))
         # CRITICAL: Enable foreign keys for referential integrity
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -405,9 +424,8 @@ class SQLiteGraphStore:
             conn.rollback()
             if "UNIQUE constraint failed" in str(e):
                 raise GraphStoreError(f"Node already exists: {node_id}")
-            raise GraphStoreError(
-                f"Failed to add node: {e}"
-            )  # pragma: no cover - defensive
+            logger.error("node_add_integrity_error", node_id=node_id, error=str(e))
+            raise GraphStoreError(f"Failed to add node: {e}")
         finally:
             conn.close()
 
@@ -427,26 +445,45 @@ class SQLiteGraphStore:
         properties: dict[str, Any],
         expected_version: Optional[int] = None,
     ) -> GraphNode:
-        """Update node properties with optimistic locking."""
+        """Update node properties with optimistic locking.
+
+        Uses ``BEGIN IMMEDIATE`` to acquire a write lock at the start of the
+        read+update sequence so concurrent writers serialize and the
+        optimistic-lock check observes the same version it later updates.
+        """
         conn = self._get_connection()
         try:
+            # Acquire write lock up-front to prevent the read-then-update race
+            conn.execute("BEGIN IMMEDIATE")
+
             # Get current node
             cursor = conn.execute("SELECT * FROM nodes WHERE node_id = ?", (node_id,))
             row = cursor.fetchone()
 
             if not row:
+                conn.rollback()
                 raise NodeNotFoundError(node_id)
 
             current_version = row["version"]
 
             # Check version for optimistic locking
             if expected_version is not None and current_version != expected_version:
+                conn.rollback()
                 raise OptimisticLockError(node_id, expected_version, current_version)
 
             # Merge properties
             current_props = self._deserialize_properties(row["properties"])
             merged_props = {**current_props, **properties}
-            props_json = self._serialize_properties(merged_props)
+            try:
+                props_json = self._serialize_properties(merged_props)
+            except (TypeError, ValueError) as e:
+                conn.rollback()
+                logger.error(
+                    "node_update_serialize_failed",
+                    node_id=node_id,
+                    error=str(e),
+                )
+                raise GraphStoreError(f"Failed to update node: {e}")
 
             now = datetime.now(timezone.utc).isoformat()
             new_version = current_version + 1
@@ -461,10 +498,18 @@ class SQLiteGraphStore:
                 (props_json, new_version, now, node_id, current_version),
             )
 
-            if cursor.rowcount == 0:  # pragma: no cover - race condition
-                # Concurrent modification detected
+            if cursor.rowcount == 0:
+                # Concurrent modification detected: re-query actual version
+                # so the error reports the truth, not a guess.
+                actual_cursor = conn.execute(
+                    "SELECT version FROM nodes WHERE node_id = ?", (node_id,)
+                )
+                actual_row = actual_cursor.fetchone()
                 conn.rollback()
-                raise OptimisticLockError(node_id, current_version, current_version + 1)
+                actual_version = (
+                    actual_row["version"] if actual_row else current_version
+                )
+                raise OptimisticLockError(node_id, current_version, actual_version)
 
             conn.commit()
 
@@ -483,11 +528,6 @@ class SQLiteGraphStore:
                 created_at=datetime.fromisoformat(row["created_at"]),
                 updated_at=datetime.fromisoformat(now),
             )
-        except (NodeNotFoundError, OptimisticLockError):
-            raise
-        except Exception as e:  # pragma: no cover - defensive
-            conn.rollback()
-            raise GraphStoreError(f"Failed to update node: {e}")
         finally:
             conn.close()
 
@@ -557,9 +597,14 @@ class SQLiteGraphStore:
                 )
             if "UNIQUE constraint failed" in str(e):
                 raise GraphStoreError(f"Edge already exists: {edge_id}")
-            raise GraphStoreError(
-                f"Failed to add edge: {e}"
-            )  # pragma: no cover - defensive
+            logger.error(
+                "edge_add_integrity_error",
+                edge_id=edge_id,
+                source_id=source_id,
+                target_id=target_id,
+                error=str(e),
+            )
+            raise GraphStoreError(f"Failed to add edge: {e}")
         finally:
             conn.close()
 
@@ -899,15 +944,26 @@ class SQLiteGraphStore:
     ) -> list[GraphNode]:
         """Search nodes by property value (exact match in JSON).
 
+        ``property_key`` is interpolated into a SQLite JSONPath
+        (``$.<property_key>``) and is therefore validated against
+        ``_PROPERTY_KEY_PATTERN`` to prevent JSONPath injection. Only
+        identifier-like keys (``[A-Za-z_][A-Za-z0-9_]{0,63}``) are accepted.
+
         Args:
-            property_key: Property key to search
+            property_key: Property key to search (validated)
             property_value: Property value to match
             node_type: Filter by node type (optional)
             limit: Maximum number of nodes to return
 
         Returns:
             List of matching GraphNode objects
+
+        Raises:
+            ValueError: If ``property_key`` does not match the safe pattern.
         """
+        if not _PROPERTY_KEY_PATTERN.match(property_key or ""):
+            raise ValueError(f"Invalid property_key: {property_key!r}")
+
         conn = self._get_connection()
         try:
             # Use JSON extraction for property search

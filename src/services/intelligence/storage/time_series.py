@@ -24,6 +24,7 @@ from typing import Any, Optional
 import structlog
 
 from src.services.intelligence.storage.migrations import MigrationManager
+from src.services.intelligence.storage.path_utils import sanitize_storage_path
 
 logger = structlog.get_logger()
 
@@ -126,9 +127,11 @@ class TimeSeriesStore:
         """Initialize time series store.
 
         Args:
-            db_path: Path to SQLite database file.
+            db_path: Path to SQLite database file. Must reside under one of
+                the approved storage roots (``data/``, ``cache/``, or the
+                system temp directory). See ``sanitize_storage_path``.
         """
-        self.db_path = Path(db_path)
+        self.db_path = sanitize_storage_path(db_path)
         self._migration_manager = MigrationManager(self.db_path)
         self._initialized = False
 
@@ -139,7 +142,10 @@ class TimeSeriesStore:
         logger.debug("time_series_store_initialized", db_path=str(self.db_path))
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Get a database connection.
+        """Get a database connection configured for safe concurrent access.
+
+        Pragmas applied: ``foreign_keys=ON``, ``journal_mode=WAL``,
+        ``synchronous=NORMAL``, ``busy_timeout=5000``.
 
         Returns:
             SQLite connection.
@@ -153,6 +159,10 @@ class TimeSeriesStore:
             )
 
         conn = sqlite3.connect(str(self.db_path))
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         return conn
 

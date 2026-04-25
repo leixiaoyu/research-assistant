@@ -20,6 +20,7 @@ from src.services.intelligence.storage.migrations import (
     ALL_MIGRATIONS,
     MIGRATION_V1_INITIAL,
 )
+from src.utils.security import SecurityError
 
 
 @pytest.fixture
@@ -69,6 +70,12 @@ class TestMigrationManager:
     ) -> None:
         """Test current version is 0 for new database."""
         assert migration_manager.get_current_version() == 0
+
+    def test_get_current_version_db_not_exist(self, temp_db: Path) -> None:
+        """Test current version is 0 when db file does not yet exist."""
+        temp_db.unlink(missing_ok=True)
+        manager = MigrationManager(temp_db)
+        assert manager.get_current_version() == 0
 
     def test_get_pending_migrations_new_db(
         self, migration_manager: MigrationManager
@@ -313,10 +320,25 @@ class TestNodeCountThresholds:
 class TestDatabaseReset:
     """Tests for database reset functionality."""
 
-    def test_reset_removes_all_tables(
-        self, migration_manager: MigrationManager, temp_db: Path
+    def test_reset_requires_env_flag(
+        self,
+        migration_manager: MigrationManager,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Test reset removes all tables."""
+        """Test reset_database refuses to run without the env flag."""
+        migration_manager.migrate()
+        monkeypatch.delenv(MigrationManager.DESTRUCTIVE_RESET_ENV_FLAG, raising=False)
+        with pytest.raises(RuntimeError, match="DESTRUCTIVE_RESET"):
+            migration_manager.reset_database()
+
+    def test_reset_with_flag_succeeds(
+        self,
+        migration_manager: MigrationManager,
+        temp_db: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test reset removes all tables when env flag is set."""
+        monkeypatch.setenv(MigrationManager.DESTRUCTIVE_RESET_ENV_FLAG, "1")
         migration_manager.migrate()
 
         # Add some data
@@ -345,9 +367,12 @@ class TestDatabaseReset:
             conn.close()
 
     def test_reset_allows_remigration(
-        self, migration_manager: MigrationManager
+        self,
+        migration_manager: MigrationManager,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Test database can be remigrated after reset."""
+        monkeypatch.setenv(MigrationManager.DESTRUCTIVE_RESET_ENV_FLAG, "1")
         migration_manager.migrate()
         migration_manager.reset_database()
 
@@ -355,14 +380,45 @@ class TestDatabaseReset:
         applied = migration_manager.migrate()
         assert applied == len(ALL_MIGRATIONS)
 
-    def test_reset_nonexistent_db(self, temp_db: Path) -> None:
+    def test_reset_nonexistent_db(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Test reset handles non-existent database."""
+        monkeypatch.setenv(MigrationManager.DESTRUCTIVE_RESET_ENV_FLAG, "1")
         # Delete the temp file
         temp_db.unlink(missing_ok=True)
 
         manager = MigrationManager(temp_db)
         # Should not raise
         manager.reset_database()
+
+    def test_reset_rejects_malicious_table_names(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test the identifier validator rejects injection-style names."""
+        from src.services.intelligence.storage.migrations import (
+            _validate_identifier,
+        )
+
+        # Valid identifiers
+        assert _validate_identifier("nodes") == "nodes"
+        assert _validate_identifier("schema_migrations") == "schema_migrations"
+        assert _validate_identifier("_underscore") == "_underscore"
+
+        # Injection-style payloads must be rejected
+        bad_names = [
+            'nodes"; DROP TABLE secrets; --',
+            "nodes; DELETE FROM users",
+            "nodes' OR '1'='1",
+            "1bad",
+            "",
+            "has space",
+            "has-dash",
+            "with.dot",
+        ]
+        for bad in bad_names:
+            with pytest.raises(ValueError, match="Invalid SQL identifier"):
+                _validate_identifier(bad)
 
 
 class TestMigrationCallable:
@@ -422,3 +478,64 @@ class TestMigrationConstants:
             MigrationManager.NODE_COUNT_WARNING_THRESHOLD
             < MigrationManager.NODE_COUNT_MIGRATION_THRESHOLD
         )
+
+
+class TestMigrationPathTraversalRejection:
+    """Security tests: MigrationManager must reject unsafe paths."""
+
+    @pytest.mark.parametrize(
+        "bad_path",
+        [
+            "../../etc/passwd.db",
+            "/etc/passwd",
+            "/usr/bin/sqlite3.db",
+            "../../../shadow.db",
+        ],
+    )
+    def test_migration_rejects_traversal_path(self, bad_path: str) -> None:
+        """MigrationManager must reject paths outside approved roots."""
+        with pytest.raises(SecurityError):
+            MigrationManager(bad_path)
+
+
+class TestMigrationTransactionRollback:
+    """Tests for atomic migration application with explicit rollback."""
+
+    def test_apply_migration_rolls_back_on_failure(self, temp_db: Path) -> None:
+        """A migration with one good + one bad statement must roll back fully
+        and not record itself in schema_migrations."""
+        manager = MigrationManager(temp_db)
+        # Apply baseline migrations first so schema_migrations exists
+        manager.migrate()
+
+        bad_migration = Migration(
+            version=42,
+            name="half_bad",
+            up=(
+                # Valid first statement
+                "CREATE TABLE temp_atomic_test (id INTEGER PRIMARY KEY);"
+                # Invalid second statement (references missing table)
+                "INSERT INTO never_existed (id) VALUES (1);"
+            ),
+        )
+
+        conn = manager._get_connection()
+        try:
+            with pytest.raises(sqlite3.OperationalError):
+                manager.apply_migration(conn, bad_migration)
+        finally:
+            conn.close()
+
+        # First statement must have been rolled back
+        check = sqlite3.connect(str(temp_db))
+        try:
+            cur = check.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'temp_atomic_test'"
+            )
+            assert cur.fetchone() is None
+        finally:
+            check.close()
+
+        # The migration must NOT be recorded
+        applied = {m["version"] for m in manager.get_applied_migrations()}
+        assert 42 not in applied

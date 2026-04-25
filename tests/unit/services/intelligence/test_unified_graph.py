@@ -5,14 +5,18 @@ Tests cover:
 - SQLiteGraphStore CRUD operations
 - Graph traversal (BFS)
 - PageRank computation
-- Optimistic locking
+- Optimistic locking (incl. concurrent-update race)
 - Foreign key enforcement
+- Path-traversal rejection
+- JSONPath-injection rejection
 - Edge cases and error handling
 """
 
 import sqlite3
 import tempfile
+import threading
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -28,6 +32,7 @@ from src.services.intelligence.storage.unified_graph import (
     GraphStore,
     SQLiteGraphStore,
 )
+from src.utils.security import SecurityError
 
 
 @pytest.fixture
@@ -648,3 +653,263 @@ class TestThresholdChecks:
     def test_close(self, graph_store: SQLiteGraphStore) -> None:
         """Test close method doesn't raise."""
         graph_store.close()  # Should not raise
+
+
+class TestSearchNodesInjection:
+    """Security tests: search_nodes must reject JSONPath injection."""
+
+    @pytest.mark.parametrize(
+        "bad_key",
+        [
+            'a"]; DROP',
+            "$.title",
+            "",
+            "a" * 100,
+            "1abc",
+            "key with space",
+            "key-with-dash",
+            "key.with.dot",
+        ],
+    )
+    def test_search_nodes_rejects_jsonpath_injection(
+        self, graph_store: SQLiteGraphStore, bad_key: str
+    ) -> None:
+        """Reject any property_key that is not a safe identifier."""
+        with pytest.raises(ValueError, match="Invalid property_key"):
+            graph_store.search_nodes(bad_key, "value")
+
+
+class TestPathTraversalRejection:
+    """Security tests: SQLiteGraphStore must reject unsafe paths."""
+
+    @pytest.mark.parametrize(
+        "bad_path",
+        [
+            "../../etc/passwd.db",
+            "/etc/passwd",
+            "/usr/bin/sqlite3.db",
+            "../../../shadow.db",
+        ],
+    )
+    def test_graph_store_rejects_traversal_path(self, bad_path: str) -> None:
+        """SQLiteGraphStore must reject paths outside approved roots."""
+        with pytest.raises(SecurityError):
+            SQLiteGraphStore(bad_path)
+
+
+class TestOptimisticLockRace:
+    """Security tests: concurrent updates must be serialized correctly."""
+
+    def test_concurrent_update_rejects_stale_writer(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Two concurrent updates from version=1: exactly one wins.
+
+        With ``BEGIN IMMEDIATE`` the loser observes the actual updated
+        version (2) when its CAS UPDATE returns 0 rows, so the
+        ``OptimisticLockError`` reports ``actual_version=2``.
+        """
+        graph_store.add_node("paper:race", NodeType.PAPER, {"counter": 0})
+
+        barrier = threading.Barrier(2)
+        results: list[object] = [None, None]
+
+        def worker(index: int, value: int) -> None:
+            barrier.wait()
+            try:
+                node = graph_store.update_node(
+                    "paper:race", {"counter": value}, expected_version=1
+                )
+                results[index] = node
+            except OptimisticLockError as e:
+                results[index] = e
+
+        t1 = threading.Thread(target=worker, args=(0, 100))
+        t2 = threading.Thread(target=worker, args=(1, 200))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        successes = [r for r in results if not isinstance(r, OptimisticLockError)]
+        failures = [r for r in results if isinstance(r, OptimisticLockError)]
+
+        assert len(successes) == 1
+        assert len(failures) == 1
+        # The failure must report version=2 as the actual current version
+        err = failures[0]
+        assert isinstance(err, OptimisticLockError)
+        assert err.expected_version == 1
+        assert err.actual_version == 2
+
+
+class TestUpdateNodeErrorPaths:
+    """Tests for previously pragma'd error branches in update_node."""
+
+    def test_update_node_serialization_error(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """If the merged properties cannot be JSON-serialized, raise
+        GraphStoreError and roll back."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+
+        def boom(*args: object, **kwargs: object) -> str:
+            raise TypeError("not serializable")
+
+        with patch.object(SQLiteGraphStore, "_serialize_properties", side_effect=boom):
+            with pytest.raises(GraphStoreError, match="Failed to update node"):
+                graph_store.update_node("paper:1", {"x": 1})
+
+        # Node version unchanged after rollback
+        node = graph_store.get_node("paper:1")
+        assert node is not None
+        assert node.version == 1
+
+    def test_update_node_rowcount_zero_reports_actual_version(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """If the CAS UPDATE returns 0 rows (e.g., a future change drops
+        BEGIN IMMEDIATE), the error must report the actual current version
+        from a re-query rather than guessing ``current_version + 1``.
+
+        BEGIN IMMEDIATE makes this path unreachable in normal flow, so we
+        simulate it by wrapping the connection in a proxy that intercepts
+        ``execute`` to force rowcount=0 on the UPDATE and version=42 on the
+        follow-up SELECT.
+        """
+        graph_store.add_node("paper:rc0", NodeType.PAPER, {})
+        _install_update_rowcount_proxy(graph_store, version_after=42)
+
+        with pytest.raises(OptimisticLockError) as exc_info:
+            graph_store.update_node("paper:rc0", {"x": 1})
+
+        # Must report the re-queried actual version, not current_version + 1
+        assert exc_info.value.actual_version == 42
+
+    def test_update_node_rowcount_zero_node_deleted(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """If the row vanishes between SELECT and UPDATE, fall back to
+        reporting the originally-observed version."""
+        graph_store.add_node("paper:rc1", NodeType.PAPER, {})
+        _install_update_rowcount_proxy(graph_store, version_after=None)
+
+        with pytest.raises(OptimisticLockError) as exc_info:
+            graph_store.update_node("paper:rc1", {"x": 1})
+
+        # Falls back to the originally-observed version (1)
+        assert exc_info.value.actual_version == 1
+
+
+def _install_update_rowcount_proxy(
+    graph_store: SQLiteGraphStore, version_after: object
+) -> None:
+    """Patch ``_get_connection`` to force the rowcount=0 branch.
+
+    The returned wrapper:
+    - Returns a cursor with ``rowcount=0`` for any UPDATE on ``nodes``.
+    - Returns a cursor whose ``fetchone()`` yields the supplied
+      ``version_after`` (or ``None`` for the deleted-row case) for the
+      subsequent ``SELECT version FROM nodes`` re-query.
+    All other statements pass through to the real connection.
+    """
+
+    real_get_connection = SQLiteGraphStore._get_connection
+
+    class _ZeroRowCursor:
+        rowcount = 0
+
+    class _VersionCursor:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def fetchone(self) -> object:
+            if self._value is None:
+                return None
+            return {"version": self._value}
+
+    class _ConnProxy:
+        def __init__(self, conn: sqlite3.Connection) -> None:
+            self._conn = conn
+
+        def execute(self, sql: str, *args: object, **kwargs: object) -> object:
+            stripped = " ".join(sql.split()).upper()
+            if stripped.startswith("UPDATE NODES"):
+                return _ZeroRowCursor()
+            if stripped.startswith("SELECT VERSION FROM NODES"):
+                return _VersionCursor(version_after)
+            return self._conn.execute(sql, *args, **kwargs)
+
+        def commit(self) -> None:
+            self._conn.commit()
+
+        def rollback(self) -> None:
+            self._conn.rollback()
+
+        def close(self) -> None:
+            self._conn.close()
+
+    def patched(self: SQLiteGraphStore) -> object:
+        return _ConnProxy(real_get_connection(self))
+
+    # Bind the patch directly on the instance so other operations remain
+    # untouched after the test exits via fixture teardown.
+    graph_store._get_connection = patched.__get__(  # type: ignore[method-assign]
+        graph_store, SQLiteGraphStore
+    )
+
+
+class TestAddIntegrityErrorBranches:
+    """Tests for IntegrityError fall-through branches in add_node/add_edge."""
+
+    def test_add_node_non_unique_integrity_error_reraised(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """A non-UNIQUE IntegrityError surfaces as GraphStoreError."""
+
+        class FakeConn:
+            def __init__(self) -> None:
+                self.executes: list[tuple[object, ...]] = []
+
+            def execute(self, *args: object, **kwargs: object) -> None:
+                # First call is INSERT; raise an unfamiliar IntegrityError
+                raise sqlite3.IntegrityError("custom not-unique not-fk msg")
+
+            def commit(self) -> None:  # pragma: no cover - never reached
+                pass
+
+            def rollback(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        with patch.object(SQLiteGraphStore, "_get_connection", return_value=FakeConn()):
+            with pytest.raises(GraphStoreError, match="Failed to add node"):
+                graph_store.add_node("paper:bad", NodeType.PAPER, {})
+
+    def test_add_edge_non_unique_non_fk_integrity_error_reraised(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """A non-UNIQUE non-FK IntegrityError surfaces as GraphStoreError."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        graph_store.add_node("paper:2", NodeType.PAPER, {})
+
+        class FakeConn:
+            def execute(self, *args: object, **kwargs: object) -> None:
+                raise sqlite3.IntegrityError("CHECK constraint failed: edges")
+
+            def commit(self) -> None:  # pragma: no cover - never reached
+                pass
+
+            def rollback(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        with patch.object(SQLiteGraphStore, "_get_connection", return_value=FakeConn()):
+            with pytest.raises(GraphStoreError, match="Failed to add edge"):
+                graph_store.add_edge(
+                    "edge:bad", "paper:1", "paper:2", EdgeType.CITES, {}
+                )

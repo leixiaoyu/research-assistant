@@ -416,7 +416,7 @@ class TestMoreMigrationEdgeCases:
 
     def test_get_applied_migrations_db_not_exist(self) -> None:
         """Test get_applied_migrations when db file doesn't exist."""
-        non_existent = Path("/tmp/nonexistent_db_12345.db")
+        non_existent = Path(tempfile.gettempdir()) / "nonexistent_db_12345.db"
         if non_existent.exists():
             non_existent.unlink()
         manager = MigrationManager(non_existent)
@@ -426,7 +426,7 @@ class TestMoreMigrationEdgeCases:
 
     def test_check_threshold_db_not_exist(self) -> None:
         """Test check_node_count_threshold when db file doesn't exist."""
-        non_existent = Path("/tmp/nonexistent_db_check_12345.db")
+        non_existent = Path(tempfile.gettempdir()) / "nonexistent_db_check_12345.db"
         if non_existent.exists():
             non_existent.unlink()
         manager = MigrationManager(non_existent)
@@ -435,7 +435,7 @@ class TestMoreMigrationEdgeCases:
 
     def test_get_node_count_history_db_not_exist(self) -> None:
         """Test get_node_count_history when db file doesn't exist."""
-        non_existent = Path("/tmp/nonexistent_db_history_12345.db")
+        non_existent = Path(tempfile.gettempdir()) / "nonexistent_db_history_12345.db"
         if non_existent.exists():
             non_existent.unlink()
         manager = MigrationManager(non_existent)

@@ -14,7 +14,7 @@ import sqlite3
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Optional, Protocol, Sequence, runtime_checkable
 
 import structlog
 
@@ -32,6 +32,14 @@ from src.storage.intelligence_graph.migrations import MigrationManager
 from src.storage.intelligence_graph.path_utils import sanitize_storage_path
 
 logger = structlog.get_logger()
+
+
+# Maximum number of placeholders to embed in a single SQL ``IN (?, ?, ...)``
+# clause when batching node fetches per BFS layer. Chosen well below SQLite's
+# default ``SQLITE_MAX_VARIABLE_NUMBER`` (999 historically, 32766 since 3.32).
+# 500 keeps planner cost and parse time small while still collapsing typical
+# BFS layers into a single round-trip.
+_BATCH_NODE_FETCH_CHUNK_SIZE = 500
 
 
 # Strict pattern for property keys used in JSONPath expressions.
@@ -119,6 +127,21 @@ class GraphStore(Protocol):
         """
         ...  # pragma: no cover - Protocol abstract method
 
+    def add_nodes_batch(self, nodes: Sequence[GraphNode]) -> None:
+        """Insert many nodes atomically in a single transaction.
+
+        Implementations must roll back the entire batch on any constraint
+        violation (e.g. duplicate ``node_id``) so callers can retry safely.
+
+        Args:
+            nodes: Sequence of fully-formed ``GraphNode`` instances.
+
+        Raises:
+            GraphStoreError: If any node violates a constraint; the batch
+                is rolled back and no nodes are persisted.
+        """
+        ...  # pragma: no cover - Protocol abstract method
+
     # Edge operations
     def add_edge(
         self,
@@ -182,6 +205,24 @@ class GraphStore(Protocol):
 
         Returns:
             True if deleted, False if not found
+        """
+        ...  # pragma: no cover - Protocol abstract method
+
+    def add_edges_batch(self, edges: Sequence[GraphEdge]) -> None:
+        """Insert many edges atomically in a single transaction.
+
+        Implementations must roll back the entire batch on any constraint
+        violation (duplicate ``edge_id``, missing source/target) so callers
+        can retry safely.
+
+        Args:
+            edges: Sequence of fully-formed ``GraphEdge`` instances.
+
+        Raises:
+            ReferentialIntegrityError: If any edge references a missing node;
+                the batch is rolled back and no edges are persisted.
+            GraphStoreError: For other constraint violations; the batch is
+                rolled back and no edges are persisted.
         """
         ...  # pragma: no cover - Protocol abstract method
 
@@ -420,6 +461,57 @@ class SQLiteGraphStore:
         finally:
             conn.close()
 
+    def add_nodes_batch(self, nodes: Sequence[GraphNode]) -> None:
+        """Insert many nodes atomically via ``executemany`` in one tx.
+
+        - Empty input is a true no-op: no connection is opened.
+        - On any constraint violation, the **entire** batch is rolled back
+          (transaction semantics) and a ``GraphStoreError`` is raised with
+          the underlying ``sqlite3.IntegrityError`` chained as ``__cause__``.
+        - Logs a single ``bulk_insert_nodes`` INFO record on success with
+          the row count.
+
+        Caller-supplied ``GraphNode.created_at``/``updated_at``/``version``
+        are honored (they are backend-managed defaults set by the model).
+        """
+        if not nodes:
+            return
+
+        rows = [
+            (
+                n.node_id,
+                n.node_type.value,
+                self._serialize_properties(n.properties),
+                n.version,
+                n.created_at.isoformat(),
+                n.updated_at.isoformat(),
+            )
+            for n in nodes
+        ]
+
+        conn = self._get_connection()
+        try:
+            with conn:  # commit on success / rollback on exception
+                conn.executemany(
+                    """
+                    INSERT INTO nodes (node_id, node_type, properties, version,
+                                       created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+        except sqlite3.IntegrityError as e:
+            logger.error(
+                "bulk_insert_nodes_integrity_error",
+                count=len(rows),
+                error=str(e),
+            )
+            raise GraphStoreError(f"Failed to bulk insert nodes: {e}") from e
+        finally:
+            conn.close()
+
+        logger.info("bulk_insert_nodes", count=len(rows))
+
     def update_node(
         self,
         node_id: str,
@@ -599,6 +691,61 @@ class SQLiteGraphStore:
         finally:
             conn.close()
 
+    def add_edges_batch(self, edges: Sequence[GraphEdge]) -> None:
+        """Insert many edges atomically via ``executemany`` in one tx.
+
+        - Empty input is a true no-op: no connection is opened.
+        - On a foreign-key violation (orphan edge), the **entire** batch is
+          rolled back and a ``ReferentialIntegrityError`` is raised with the
+          underlying ``sqlite3.IntegrityError`` chained as ``__cause__``.
+        - On any other constraint violation (e.g. duplicate ``edge_id``),
+          a ``GraphStoreError`` is raised with the same chaining.
+        - Logs a single ``bulk_insert_edges`` INFO record on success with
+          the row count.
+        """
+        if not edges:
+            return
+
+        rows = [
+            (
+                e.edge_id,
+                e.edge_type.value,
+                e.source_id,
+                e.target_id,
+                self._serialize_properties(e.properties),
+                e.version,
+                e.created_at.isoformat(),
+            )
+            for e in edges
+        ]
+
+        conn = self._get_connection()
+        try:
+            with conn:  # commit on success / rollback on exception
+                conn.executemany(
+                    """
+                    INSERT INTO edges (edge_id, edge_type, source_id, target_id,
+                                       properties, version, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+        except sqlite3.IntegrityError as e:
+            logger.error(
+                "bulk_insert_edges_integrity_error",
+                count=len(rows),
+                error=str(e),
+            )
+            if "FOREIGN KEY constraint failed" in str(e):
+                raise ReferentialIntegrityError(
+                    f"Bulk edge insert hit a missing source/target node: {e}"
+                ) from e
+            raise GraphStoreError(f"Failed to bulk insert edges: {e}") from e
+        finally:
+            conn.close()
+
+        logger.info("bulk_insert_edges", count=len(rows))
+
     def get_edges(
         self,
         node_id: str,
@@ -662,7 +809,17 @@ class SQLiteGraphStore:
         max_depth: int,
         direction: str = "outgoing",
     ) -> list[GraphNode]:
-        """Traverse the graph using BFS."""
+        """Traverse the graph using BFS.
+
+        Performance: neighbor node rows are fetched in **one batched query
+        per BFS layer** (``SELECT * FROM nodes WHERE node_id IN (...)``)
+        rather than one query per neighbor. The ``IN``-list is chunked at
+        ``_BATCH_NODE_FETCH_CHUNK_SIZE`` to stay safely under SQLite's
+        bind-parameter limit. The bidirectional neighbor query uses
+        ``UNION ALL`` (not ``UNION``) because the BFS ``visited`` set
+        already deduplicates ids — the ``UNION`` sort/distinct is wasted
+        work on every hop.
+        """
         if max_depth < 1:
             return []
 
@@ -670,73 +827,126 @@ class SQLiteGraphStore:
         try:
             visited: set[str] = {start_id}
             result: list[GraphNode] = []
-            queue: deque[tuple[str, int]] = deque([(start_id, 0)])
+            # BFS layer-by-layer so we can batch the neighbor-node fetch.
+            current_layer: list[str] = [start_id]
+            depth = 0
 
             edge_type_values = [et.value for et in edge_types]
             placeholders = ",".join("?" * len(edge_type_values))
 
-            while queue:
-                current_id, depth = queue.popleft()
+            while current_layer and depth < max_depth:
+                next_layer_ids: list[str] = []
 
-                if depth >= max_depth:
-                    continue
-
-                # Get connected edges based on direction
-                if direction == "outgoing":
-                    cursor = conn.execute(
-                        f"""
-                        SELECT target_id as neighbor_id
-                        FROM edges
-                        WHERE source_id = ? AND edge_type IN ({placeholders})
-                        """,
-                        (current_id, *edge_type_values),
-                    )
-                elif direction == "incoming":
-                    cursor = conn.execute(
-                        f"""
-                        SELECT source_id as neighbor_id
-                        FROM edges
-                        WHERE target_id = ? AND edge_type IN ({placeholders})
-                        """,
-                        (current_id, *edge_type_values),
-                    )
-                else:  # both
-                    cursor = conn.execute(
-                        f"""
-                        SELECT target_id as neighbor_id
-                        FROM edges
-                        WHERE source_id = ? AND edge_type IN ({placeholders})
-                        UNION
-                        SELECT source_id as neighbor_id
-                        FROM edges
-                        WHERE target_id = ? AND edge_type IN ({placeholders})
-                        """,
-                        (current_id, *edge_type_values, current_id, *edge_type_values),
-                    )
-
-                for row in cursor.fetchall():
-                    neighbor_id = row["neighbor_id"]
-                    if neighbor_id not in visited:
-                        visited.add(neighbor_id)
-                        queue.append((neighbor_id, depth + 1))
-
-                        # Fetch neighbor node
-                        node_cursor = conn.execute(
-                            "SELECT * FROM nodes WHERE node_id = ?",
-                            (neighbor_id,),
+                for current_id in current_layer:
+                    # Get connected edges based on direction
+                    if direction == "outgoing":
+                        cursor = conn.execute(
+                            f"""
+                            SELECT target_id as neighbor_id
+                            FROM edges
+                            WHERE source_id = ?
+                              AND edge_type IN ({placeholders})
+                            """,
+                            (current_id, *edge_type_values),
                         )
-                        node_row = node_cursor.fetchone()
-                        if node_row:
-                            result.append(self._row_to_node(node_row))
+                    elif direction == "incoming":
+                        cursor = conn.execute(
+                            f"""
+                            SELECT source_id as neighbor_id
+                            FROM edges
+                            WHERE target_id = ?
+                              AND edge_type IN ({placeholders})
+                            """,
+                            (current_id, *edge_type_values),
+                        )
+                    else:  # both
+                        # UNION ALL is intentional: visited set dedupes; the
+                        # implicit DISTINCT in plain UNION would be wasted work.
+                        cursor = conn.execute(
+                            f"""
+                            SELECT target_id as neighbor_id
+                            FROM edges
+                            WHERE source_id = ?
+                              AND edge_type IN ({placeholders})
+                            UNION ALL
+                            SELECT source_id as neighbor_id
+                            FROM edges
+                            WHERE target_id = ?
+                              AND edge_type IN ({placeholders})
+                            """,
+                            (
+                                current_id,
+                                *edge_type_values,
+                                current_id,
+                                *edge_type_values,
+                            ),
+                        )
+
+                    for row in cursor.fetchall():
+                        neighbor_id = row["neighbor_id"]
+                        if neighbor_id not in visited:
+                            visited.add(neighbor_id)
+                            next_layer_ids.append(neighbor_id)
+
+                # Batch-fetch the entire next layer in one query (chunked).
+                if next_layer_ids:
+                    fetched = self._fetch_nodes_by_ids(conn, next_layer_ids)
+                    # Preserve discovery order to keep traversal output stable.
+                    for nid in next_layer_ids:
+                        node = fetched.get(nid)
+                        if node is not None:
+                            result.append(node)
+
+                current_layer = next_layer_ids
+                depth += 1
 
             return result
         finally:
             conn.close()
 
+    def _fetch_nodes_by_ids(
+        self, conn: sqlite3.Connection, node_ids: list[str]
+    ) -> dict[str, GraphNode]:
+        """Fetch many node rows in a single batched query (or a few chunks).
+
+        ``node_id`` values are bound as parameters — the placeholder string
+        is constructed from a count, never from caller-supplied data — so
+        SQL injection is not possible. Chunking keeps the
+        ``IN (?, ?, ...)`` list bounded by
+        ``_BATCH_NODE_FETCH_CHUNK_SIZE``.
+        """
+        out: dict[str, GraphNode] = {}
+        if not node_ids:
+            return out
+
+        for start in range(0, len(node_ids), _BATCH_NODE_FETCH_CHUNK_SIZE):
+            chunk = node_ids[start : start + _BATCH_NODE_FETCH_CHUNK_SIZE]
+            placeholders = f"({','.join('?' * len(chunk))})"
+            cursor = conn.execute(
+                f"SELECT * FROM nodes WHERE node_id IN {placeholders}",
+                tuple(chunk),
+            )
+            for row in cursor.fetchall():
+                node = self._row_to_node(row)
+                out[node.node_id] = node
+        return out
+
     def shortest_path(
         self, source_id: str, target_id: str
     ) -> Optional[list[GraphNode]]:
-        """Find shortest path between two nodes using BFS."""
+        """Find shortest path between two nodes using BFS.
+
+        Implementation note: the BFS frontier stores **only node ids**
+        (``deque[str]``) and uses a ``parent: dict[str, Optional[str]]``
+        map to reconstruct the path on success by walking from ``target``
+        back to ``source``. This avoids the per-push ``list[str]`` copy
+        that the previous implementation paid on every neighbor expansion
+        (O(L) per push, O(N*L) overall for path length L).
+
+        The bidirectional neighbor query uses ``UNION ALL``; the BFS
+        ``visited`` set already deduplicates, so plain ``UNION`` is wasted
+        work.
+        """
         if source_id == target_id:
             node = self.get_node(source_id)
             return [node] if node else None
@@ -744,16 +954,17 @@ class SQLiteGraphStore:
         conn = self._get_connection()
         try:
             visited: set[str] = {source_id}
-            queue: deque[tuple[str, list[str]]] = deque([(source_id, [source_id])])
+            parent: dict[str, Optional[str]] = {source_id: None}
+            queue: deque[str] = deque([source_id])
 
             while queue:
-                current_id, path = queue.popleft()
+                current_id = queue.popleft()
 
-                # Get all neighbors
+                # Get all neighbors (UNION ALL: visited dedupes already)
                 cursor = conn.execute(
                     """
                     SELECT target_id as neighbor_id FROM edges WHERE source_id = ?
-                    UNION
+                    UNION ALL
                     SELECT source_id as neighbor_id FROM edges WHERE target_id = ?
                     """,
                     (current_id, current_id),
@@ -761,24 +972,25 @@ class SQLiteGraphStore:
 
                 for row in cursor.fetchall():
                     neighbor_id = row["neighbor_id"]
+                    if neighbor_id in visited:
+                        continue
+                    visited.add(neighbor_id)
+                    parent[neighbor_id] = current_id
 
                     if neighbor_id == target_id:
-                        # Found target - build result path
-                        final_path = path + [neighbor_id]
-                        result = []
-                        for node_id in final_path:
-                            node_cursor = conn.execute(
-                                "SELECT * FROM nodes WHERE node_id = ?",
-                                (node_id,),
-                            )
-                            node_row = node_cursor.fetchone()
-                            if node_row:
-                                result.append(self._row_to_node(node_row))
-                        return result
+                        # Reconstruct path: walk parents from target → source.
+                        path_ids: list[str] = []
+                        cursor_id: Optional[str] = neighbor_id
+                        while cursor_id is not None:
+                            path_ids.append(cursor_id)
+                            cursor_id = parent[cursor_id]
+                        path_ids.reverse()
 
-                    if neighbor_id not in visited:
-                        visited.add(neighbor_id)
-                        queue.append((neighbor_id, path + [neighbor_id]))
+                        # Batch-fetch all node rows on the path.
+                        fetched = self._fetch_nodes_by_ids(conn, path_ids)
+                        return [fetched[nid] for nid in path_ids if nid in fetched]
+
+                    queue.append(neighbor_id)
 
             return None  # No path found
         finally:

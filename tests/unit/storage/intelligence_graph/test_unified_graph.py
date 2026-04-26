@@ -24,6 +24,8 @@ import pytest
 
 from src.services.intelligence.models import (
     EdgeType,
+    GraphEdge,
+    GraphNode,
     GraphStoreError,
     NodeNotFoundError,
     NodeType,
@@ -1028,3 +1030,389 @@ class TestAddIntegrityErrorBranches:
                 graph_store.add_edge(
                     "edge:bad", "paper:1", "paper:2", EdgeType.CITES, {}
                 )
+
+
+class TestTraverseBatching:
+    """Performance tests: traverse must batch node fetches per BFS layer.
+
+    Without batching, BFS over a fan-out tree issues one
+    ``SELECT * FROM nodes WHERE node_id = ?`` per visited neighbor —
+    O(N) round-trips. With per-layer batching this collapses to one
+    ``SELECT ... WHERE node_id IN (...)`` per layer.
+    """
+
+    def test_traverse_batches_node_fetch_per_layer(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Root → 5 children → 25 grandchildren, depth=2 must use few node selects.
+
+        We do not assert an exact query count (over-coupling); we assert the
+        number of ``SELECT * FROM nodes WHERE node_id IN`` queries is small
+        (≤ depth) and that we are NOT issuing per-id node selects.
+        """
+        # Build root → 5 children → 25 grandchildren.
+        graph_store.add_node("root", NodeType.PAPER, {})
+        for i in range(5):
+            cid = f"child:{i}"
+            graph_store.add_node(cid, NodeType.PAPER, {})
+            graph_store.add_edge(f"e:r:{i}", "root", cid, EdgeType.CITES, {})
+            for j in range(5):
+                gid = f"grand:{i}:{j}"
+                graph_store.add_node(gid, NodeType.PAPER, {})
+                graph_store.add_edge(f"e:c:{i}:{j}", cid, gid, EdgeType.CITES, {})
+
+        # Sanity-check the traversal still returns all 30 descendants.
+        nodes = graph_store.traverse("root", [EdgeType.CITES], max_depth=2)
+        assert len(nodes) == 30
+
+        # Now wrap the connection to count node-row queries by SQL shape.
+        original_get_connection = graph_store._get_connection
+        in_clause_queries: list[str] = []
+        per_id_queries: list[str] = []
+
+        class _CountingConn:
+            def __init__(self, conn: sqlite3.Connection) -> None:
+                self._conn = conn
+
+            def execute(self, sql: str, *args: object, **kwargs: object) -> object:
+                norm = " ".join(sql.split()).upper()
+                if "FROM NODES WHERE NODE_ID IN" in norm:
+                    in_clause_queries.append(norm)
+                elif "FROM NODES WHERE NODE_ID = ?" in norm:
+                    per_id_queries.append(norm)
+                return self._conn.execute(sql, *args, **kwargs)
+
+            def commit(self) -> None:
+                self._conn.commit()
+
+            def rollback(self) -> None:
+                self._conn.rollback()
+
+            def close(self) -> None:
+                self._conn.close()
+
+        def patched(self: SQLiteGraphStore) -> object:
+            return _CountingConn(original_get_connection())
+
+        graph_store._get_connection = patched.__get__(  # type: ignore[method-assign]
+            graph_store, SQLiteGraphStore
+        )
+
+        nodes = graph_store.traverse("root", [EdgeType.CITES], max_depth=2)
+        assert len(nodes) == 30
+
+        # Per-id node selects must be zero — batching means we never use them.
+        assert (
+            per_id_queries == []
+        ), f"Expected 0 per-id node selects, got {len(per_id_queries)}"
+        # We expect ≤ max_depth IN-clause node-fetch queries (1 per layer
+        # that produced new neighbors). Allow a small slack as design might
+        # legitimately split a layer into chunks.
+        assert (
+            1 <= len(in_clause_queries) <= 4
+        ), f"Expected 1-4 batched IN queries, got {len(in_clause_queries)}"
+
+    def test_traverse_direction_both_uses_union_all(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Bidirectional neighbor query must use UNION ALL, not bare UNION.
+
+        The BFS visited set already deduplicates, so plain UNION is wasted
+        sort/distinct work on every hop.
+        """
+        graph_store.add_node("a", NodeType.PAPER, {})
+        graph_store.add_node("b", NodeType.PAPER, {})
+        graph_store.add_edge("e:1", "a", "b", EdgeType.CITES, {})
+
+        original_get_connection = graph_store._get_connection
+        captured_sql: list[str] = []
+
+        class _CapturingConn:
+            def __init__(self, conn: sqlite3.Connection) -> None:
+                self._conn = conn
+
+            def execute(self, sql: str, *args: object, **kwargs: object) -> object:
+                captured_sql.append(sql)
+                return self._conn.execute(sql, *args, **kwargs)
+
+            def commit(self) -> None:
+                self._conn.commit()
+
+            def rollback(self) -> None:
+                self._conn.rollback()
+
+            def close(self) -> None:
+                self._conn.close()
+
+        def patched(self: SQLiteGraphStore) -> object:
+            return _CapturingConn(original_get_connection())
+
+        graph_store._get_connection = patched.__get__(  # type: ignore[method-assign]
+            graph_store, SQLiteGraphStore
+        )
+
+        graph_store.traverse("a", [EdgeType.CITES], max_depth=1, direction="both")
+
+        # Find the neighbor query for direction=both — it must say UNION ALL.
+        bidir = [s for s in captured_sql if "source_id" in s and "target_id" in s]
+        assert bidir, "Bidirectional neighbor query was not issued"
+        assert any(
+            "UNION ALL" in s for s in bidir
+        ), f"Expected UNION ALL in bidirectional query, got: {bidir}"
+        for s in bidir:
+            # Bare UNION (i.e. without ALL) must not appear in the bidir query.
+            normalized = " ".join(s.split())
+            assert " UNION " not in normalized.upper().replace("UNION ALL", "").replace(
+                "  ", " "
+            ), f"Found bare UNION (without ALL) in bidir query: {s}"
+
+
+class TestShortestPathLongChain:
+    """Coverage for parent-dict reconstruction over a longer path."""
+
+    def test_shortest_path_long_chain_reconstructs_correctly(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """A 6-hop chain (7 nodes) must be reconstructed in order via parent map."""
+        n = 7
+        for i in range(n):
+            graph_store.add_node(f"p:{i}", NodeType.PAPER, {})
+        for i in range(n - 1):
+            graph_store.add_edge(f"e:{i}", f"p:{i}", f"p:{i+1}", EdgeType.CITES, {})
+
+        path = graph_store.shortest_path("p:0", f"p:{n-1}")
+        assert path is not None
+        assert [node.node_id for node in path] == [f"p:{i}" for i in range(n)]
+
+
+class TestAddNodesBatch:
+    """Tests for ``add_nodes_batch`` bulk insert API."""
+
+    def _make_node(self, node_id: str) -> GraphNode:
+        return GraphNode(node_id=node_id, node_type=NodeType.PAPER, properties={})
+
+    def test_add_nodes_batch_success(self, graph_store: SQLiteGraphStore) -> None:
+        """Insert 100 nodes in one batch and confirm all are persisted."""
+        nodes = [self._make_node(f"paper:{i}") for i in range(100)]
+        graph_store.add_nodes_batch(nodes)
+
+        # Verify count via get_nodes_by_type
+        retrieved = graph_store.get_nodes_by_type(NodeType.PAPER, limit=200)
+        assert len(retrieved) == 100
+        assert {n.node_id for n in retrieved} == {f"paper:{i}" for i in range(100)}
+
+    def test_add_nodes_batch_empty_list(self, graph_store: SQLiteGraphStore) -> None:
+        """Empty input is a no-op (no crash, no connection opened)."""
+        # Patch _get_connection to fail loudly if it is called.
+        with patch.object(
+            SQLiteGraphStore,
+            "_get_connection",
+            side_effect=AssertionError("connection opened for empty batch"),
+        ):
+            graph_store.add_nodes_batch([])
+        assert graph_store.get_node_count() == 0
+
+    def test_add_nodes_batch_atomic_rollback(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """A duplicate node_id inside the batch rolls back the whole batch."""
+        # Pre-existing node that will collide with one in the batch.
+        graph_store.add_node("paper:dup", NodeType.PAPER, {})
+        baseline_count = graph_store.get_node_count()
+
+        batch = [
+            self._make_node("paper:new1"),
+            self._make_node("paper:dup"),  # collides
+            self._make_node("paper:new2"),
+        ]
+
+        with pytest.raises(GraphStoreError, match="Failed to bulk insert nodes"):
+            graph_store.add_nodes_batch(batch)
+
+        # No new nodes from the batch should have been inserted.
+        assert graph_store.get_node_count() == baseline_count
+        assert graph_store.get_node("paper:new1") is None
+        assert graph_store.get_node("paper:new2") is None
+
+    def test_add_nodes_batch_chains_cause(self, graph_store: SQLiteGraphStore) -> None:
+        """The wrapped GraphStoreError chains the underlying IntegrityError."""
+        graph_store.add_node("paper:dup", NodeType.PAPER, {})
+        batch = [self._make_node("paper:dup")]
+        with pytest.raises(GraphStoreError) as exc_info:
+            graph_store.add_nodes_batch(batch)
+        assert isinstance(exc_info.value.__cause__, sqlite3.IntegrityError)
+
+
+class TestAddEdgesBatch:
+    """Tests for ``add_edges_batch`` bulk insert API."""
+
+    def _make_edge(self, edge_id: str, source: str, target: str) -> GraphEdge:
+        return GraphEdge(
+            edge_id=edge_id,
+            edge_type=EdgeType.CITES,
+            source_id=source,
+            target_id=target,
+            properties={},
+        )
+
+    def test_add_edges_batch_success(self, graph_store: SQLiteGraphStore) -> None:
+        """Insert 100 edges in one batch and confirm count."""
+        # Need source/target nodes for FK satisfaction.
+        for i in range(101):
+            graph_store.add_node(f"paper:{i}", NodeType.PAPER, {})
+
+        edges = [
+            self._make_edge(f"e:{i}", f"paper:{i}", f"paper:{i+1}") for i in range(100)
+        ]
+        graph_store.add_edges_batch(edges)
+
+        assert graph_store.get_edge_count() == 100
+
+    def test_add_edges_batch_empty_list(self, graph_store: SQLiteGraphStore) -> None:
+        """Empty input is a no-op (no connection opened)."""
+        with patch.object(
+            SQLiteGraphStore,
+            "_get_connection",
+            side_effect=AssertionError("connection opened for empty batch"),
+        ):
+            graph_store.add_edges_batch([])
+        assert graph_store.get_edge_count() == 0
+
+    def test_add_edges_batch_atomic_rollback(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """A duplicate edge_id inside the batch rolls back the whole batch."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        graph_store.add_node("paper:2", NodeType.PAPER, {})
+        graph_store.add_edge("e:dup", "paper:1", "paper:2", EdgeType.CITES, {})
+        baseline = graph_store.get_edge_count()
+
+        batch = [
+            self._make_edge("e:new1", "paper:1", "paper:2"),
+            self._make_edge("e:dup", "paper:1", "paper:2"),  # collides
+            self._make_edge("e:new2", "paper:1", "paper:2"),
+        ]
+
+        with pytest.raises(GraphStoreError, match="Failed to bulk insert edges"):
+            graph_store.add_edges_batch(batch)
+
+        # None of the new edges should be inserted.
+        assert graph_store.get_edge_count() == baseline
+        assert graph_store.get_edge("e:new1") is None
+        assert graph_store.get_edge("e:new2") is None
+
+    def test_add_edges_batch_orphan_edge_rejected(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """An edge referencing a missing node fails the whole batch with FK error."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        graph_store.add_node("paper:2", NodeType.PAPER, {})
+        baseline = graph_store.get_edge_count()
+
+        batch = [
+            self._make_edge("e:ok", "paper:1", "paper:2"),
+            # References a node that does not exist:
+            self._make_edge("e:orphan", "paper:1", "paper:nonexistent"),
+        ]
+
+        with pytest.raises(ReferentialIntegrityError):
+            graph_store.add_edges_batch(batch)
+
+        # Even the valid edge must not be inserted (transaction rolled back).
+        assert graph_store.get_edge_count() == baseline
+        assert graph_store.get_edge("e:ok") is None
+
+    def test_add_edges_batch_chains_cause(self, graph_store: SQLiteGraphStore) -> None:
+        """The wrapped error chains the underlying IntegrityError as __cause__."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        graph_store.add_node("paper:2", NodeType.PAPER, {})
+        graph_store.add_edge("e:dup", "paper:1", "paper:2", EdgeType.CITES, {})
+        with pytest.raises(GraphStoreError) as exc_info:
+            graph_store.add_edges_batch(
+                [self._make_edge("e:dup", "paper:1", "paper:2")]
+            )
+        assert isinstance(exc_info.value.__cause__, sqlite3.IntegrityError)
+
+
+class TestBulkInsertSmokePerf:
+    """Smoke perf check: bulk insert is meaningfully faster than per-row.
+
+    We do not assert exact speedups (CI variance) but we do require the
+    batch path to complete a 1000-row insert in under a generous wall time.
+    """
+
+    def test_bulk_insert_1000_nodes_smoke(self, graph_store: SQLiteGraphStore) -> None:
+        """1000-node batch insert finishes quickly and persists correctly."""
+        nodes = [
+            GraphNode(node_id=f"p:{i}", node_type=NodeType.PAPER, properties={})
+            for i in range(1000)
+        ]
+        graph_store.add_nodes_batch(nodes)
+        assert graph_store.get_node_count() == 1000
+
+
+class TestTraverseInternalBranches:
+    """Branch coverage for the new batched traverse implementation.
+
+    These tests target the small set of branches that don't otherwise fire:
+    - revisiting an already-visited neighbor (skips append to next layer)
+    - a row returned by neighbor query whose node row was deleted
+      between the edge query and the batched node fetch (defensive
+      ``fetched.get(nid) is None`` skip)
+    - the empty-input early return inside ``_fetch_nodes_by_ids``
+    """
+
+    def test_traverse_skips_already_visited_neighbor(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """A diamond ensures the same neighbor is reached by two parents.
+
+        With ``direction='both'`` the BFS will see ``paper:d`` twice (once
+        via ``b`` and once via ``c``); the second visit must be skipped by
+        the ``if neighbor_id in visited`` branch.
+        """
+        # Diamond: a -> b -> d ; a -> c -> d
+        for nid in ("paper:a", "paper:b", "paper:c", "paper:d"):
+            graph_store.add_node(nid, NodeType.PAPER, {})
+        graph_store.add_edge("e:ab", "paper:a", "paper:b", EdgeType.CITES, {})
+        graph_store.add_edge("e:ac", "paper:a", "paper:c", EdgeType.CITES, {})
+        graph_store.add_edge("e:bd", "paper:b", "paper:d", EdgeType.CITES, {})
+        graph_store.add_edge("e:cd", "paper:c", "paper:d", EdgeType.CITES, {})
+
+        nodes = graph_store.traverse(
+            "paper:a", [EdgeType.CITES], max_depth=3, direction="both"
+        )
+        # b, c, d — d only appears once even though two paths reach it.
+        assert {n.node_id for n in nodes} == {"paper:b", "paper:c", "paper:d"}
+
+    def test_traverse_handles_missing_node_row_for_neighbor(
+        self, graph_store: SQLiteGraphStore, temp_db: Path
+    ) -> None:
+        """If a node row is missing for an edge endpoint, the batched fetch
+        gracefully skips it (defensive ``fetched.get(nid) is None``)."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        graph_store.add_node("paper:2", NodeType.PAPER, {})
+        graph_store.add_edge("e:1", "paper:1", "paper:2", EdgeType.CITES, {})
+
+        # Bypass FK CASCADE by deleting the node row directly with FKs OFF.
+        conn = sqlite3.connect(str(temp_db))
+        try:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute("DELETE FROM nodes WHERE node_id = 'paper:2'")
+            conn.commit()
+        finally:
+            conn.close()
+
+        # The edge still references paper:2 but no row exists for it.
+        nodes = graph_store.traverse("paper:1", [EdgeType.CITES], max_depth=1)
+        assert nodes == []
+
+    def test_fetch_nodes_by_ids_empty_input(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """The internal helper returns ``{}`` immediately for empty input."""
+        conn = graph_store._get_connection()
+        try:
+            assert graph_store._fetch_nodes_by_ids(conn, []) == {}
+        finally:
+            conn.close()

@@ -642,3 +642,58 @@ class TestMigrationTransactionRollback:
         # The migration must NOT be recorded
         applied = {m["version"] for m in manager.get_applied_migrations()}
         assert 42 not in applied
+
+    def test_apply_migration_rolls_back_ddl_on_later_failure(
+        self, temp_db: Path
+    ) -> None:
+        """Pin the design decision: SQLite supports transactional DDL.
+
+        A migration that runs ``CREATE TABLE foo_test`` followed by a
+        guaranteed-failing statement must leave the database in its
+        pre-migration state — the table must NOT exist, and the migration
+        version must NOT appear in ``schema_migrations``.
+
+        This is a regression guard: if anyone reverts back to
+        ``executescript`` (which auto-commits per-statement and cannot
+        roll back), this test fails immediately because ``foo_test`` would
+        survive the failed migration. See the "Transaction semantics"
+        section in the ``migrations.py`` module docstring.
+        """
+        manager = MigrationManager(temp_db)
+        manager.migrate()  # baseline
+
+        ddl_then_failure = Migration(
+            version=4242,
+            name="ddl_then_failure",
+            up=(
+                # DDL that would persist if it weren't inside a real txn
+                "CREATE TABLE foo_test (id INTEGER PRIMARY KEY);"
+                # Guaranteed-failing follow-up: references a missing table
+                "INSERT INTO no_such_table VALUES (1);"
+            ),
+        )
+
+        conn = manager._get_connection()
+        try:
+            with pytest.raises(sqlite3.OperationalError):
+                manager.apply_migration(conn, ddl_then_failure)
+        finally:
+            conn.close()
+
+        # (a) The DDL must have been rolled back — no foo_test table.
+        check = sqlite3.connect(str(temp_db))
+        try:
+            cur = check.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='foo_test'"
+            )
+            assert cur.fetchone() is None, (
+                "DDL leaked through the failed migration — "
+                "transactional DDL is broken"
+            )
+        finally:
+            check.close()
+
+        # (b) The migration must NOT be recorded.
+        applied_versions = {m["version"] for m in manager.get_applied_migrations()}
+        assert 4242 not in applied_versions

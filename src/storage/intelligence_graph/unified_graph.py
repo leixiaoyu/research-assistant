@@ -43,8 +43,32 @@ _BATCH_NODE_FETCH_CHUNK_SIZE = 500
 
 
 # Strict pattern for property keys used in JSONPath expressions.
-# Prevents JSONPath injection in search_nodes by ensuring only safe identifier
-# characters are used (alphanumeric, underscore, max 64 chars).
+#
+# JSONPath injection rationale:
+#
+# (a) ``search_nodes`` interpolates ``property_key`` into a SQLite JSONPath
+#     literal of the form ``$.<key>`` and passes that literal as a parameter
+#     to ``json_extract(properties, ?)``. SQLite's ``json_extract`` accepts
+#     a rich JSONPath grammar — segments like ``$.foo.bar``, array indexing
+#     ``$.foo[0]``, bracketed string keys ``$.foo['key']``, and so on — so an
+#     unvalidated key allows the caller to escape the intended single-segment
+#     path and reach into arbitrary parts of the JSON document, change the
+#     semantics of the query, or trigger pathological evaluation.
+#
+# (b) The chosen identifier-style pattern is intentionally **stricter** than
+#     JSON allows. JSON property names may contain spaces, quotes, brackets,
+#     and Unicode; we deliberately admit only ``[A-Za-z_][A-Za-z0-9_]{0,63}``
+#     so that no JSONPath metacharacter (``.``, ``[``, ``]``, ``'``, ``"``,
+#     ``$``, whitespace, etc.) can appear inside the interpolated segment.
+#     This is a defense-in-depth measure on top of parameter binding because
+#     parameter binding does not parse the JSONPath grammar — the user input
+#     is taken as a literal path string by ``json_extract``.
+#
+# (c) If a legitimate property uses a non-matching name (e.g., contains
+#     ``-`` or ``.``), it should be **remapped at the data layer**
+#     (rename on ingest, or store under an alias) rather than relaxing this
+#     regex. Loosening the regex anywhere weakens the JSONPath injection
+#     guarantee for every caller.
 _PROPERTY_KEY_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
 
 
@@ -1134,9 +1158,19 @@ class SQLiteGraphStore:
             List of matching GraphNode objects
 
         Raises:
-            ValueError: If ``property_key`` does not match the safe pattern.
+            ValueError: If ``property_key`` is ``None``, empty, or does not
+                match the safe identifier pattern. ``None``/empty get a
+                dedicated, explicit message instead of the generic
+                "Invalid property_key" so misuses are easier to debug.
         """
-        if not _PROPERTY_KEY_PATTERN.match(property_key or ""):
+        # Explicit None / empty handling — the generic regex error below is
+        # not friendly enough for the most common misuse.
+        if property_key is None or property_key == "":
+            raise ValueError(
+                "property_key must be a non-empty identifier-style string, "
+                f"got {property_key!r}"
+            )
+        if not _PROPERTY_KEY_PATTERN.match(property_key):
             raise ValueError(f"Invalid property_key: {property_key!r}")
 
         conn = self._get_connection()

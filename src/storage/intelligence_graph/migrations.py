@@ -11,6 +11,37 @@ Migration Strategy:
 - Migrations are applied in order
 - State is tracked in a migrations table
 - Failed migrations rollback automatically
+
+Transaction semantics
+---------------------
+
+Contrary to a common misconception, **SQLite supports transactional DDL**:
+``CREATE TABLE``, ``CREATE INDEX``, ``ALTER TABLE``, etc. participate in
+the surrounding transaction and are rolled back on ``ROLLBACK``. Most
+other engines (Oracle, MySQL pre-8, MS SQL in some modes) auto-commit on
+DDL — SQLite explicitly does not. See
+https://www.sqlite.org/lang_transaction.html.
+
+The one trap is ``Connection.executescript()``, which the Python sqlite3
+binding wraps with an implicit ``COMMIT`` before the script runs (so it
+can dispatch multiple statements). That implicit commit defeats
+rollback-on-failure for multi-statement migrations.
+
+We therefore deliberately:
+
+1. Split the migration ``up`` script into individual statements via
+   ``_split_sql_statements``.
+2. Open an explicit transaction with ``BEGIN``.
+3. Dispatch each statement with ``conn.execute()``.
+4. ``COMMIT`` only after the ``schema_migrations`` row is also inserted.
+5. ``ROLLBACK`` on any exception, so DDL + DML changes from the failed
+   migration are reverted **and** the migration is NOT recorded as
+   applied — re-running ``migrate()`` will retry it cleanly.
+
+The ``test_apply_migration_rolls_back_ddl_on_later_failure`` test in
+``tests/unit/storage/intelligence_graph/test_migrations.py`` pins this
+behavior so future regressions (e.g. accidental switch back to
+``executescript``) fail loudly.
 """
 
 import os

@@ -620,7 +620,6 @@ class TestSearchNodesInjection:
         [
             'a"]; DROP',
             "$.title",
-            "",
             "a" * 100,
             "1abc",
             "key with space",
@@ -634,6 +633,32 @@ class TestSearchNodesInjection:
         """Reject any property_key that is not a safe identifier."""
         with pytest.raises(ValueError, match="Invalid property_key"):
             graph_store.search_nodes(bad_key, "value")
+
+    def test_search_nodes_rejects_none_property_key(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """``None`` gets a dedicated, informative message (not the regex one)."""
+        with pytest.raises(ValueError, match="non-empty identifier-style string"):
+            graph_store.search_nodes(None, "value")  # type: ignore[arg-type]
+
+    def test_search_nodes_rejects_empty_property_key(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Empty string also gets the dedicated message."""
+        with pytest.raises(ValueError, match="non-empty identifier-style string"):
+            graph_store.search_nodes("", "value")
+
+    def test_search_nodes_property_key_error_message_is_informative(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """The None/empty error message includes the bad value's repr."""
+        with pytest.raises(ValueError) as exc_info_none:
+            graph_store.search_nodes(None, "value")  # type: ignore[arg-type]
+        assert "None" in str(exc_info_none.value)
+
+        with pytest.raises(ValueError) as exc_info_empty:
+            graph_store.search_nodes("", "value")
+        assert "''" in str(exc_info_empty.value)
 
 
 class TestPathTraversalRejection:

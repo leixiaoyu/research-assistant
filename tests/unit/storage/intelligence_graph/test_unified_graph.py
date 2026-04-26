@@ -496,6 +496,29 @@ class TestShortestPath:
 
         assert path is None
 
+    def test_shortest_path_source_equals_target_returns_single_node(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """``shortest_path(x, x)`` returns ``[node_x]`` via the same
+        connection used by the BFS path (no separate get_node call)."""
+        graph_store.add_node("paper:x", NodeType.PAPER, {"k": "v"})
+
+        path = graph_store.shortest_path("paper:x", "paper:x")
+
+        assert path is not None
+        assert len(path) == 1
+        assert path[0].node_id == "paper:x"
+        assert path[0].properties == {"k": "v"}
+
+    def test_shortest_path_source_equals_target_missing_returns_none(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """``shortest_path(missing, missing)`` returns ``None`` rather than
+        synthesizing a node — the early-exit shares the BFS connection but
+        still respects existence."""
+        path = graph_store.shortest_path("paper:missing", "paper:missing")
+        assert path is None
+
 
 class TestMetrics:
     """Tests for graph metrics."""
@@ -1130,12 +1153,12 @@ class TestTraverseBatching:
         assert (
             per_id_queries == []
         ), f"Expected 0 per-id node selects, got {len(per_id_queries)}"
-        # We expect ≤ max_depth IN-clause node-fetch queries (1 per layer
-        # that produced new neighbors). Allow a small slack as design might
-        # legitimately split a layer into chunks.
+        # One IN-clause query per BFS layer; the test graph has 30 nodes,
+        # well under the 500-id chunk limit, so no chunking expected. With
+        # ``max_depth=2`` we should see exactly two layer queries.
         assert (
-            1 <= len(in_clause_queries) <= 4
-        ), f"Expected 1-4 batched IN queries, got {len(in_clause_queries)}"
+            len(in_clause_queries) == 2
+        ), f"expected 2 layer queries, got {len(in_clause_queries)}"
 
     def test_traverse_direction_both_uses_union_all(
         self, graph_store: SQLiteGraphStore
@@ -1267,6 +1290,31 @@ class TestAddNodesBatch:
             graph_store.add_nodes_batch(batch)
         assert isinstance(exc_info.value.__cause__, sqlite3.IntegrityError)
 
+    def test_add_nodes_batch_rejects_oversized_batch(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Batches above ``_MAX_BULK_BATCH_SIZE`` are refused without
+        opening any DB connection (DoS guard)."""
+        from src.storage.intelligence_graph.unified_graph import (
+            _MAX_BULK_BATCH_SIZE,
+        )
+
+        oversized = [
+            self._make_node(f"paper:{i}") for i in range(_MAX_BULK_BATCH_SIZE + 1)
+        ]
+        # Patch _get_connection to fail loudly if the DB is touched.
+        with patch.object(
+            SQLiteGraphStore,
+            "_get_connection",
+            side_effect=AssertionError("connection opened for oversized batch"),
+        ):
+            with pytest.raises(ValueError) as exc_info:
+                graph_store.add_nodes_batch(oversized)
+
+        msg = str(exc_info.value)
+        assert str(len(oversized)) in msg
+        assert str(_MAX_BULK_BATCH_SIZE) in msg
+
 
 class TestAddEdgesBatch:
     """Tests for ``add_edges_batch`` bulk insert API."""
@@ -1358,16 +1406,41 @@ class TestAddEdgesBatch:
             )
         assert isinstance(exc_info.value.__cause__, sqlite3.IntegrityError)
 
+    def test_add_edges_batch_rejects_oversized_batch(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Batches above ``_MAX_BULK_BATCH_SIZE`` are refused without
+        opening any DB connection (DoS guard)."""
+        from src.storage.intelligence_graph.unified_graph import (
+            _MAX_BULK_BATCH_SIZE,
+        )
 
-class TestBulkInsertSmokePerf:
-    """Smoke perf check: bulk insert is meaningfully faster than per-row.
+        oversized = [
+            self._make_edge(f"e:{i}", "paper:1", "paper:2")
+            for i in range(_MAX_BULK_BATCH_SIZE + 1)
+        ]
+        # Patch _get_connection to fail loudly if the DB is touched.
+        with patch.object(
+            SQLiteGraphStore,
+            "_get_connection",
+            side_effect=AssertionError("connection opened for oversized batch"),
+        ):
+            with pytest.raises(ValueError) as exc_info:
+                graph_store.add_edges_batch(oversized)
 
-    We do not assert exact speedups (CI variance) but we do require the
-    batch path to complete a 1000-row insert in under a generous wall time.
+        msg = str(exc_info.value)
+        assert str(len(oversized)) in msg
+        assert str(_MAX_BULK_BATCH_SIZE) in msg
+
+
+class TestBulkInsertVolumeSmoke:
+    """Smoke test that bulk insert of 1000 nodes/edges completes and persists.
+
+    NOT a perf benchmark — runtime is not asserted.
     """
 
     def test_bulk_insert_1000_nodes_smoke(self, graph_store: SQLiteGraphStore) -> None:
-        """1000-node batch insert finishes quickly and persists correctly."""
+        """1000-node batch insert completes and persists correctly."""
         nodes = [
             GraphNode(node_id=f"p:{i}", node_type=NodeType.PAPER, properties={})
             for i in range(1000)
@@ -1441,3 +1514,80 @@ class TestTraverseInternalBranches:
             assert graph_store._fetch_nodes_by_ids(conn, []) == {}
         finally:
             conn.close()
+
+    def test_fetch_nodes_by_ids_silently_skips_missing(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Missing IDs are silently absent (no exception, no placeholder).
+
+        This pins the documented behavior: a node may be deleted between
+        edge discovery and node hydration, so the helper returns only the
+        rows it actually finds.
+        """
+        graph_store.add_node("paper:exists", NodeType.PAPER, {})
+
+        conn = graph_store._get_connection()
+        try:
+            fetched = graph_store._fetch_nodes_by_ids(
+                conn, ["paper:exists", "paper:nonexistent"]
+            )
+        finally:
+            conn.close()
+
+        assert set(fetched.keys()) == {"paper:exists"}
+        assert "paper:nonexistent" not in fetched
+
+    @pytest.mark.parametrize("n", [500, 501, 1000, 1500])
+    def test_fetch_nodes_by_ids_chunks_at_boundary(
+        self, graph_store: SQLiteGraphStore, n: int
+    ) -> None:
+        """The IN-clause is chunked at 500. Verify chunk count = ceil(n/500)
+        for representative N values around and above the boundary."""
+        # Insert n nodes via the bulk path (well under the 10K cap).
+        nodes = [
+            GraphNode(node_id=f"chunk:{i}", node_type=NodeType.PAPER, properties={})
+            for i in range(n)
+        ]
+        graph_store.add_nodes_batch(nodes)
+        node_ids = [f"chunk:{i}" for i in range(n)]
+
+        # Wrap the connection to count IN-clause node-fetch queries.
+        original_get_connection = graph_store._get_connection
+        in_clause_queries: list[str] = []
+
+        class _CountingConn:
+            def __init__(self, conn: sqlite3.Connection) -> None:
+                self._conn = conn
+
+            def execute(self, sql: str, *args: object, **kwargs: object) -> object:
+                norm = " ".join(sql.split()).upper()
+                if "FROM NODES WHERE NODE_ID IN" in norm:
+                    in_clause_queries.append(norm)
+                return self._conn.execute(sql, *args, **kwargs)
+
+            def commit(self) -> None:
+                self._conn.commit()
+
+            def rollback(self) -> None:
+                self._conn.rollback()
+
+            def close(self) -> None:
+                self._conn.close()
+
+        conn = _CountingConn(original_get_connection())
+        try:
+            fetched = graph_store._fetch_nodes_by_ids(
+                conn,  # type: ignore[arg-type]
+                node_ids,
+            )
+        finally:
+            conn.close()
+
+        # All inserted ids should be returned across the chunks.
+        assert len(fetched) == n
+        # Expected chunk count = ceil(n / 500).
+        expected_chunks = (n + 499) // 500
+        assert len(in_clause_queries) == expected_chunks, (
+            f"expected {expected_chunks} IN-clause queries for n={n}, "
+            f"got {len(in_clause_queries)}"
+        )

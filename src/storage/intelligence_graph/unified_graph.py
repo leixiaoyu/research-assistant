@@ -42,6 +42,16 @@ logger = structlog.get_logger()
 _BATCH_NODE_FETCH_CHUNK_SIZE = 500
 
 
+# Maximum number of rows accepted by a single ``add_nodes_batch`` /
+# ``add_edges_batch`` call. This is a DoS guard: each row holds a
+# JSON-serialized properties blob in memory while the executemany payload is
+# constructed, so an unbounded count from an untrusted upstream caller could
+# easily push 10MB+ of memory pressure (and a multi-second pause) per call.
+# Callers with more rows must chunk upstream — that keeps the chunking policy
+# explicit at the call site instead of hidden inside the storage layer.
+_MAX_BULK_BATCH_SIZE = 10_000
+
+
 # Strict pattern for property keys used in JSONPath expressions.
 #
 # JSONPath injection rationale:
@@ -395,6 +405,13 @@ class SQLiteGraphStore:
                 "GraphStore not initialized. Call initialize() first."
             )
 
+        # NOTE: ``isolation_level`` is intentionally left at sqlite3's default
+        # ("deferred") so that ``with conn:`` provides real transactional
+        # ``BEGIN``/``COMMIT``/``ROLLBACK`` semantics — this is what the bulk
+        # insert paths and ``update_node``'s ``BEGIN IMMEDIATE`` rely on.
+        # Future maintainers must NOT switch to ``isolation_level=None`` /
+        # ``autocommit=True`` without auditing every ``with conn:`` and
+        # explicit transaction call site in this module.
         conn = sqlite3.connect(str(self.db_path))
         # CRITICAL: Enable foreign keys for referential integrity
         conn.execute("PRAGMA foreign_keys = ON")
@@ -501,6 +518,14 @@ class SQLiteGraphStore:
         if not nodes:
             return
 
+        # DoS guard: reject oversized batches before opening any connection
+        # or building the row payload. See ``_MAX_BULK_BATCH_SIZE``.
+        if len(nodes) > _MAX_BULK_BATCH_SIZE:
+            raise ValueError(
+                f"Batch size {len(nodes)} exceeds maximum "
+                f"{_MAX_BULK_BATCH_SIZE}; chunk the input upstream"
+            )
+
         rows = [
             (
                 n.node_id,
@@ -524,6 +549,11 @@ class SQLiteGraphStore:
                     """,
                     rows,
                 )
+            # Success log lives inside the try block (after the ``with conn:``
+            # commit) so that if a future maintainer narrows the except clause
+            # and accidentally swallows an error, we do NOT log a spurious
+            # success record.
+            logger.info("bulk_insert_nodes", count=len(rows))
         except sqlite3.IntegrityError as e:
             logger.error(
                 "bulk_insert_nodes_integrity_error",
@@ -533,8 +563,6 @@ class SQLiteGraphStore:
             raise GraphStoreError(f"Failed to bulk insert nodes: {e}") from e
         finally:
             conn.close()
-
-        logger.info("bulk_insert_nodes", count=len(rows))
 
     def update_node(
         self,
@@ -730,6 +758,14 @@ class SQLiteGraphStore:
         if not edges:
             return
 
+        # DoS guard: reject oversized batches before opening any connection
+        # or building the row payload. See ``_MAX_BULK_BATCH_SIZE``.
+        if len(edges) > _MAX_BULK_BATCH_SIZE:
+            raise ValueError(
+                f"Batch size {len(edges)} exceeds maximum "
+                f"{_MAX_BULK_BATCH_SIZE}; chunk the input upstream"
+            )
+
         rows = [
             (
                 e.edge_id,
@@ -754,6 +790,11 @@ class SQLiteGraphStore:
                     """,
                     rows,
                 )
+            # Success log lives inside the try block (after the ``with conn:``
+            # commit) so that if a future maintainer narrows the except clause
+            # and accidentally swallows an error, we do NOT log a spurious
+            # success record.
+            logger.info("bulk_insert_edges", count=len(rows))
         except sqlite3.IntegrityError as e:
             logger.error(
                 "bulk_insert_edges_integrity_error",
@@ -767,8 +808,6 @@ class SQLiteGraphStore:
             raise GraphStoreError(f"Failed to bulk insert edges: {e}") from e
         finally:
             conn.close()
-
-        logger.info("bulk_insert_edges", count=len(rows))
 
     def get_edges(
         self,
@@ -938,6 +977,10 @@ class SQLiteGraphStore:
         SQL injection is not possible. Chunking keeps the
         ``IN (?, ?, ...)`` list bounded by
         ``_BATCH_NODE_FETCH_CHUNK_SIZE``.
+
+        Silently skips IDs not found in the DB. This is by design — a node
+        may be deleted between edge discovery and node hydration. Callers
+        requiring strict consistency should re-check counts.
         """
         out: dict[str, GraphNode] = {}
         if not node_ids:
@@ -953,6 +996,9 @@ class SQLiteGraphStore:
             for row in cursor.fetchall():
                 node = self._row_to_node(row)
                 out[node.node_id] = node
+        # Note: ``out`` only contains rows that were actually found. Missing
+        # ids are silently absent — callers must use ``.get(nid)`` or check
+        # membership rather than indexing blindly.
         return out
 
     def shortest_path(
@@ -971,12 +1017,17 @@ class SQLiteGraphStore:
         ``visited`` set already deduplicates, so plain ``UNION`` is wasted
         work.
         """
-        if source_id == target_id:
-            node = self.get_node(source_id)
-            return [node] if node else None
-
         conn = self._get_connection()
         try:
+            # Degenerate case: source == target. Use the same connection
+            # (and the same batched-fetch helper) the BFS path uses below
+            # so the early-exit goes through one consistent code path
+            # instead of opening a separate connection via ``get_node``.
+            if source_id == target_id:
+                fetched = self._fetch_nodes_by_ids(conn, [source_id])
+                node = fetched.get(source_id)
+                return [node] if node else None
+
             visited: set[str] = {source_id}
             parent: dict[str, Optional[str]] = {source_id: None}
             queue: deque[str] = deque([source_id])
@@ -1012,6 +1063,10 @@ class SQLiteGraphStore:
 
                         # Batch-fetch all node rows on the path.
                         fetched = self._fetch_nodes_by_ids(conn, path_ids)
+                        # Silently skips IDs not found in the DB. This is by
+                        # design — a node may be deleted between edge
+                        # discovery and node hydration. Callers requiring
+                        # strict consistency should re-check counts.
                         return [fetched[nid] for nid in path_ids if nid in fetched]
 
                     queue.append(neighbor_id)

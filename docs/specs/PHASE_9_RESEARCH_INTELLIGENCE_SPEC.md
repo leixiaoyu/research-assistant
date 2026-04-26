@@ -1,11 +1,11 @@
 # Phase 9: Research Intelligence Layer Specification
 
-**Version:** 1.2
-**Status:** 📋 Revised per Team Feedback
+**Version:** 1.3
+**Status:** 📋 Aligned with as-built foundation (PR #105)
 **Timeline:** 12-14 weeks (4 milestones)
 **Author:** Claude Code
 **Created:** 2026-04-18
-**Last Updated:** 2026-04-19
+**Last Updated:** 2026-04-24
 
 **Dependencies:**
 - Phase 8 Complete (Deep Research Agent with corpus, browser, agent loop)
@@ -32,6 +32,7 @@
 14. [Risks & Mitigations](#14-risks--mitigations)
 15. [Dependencies](#15-dependencies)
 16. [Design Decisions](#16-design-decisions)
+17. [Implementation Notes (As-Built Foundation)](#17-implementation-notes-as-built-foundation)
 
 ---
 
@@ -188,10 +189,26 @@ Research intelligence is becoming critical in 2025-2026:
 
 ### 3.2 Package Structure
 
+> **Implementation note (PR #105):** The graph storage layer was relocated
+> from `src/services/intelligence/storage/` to `src/storage/intelligence_graph/`
+> during the Phase 9 foundation build. Storage is a cross-cutting persistence
+> primitive — any service may consume it without introducing a service↔service
+> dependency — so it now lives in the top-level `src/storage/` namespace
+> alongside other backends. The four milestone subpackages
+> (`monitoring/`, `citation/`, `knowledge/`, `frontier/`) remain under
+> `src/services/intelligence/`. See [Section 17: Implementation
+> Notes](#17-implementation-notes-as-built-foundation) for rationale.
+
 ```
 src/services/intelligence/
 ├── __init__.py
-├── models.py                    # Shared data models for all milestones
+├── models/                      # Shared data models (split into submodules)
+│   ├── __init__.py              # Re-exports kernel surface
+│   ├── graph.py                 # NodeType, EdgeType, GraphNode, GraphEdge
+│   ├── knowledge.py             # EntityType, ExtractedEntity, ExtractedRelation
+│   ├── frontier.py              # TrendStatus, GapType
+│   ├── monitoring.py            # PaperSource, SubscriptionLimitError
+│   └── exceptions.py            # GraphStoreError, NodeNotFoundError, ...
 │
 ├── monitoring/                  # Milestone 9.1
 │   ├── __init__.py
@@ -212,9 +229,9 @@ src/services/intelligence/
 │   ├── __init__.py
 │   ├── entity_extractor.py      # Extract structured entities
 │   ├── relation_linker.py       # Link entities across papers
-│   ├── graph_store.py           # Knowledge graph storage
 │   ├── query_engine.py          # Natural language queries
 │   └── contradiction_detector.py # Find conflicting claims
+│   # NOTE: knowledge graph storage uses src/storage/intelligence_graph/
 │
 ├── frontier/                    # Milestone 9.4
 │   ├── __init__.py
@@ -224,13 +241,17 @@ src/services/intelligence/
 │   ├── gap_finder.py            # Find research gaps
 │   └── strategic_advisor.py     # Generate research recommendations
 │
-├── storage/                     # Unified storage layer
-│   ├── __init__.py
-│   ├── unified_graph.py         # Combined graph for all data
-│   ├── time_series.py           # Temporal data storage
-│   └── migrations.py            # Schema migrations
-│
 └── unified_query.py             # Cross-layer query engine
+
+src/storage/intelligence_graph/  # Cross-cutting graph persistence (PR #105)
+├── __init__.py                  # Re-exports GraphStore, SQLiteGraphStore,
+│                                # GraphAlgorithms, MigrationManager, ...
+├── unified_graph.py             # GraphStore Protocol + SQLiteGraphStore impl
+├── algorithms.py                # GraphAlgorithms (PageRank, ...) — decoupled
+│                                # from the storage Protocol
+├── migrations.py                # Versioned schema migrations
+├── time_series.py               # Temporal data storage
+└── path_utils.py                # Storage path sanitization helpers
 ```
 
 ### 3.3 Data Flow Architecture
@@ -268,7 +289,7 @@ src/services/intelligence/
 │        │                  │                  │                              │
 │        └──────MENTIONS────┴──────────────────┘                              │
 │                                                                              │
-│   Edge Types: CITES, MENTIONS, ACHIEVES, COMPARED_TO, BELONGS_TO            │
+│   Edge Types: CITES, MENTIONS, ACHIEVES, COMPARES, BELONGS_TO               │
 │   Node Types: Paper, Entity, Result, Topic, Author, Venue                   │
 └──────────────────────────────────────────────────────────────────────────────┘
                                        │
@@ -726,20 +747,23 @@ Output as JSON array.
 The system SHALL extract relationships between entities.
 
 **Relation Types:**
+
+> **Implementation note (PR #105):** Knowledge-graph relations reuse the
+> shared `EdgeType` enum (see Section 8.1) instead of a separate
+> `RelationType`. This keeps a single type system across the knowledge layer
+> and the underlying graph store, so relations extracted in 9.3 can be
+> persisted directly as graph edges without translation. The relevant
+> `EdgeType` members for Milestone 9.3 are: `ACHIEVES`, `USES`,
+> `EVALUATES_ON`, `IMPROVES`, `COMPARES`, `EXTENDS`, `REQUIRES`, and
+> `MENTIONS`.
+
 ```python
-class RelationType(str, Enum):
-    ACHIEVES = "achieves"       # Method ACHIEVES Result on Dataset
-    USES = "uses"               # Paper USES Method
-    EVALUATES_ON = "evaluates_on"  # Model EVALUATES_ON Dataset
-    IMPROVES = "improves"       # Method A IMPROVES Method B
-    COMPARES = "compares"       # Paper COMPARES Method A to Method B
-    EXTENDS = "extends"         # Method A EXTENDS Method B
-    REQUIRES = "requires"       # Method REQUIRES Hyperparameter
+from src.services.intelligence.models import EdgeType
 
 class ExtractedRelation(BaseModel):
     """A relationship between entities."""
     relation_id: str
-    relation_type: RelationType
+    relation_type: EdgeType  # was RelationType pre-PR #105
     source_entity_id: str
     target_entity_id: str
     context: str | None = None  # Supporting text
@@ -1115,6 +1139,9 @@ class EdgeType(str, Enum):
     USES = "uses"
     COMPARES = "compares"
     IMPROVES = "improves"
+    EXTENDS = "extends"
+    EVALUATES_ON = "evaluates_on"
+    REQUIRES = "requires"
 
     # Frontier edges (Milestone 9.4)
     BELONGS_TO = "belongs_to"  # Paper belongs to topic
@@ -1124,6 +1151,13 @@ class EdgeType(str, Enum):
     # Monitoring edges (Milestone 9.1)
     MATCHES = "matches"  # Paper matches subscription
 ```
+
+> **Implementation note (PR #105):** The previously separate `RelationType`
+> enum (Milestone 9.3) was consolidated into `EdgeType` so that knowledge-graph
+> relations and graph-storage edges share a single type system. The
+> `ExtractedRelation` model now uses `relation_type: EdgeType` directly.
+> See [Section 17: Implementation
+> Notes](#17-implementation-notes-as-built-foundation).
 
 ### 8.2 Storage Implementation Options
 
@@ -1142,10 +1176,37 @@ class EdgeType(str, Enum):
 ### 8.3 Schema Design (SQLite Version)
 
 **Connection Initialization (REQUIRED):**
+
+Every SQLite connection opened by `SQLiteGraphStore` applies the following
+pragmas, in this order, before any user-issued statement runs. These four
+together implement the Phase 9 concurrency model.
+
 ```sql
--- MUST be executed on every connection for referential integrity
+-- Referential integrity (CRITICAL — SQLite default is OFF per connection)
 PRAGMA foreign_keys = ON;
+-- Writers do not block readers; concurrent reads stay non-blocking
+PRAGMA journal_mode = WAL;
+-- Crash-safe enough for our durability needs; faster than FULL
+PRAGMA synchronous = NORMAL;
+-- Wait up to 5 s for a held lock before raising SQLITE_BUSY
+PRAGMA busy_timeout = 5000;
 ```
+
+**Concurrency model (PR #105 decision):**
+
+- **WAL** decouples readers from writers so monitoring/citation/knowledge
+  pipelines can read while another worker writes.
+- **`busy_timeout = 5000`** absorbs short lock contention (typical bulk
+  insert is well under 1 s) without raising up to the caller.
+- **`BEGIN IMMEDIATE`** is used at the start of `update_node` (and the
+  bulk insert `with conn:` blocks) to acquire the write lock up-front.
+  This eliminates the read-then-update race that would otherwise let two
+  workers observe the same `version` and both try to bump it.
+- **Optimistic locking** is documented at the model level via
+  `GraphNode.version` / `GraphEdge.version`. `update_node` increments the
+  version atomically and raises `OptimisticLockError(node_id, expected,
+  actual)` on mismatch — the actual version is re-queried so the error
+  reports the truth, not a guess.
 
 ```sql
 -- Nodes table
@@ -1621,37 +1682,115 @@ This section documents key architectural decisions with options considered, trad
 
 **Architecture for Migration-Readiness:**
 
+> **Implementation note (PR #105):** The shipped Protocol is intentionally
+> narrower than the original draft below. PageRank (and any future graph
+> algorithm) lives in a sibling `GraphAlgorithms` class in
+> `src/storage/intelligence_graph/algorithms.py` rather than on the Protocol
+> itself. Bulk insert APIs (`add_nodes_batch`, `add_edges_batch`) were added
+> with a `_MAX_BULK_BATCH_SIZE = 10_000` DoS guard. See [Section 17:
+> Implementation Notes](#17-implementation-notes-as-built-foundation) for
+> rationale on both decisions.
+
 ```python
-# Abstract interface - ALL graph operations go through this
+# Abstract interface - ALL CRUD + traversal goes through this
 class GraphStore(Protocol):
-    """Abstract graph storage interface for migration flexibility."""
+    """Abstract graph storage interface for migration flexibility.
+
+    Algorithms (PageRank, etc.) are NOT on this Protocol — they live in
+    GraphAlgorithms and operate on a store via narrow read primitives.
+    """
 
     # Node operations
-    def add_node(self, node_id: str, node_type: NodeType, properties: dict) -> None: ...
-    def get_node(self, node_id: str) -> Node | None: ...
-    def update_node(self, node_id: str, properties: dict) -> None: ...
-    def delete_node(self, node_id: str) -> None: ...
+    def add_node(self, node_id: str, node_type: NodeType, properties: dict[str, Any]) -> GraphNode: ...
+    def get_node(self, node_id: str) -> GraphNode | None: ...
+    def update_node(
+        self,
+        node_id: str,
+        properties: dict[str, Any],
+        expected_version: int | None = None,
+    ) -> GraphNode: ...
+    def delete_node(self, node_id: str) -> bool: ...
+
+    # Bulk node insert (PR #105) — atomic in a single transaction.
+    # Rolls back the entire batch on any constraint violation. Callers
+    # must chunk inputs to <= _MAX_BULK_BATCH_SIZE (10_000) rows.
+    def add_nodes_batch(self, nodes: Sequence[GraphNode]) -> None: ...
 
     # Edge operations
-    def add_edge(self, source_id: str, target_id: str, edge_type: EdgeType, properties: dict) -> None: ...
-    def get_edges(self, node_id: str, direction: str, edge_type: EdgeType | None) -> list[Edge]: ...
+    def add_edge(
+        self,
+        edge_id: str,
+        source_id: str,
+        target_id: str,
+        edge_type: EdgeType,
+        properties: dict[str, Any],
+    ) -> GraphEdge: ...
+    def get_edge(self, edge_id: str) -> GraphEdge | None: ...
+    def get_edges(
+        self,
+        node_id: str,
+        direction: str = "both",
+        edge_type: EdgeType | None = None,
+    ) -> list[GraphEdge]: ...
+    def delete_edge(self, edge_id: str) -> bool: ...
+
+    # Bulk edge insert (PR #105) — atomic in a single transaction.
+    # Raises ReferentialIntegrityError on missing source/target; rolls
+    # back on any constraint violation. Capped at _MAX_BULK_BATCH_SIZE.
+    def add_edges_batch(self, edges: Sequence[GraphEdge]) -> None: ...
 
     # Graph traversal (abstracted for both backends)
-    def traverse(self, start_id: str, edge_types: list[EdgeType], max_depth: int) -> list[Node]: ...
-    def shortest_path(self, source_id: str, target_id: str) -> list[Node] | None: ...
+    def traverse(
+        self,
+        start_id: str,
+        edge_types: list[EdgeType],
+        max_depth: int,
+        direction: str = "outgoing",
+    ) -> list[GraphNode]: ...
+    def shortest_path(
+        self, source_id: str, target_id: str
+    ) -> list[GraphNode] | None: ...
 
-    # Algorithms (can be native Neo4j or Python implementation)
-    def pagerank(self, node_type: NodeType | None, iterations: int) -> dict[str, float]: ...
-    def connected_components(self) -> list[set[str]]: ...
+    # Metrics
+    def get_node_count(self, node_type: NodeType | None = None) -> int: ...
+    def get_edge_count(self, edge_type: EdgeType | None = None) -> int: ...
+
+
+# Algorithms live OFF the Protocol so backends do not have to reimplement
+# them and so callers must opt in to which edge types they want to follow.
+class GraphAlgorithms:
+    """Stateless container for graph algorithms operating on a store."""
+
+    @staticmethod
+    def pagerank(
+        store: _PageRankReadable,
+        edge_types: list[str],          # REQUIRED — no implicit "cites" default
+        damping: float = 0.85,
+        iterations: int = 20,
+        node_type: NodeType | None = None,
+    ) -> dict[str, float]:
+        """Iterative PageRank suitable for small/medium graphs.
+
+        Raises ValueError if edge_types is empty. The store is duck-typed
+        against the read primitives `_list_node_ids` and
+        `_list_edges_by_types`; SQLiteGraphStore exposes both, and a future
+        Neo4jGraphStore will provide the same primitives or wrap the
+        backend's native PageRank.
+        """
+        ...
 
 
 # Implementations
-class SQLiteGraphStore(GraphStore):
-    """SQLite implementation with adjacency tables."""
+class SQLiteGraphStore:
+    """SQLite implementation with adjacency tables.
+
+    Lives in src/storage/intelligence_graph/unified_graph.py and structurally
+    satisfies the GraphStore Protocol (which is @runtime_checkable).
+    """
     ...
 
-class Neo4jGraphStore(GraphStore):
-    """Neo4j implementation with native Cypher."""
+class Neo4jGraphStore:
+    """Neo4j implementation with native Cypher (future)."""
     ...
 ```
 
@@ -1972,8 +2111,133 @@ Every milestone MVP **must** include:
 1. All existing CLI commands unchanged
 2. All existing APIs unchanged
 3. New command groups: `arisp monitor`, `arisp citation`, `arisp knowledge`, `arisp frontier`
-4. New package: `src/services/intelligence/` (no modifications to existing)
+4. New packages: `src/services/intelligence/` (milestone consumers) and
+   `src/storage/intelligence_graph/` (cross-cutting graph persistence) — no
+   modifications to existing packages
 5. Optional DRA integration flags (`--enable-citation-expand`, etc.)
+
+---
+
+## 17. Implementation Notes (As-Built Foundation)
+
+This section records architectural decisions made during the Phase 9
+foundation build (PR #105) that diverge from earlier drafts of this spec.
+The decisions are reflected throughout Sections 3, 8, and 16; this section
+gives the rationale in one place so reviewers do not have to reconstruct
+it from the diff.
+
+All four decisions were locally scoped to the foundation layer
+(storage + shared models) and were chosen so that the downstream
+milestone work (9.1 Monitoring, 9.2 Citation, 9.3 Knowledge,
+9.4 Frontier) can build on a stable, narrow surface.
+
+### 17.1 Storage moved to `src/storage/intelligence_graph/`
+
+**What changed.** The graph storage layer moved from
+`src/services/intelligence/storage/` to
+`src/storage/intelligence_graph/`.
+
+**Rationale.** Graph persistence is a cross-cutting primitive — the
+monitoring service writes subscription nodes, the citation service writes
+paper/citation edges, the knowledge service writes entities/relations,
+and the frontier service reads aggregates. Keeping it nested inside one
+of its own consumers (`services/intelligence/`) implied an ownership it
+does not have. The top-level `src/storage/` namespace already hosts other
+backends and is the natural home for a layer that any service may consume
+without introducing a service↔service dependency. The move is purely
+relocation — the public surface (`GraphStore`, `SQLiteGraphStore`,
+`MigrationManager`, `TimeSeriesStore`) is unchanged and re-exported from
+the new package's `__init__.py`.
+
+### 17.2 PageRank extracted to `GraphAlgorithms`
+
+**What changed.** `pagerank()` was removed from the `GraphStore` Protocol
+and lives on a sibling `GraphAlgorithms` class in
+`src/storage/intelligence_graph/algorithms.py`. The signature now takes
+the store as its first argument and **requires** an explicit `edge_types`
+parameter (no implicit `cites` default). It also accepts an optional
+`node_type` filter so callers can score only papers, only entities, etc.
+
+**Rationale.** Three concerns motivated the extraction:
+
+1. **Protocol minimality.** A storage Protocol should describe persistence
+   primitives, not algorithm catalog entries. Mixing them forces every
+   backend (SQLite today, Neo4j tomorrow) to either reimplement the
+   algorithm or fall back to a stub — both bad outcomes. With the algorithm
+   off-Protocol, a single Python implementation runs against any backend
+   that exposes the read primitives.
+2. **Explicit edge-type semantics.** The original implementation hardcoded
+   `cites`. That silently mis-ran for any caller wanting blended PageRank
+   over `cites + mentions`, or topic-level PageRank over `belongs_to`.
+   Requiring the caller to opt in eliminates a footgun.
+3. **Reuse across milestones.** Milestone 9.4 (frontier) wants
+   topic-restricted PageRank over `belongs_to`; Milestone 9.2 wants
+   citation PageRank over `cites`. One algorithm, two configurations,
+   zero subclassing.
+
+The store side exposes two read primitives (`_list_node_ids`,
+`_list_edges_by_types`) that the algorithm consumes. They are
+intentionally underscore-prefixed and **not** part of the Protocol — they
+are an algorithm-internal contract, not a stable public API.
+
+### 17.3 Bulk insert APIs (`add_nodes_batch`, `add_edges_batch`)
+
+**What changed.** `add_nodes_batch(nodes)` and `add_edges_batch(edges)`
+were added to the `GraphStore` Protocol. Both insert atomically in one
+transaction (`with conn:` / `executemany`), roll back the entire batch
+on any constraint violation, log a single INFO record on success, and
+reject batches over `_MAX_BULK_BATCH_SIZE = 10_000` rows with a
+`ValueError`.
+
+**Rationale.** Per-row inserts dominate runtime when the citation crawler
+or entity extractor flushes a paper's worth of nodes/edges (often hundreds
+to low thousands at a time). Batching collapses that into one transaction
+and one commit, with order-of-magnitude throughput improvement on SQLite.
+The `_MAX_BULK_BATCH_SIZE = 10_000` cap is a DoS guard: each row holds a
+JSON-serialized properties blob in memory while the executemany payload
+is built, so an unbounded count from an upstream caller could trivially
+push 10 MB+ of memory pressure (and a multi-second pause) per call.
+Callers with more rows must chunk upstream — that keeps the chunking
+policy explicit at the call site instead of hidden inside the storage
+layer. Edge bulk insert distinguishes `ReferentialIntegrityError`
+(missing source/target) from generic `GraphStoreError` (e.g. duplicate
+edge_id) so callers can react appropriately.
+
+### 17.4 Concurrency model: WAL + `BEGIN IMMEDIATE` + optimistic locking
+
+**What changed.** Section 8.3 now documents the full concurrency stack:
+
+- `journal_mode = WAL` (writers don't block readers)
+- `synchronous = NORMAL` (durability vs. throughput balance)
+- `busy_timeout = 5000` (5 s wait before raising `SQLITE_BUSY`)
+- `BEGIN IMMEDIATE` at the start of `update_node` and the bulk insert
+  transactions (write lock acquired up-front)
+- Optimistic locking via `version` columns on `GraphNode` / `GraphEdge`,
+  surfaced as `OptimisticLockError(node_id, expected, actual)` with the
+  actual version re-queried after a conflict so the error reports truth.
+
+**Rationale.** The Phase 9 pipelines run several writers and many readers
+against the same SQLite file — monitoring jobs, citation refresh,
+knowledge extraction, and ad-hoc CLI queries can all be live simultaneously.
+WAL is the standard SQLite answer for that read/write mix. `BEGIN
+IMMEDIATE` was chosen specifically to close a read-then-update race in
+`update_node`: without it, two workers could each `SELECT` the same
+`version`, both compute their `version+1`, and then the second `UPDATE`
+would silently observe a row count of zero — which we'd then have to
+distinguish from a genuine version mismatch. Acquiring the write lock
+up-front collapses that ambiguity. The 5 s `busy_timeout` absorbs short
+contention (typical bulk insert is well under 1 s) without surfacing
+`SQLITE_BUSY` to application code, while still providing an upper bound
+that prevents indefinite blocking. The `version` field stays on the model
+(rather than being a hidden storage detail) because future Neo4j or
+Postgres backends will want to honor the same optimistic-locking contract.
+
+### 17.5 Reference
+
+- **PR:** [#105 — Phase 9 foundation](https://github.com/leixiaoyu/research-assistant/pull/105)
+  (storage relocation, GraphAlgorithms split, bulk APIs, concurrency model)
+- **Open questions log:** `.omc/plans/open-questions.md` (decisions 3 & 4
+  recorded under "Phase 9 — 2026-04-22")
 
 ---
 
@@ -2003,8 +2267,8 @@ Every milestone MVP **must** include:
 
 ---
 
-**Document Version:** 1.1
-**Status:** 📋 Ready for Team Review
-**Last Updated:** 2026-04-18
-**Design Decisions:** All 10 key decisions documented with rationale
-**Next Step:** Team design review meeting
+**Document Version:** 1.3
+**Status:** 📋 Aligned with as-built foundation (PR #105)
+**Last Updated:** 2026-04-24
+**Design Decisions:** All 10 design decisions + 4 implementation notes documented
+**Next Step:** Downstream milestone PRs (9.1, 9.2) build against this spec

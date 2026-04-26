@@ -108,12 +108,15 @@ REQ-9.4.2 requires "citation burst" detection and REQ-9.4.3 requires
 
 **Objective:** Build foundation used by all milestones
 
-**Deliverables:**
+**Deliverables (as built in PR #105 — paths reflect post-relocation layout):**
 1. `src/services/intelligence/__init__.py` - Package initialization
-2. `src/services/intelligence/models.py` - Shared data models (NodeType, EdgeType, etc.)
-3. `src/services/intelligence/storage/unified_graph.py` - GraphStore Protocol + SQLite implementation
-4. `src/services/intelligence/storage/migrations.py` - Schema migrations
-5. `src/services/intelligence/storage/time_series.py` - Temporal data storage
+2. `src/services/intelligence/models/` - Shared data models split by domain
+   (`graph.py`, `knowledge.py`, `frontier.py`, `monitoring.py`, `exceptions.py`)
+3. `src/storage/intelligence_graph/unified_graph.py` - GraphStore Protocol + SQLite implementation
+4. `src/storage/intelligence_graph/algorithms.py` - GraphAlgorithms (PageRank, ...) — off-Protocol
+5. `src/storage/intelligence_graph/migrations.py` - Schema migrations
+6. `src/storage/intelligence_graph/time_series.py` - Temporal data storage
+7. `src/storage/intelligence_graph/path_utils.py` - Storage path sanitization
 
 **Detailed TODOs:**
 
@@ -122,7 +125,7 @@ REQ-9.4.2 requires "citation burst" detection and REQ-9.4.3 requires
 | 0.1 | Create intelligence package structure | Directory structure matches spec Section 3.2 |
 | 0.2 | Implement NodeType and EdgeType enums | All types from spec Section 8.1 defined |
 | 0.3 | Define GraphStore Protocol | Protocol matches spec Section 16.1 with all methods |
-| 0.4 | Implement SQLiteGraphStore | CRUD for nodes/edges, traverse(), pagerank() stub |
+| 0.4 | Implement SQLiteGraphStore | CRUD for nodes/edges, traverse(), bulk insert APIs (pagerank moved to GraphAlgorithms — see PR #105) |
 | 0.5 | Create schema migrations | Tables: nodes, edges, time_series, subscriptions |
 | 0.6 | Add PRAGMA foreign_keys enforcement | Connection initialization always enables FK |
 | 0.7 | Implement optimistic locking | Version column with conflict detection |
@@ -284,7 +287,8 @@ REQ-9.4.2 requires "citation burst" detection and REQ-9.4.3 requires
 
 **Week 5 Deliverables:**
 - `relation_linker.py` - Relationship extraction
-- `graph_store.py` - Knowledge graph storage integration
+- Knowledge graph storage integration via `src/storage/intelligence_graph/`
+  (no per-milestone `graph_store.py` — relocated in PR #105)
 
 **Week 6 Deliverables:**
 - Entity resolution (conservative auto-merge)
@@ -486,10 +490,24 @@ See `/Users/raymondl/Documents/research-assist/.omc/plans/open-questions.md` for
 
 ## Appendix: File Structure
 
+> **Implementation note (PR #105):** Storage was relocated out of
+> `src/services/intelligence/storage/` to the top-level
+> `src/storage/intelligence_graph/` package, and graph algorithms (PageRank)
+> were extracted into a sibling `algorithms.py` module. See
+> [PHASE_9_RESEARCH_INTELLIGENCE_SPEC.md §17 Implementation
+> Notes](../../docs/specs/PHASE_9_RESEARCH_INTELLIGENCE_SPEC.md#17-implementation-notes-as-built-foundation)
+> for rationale.
+
 ```
 src/services/intelligence/
 ├── __init__.py
-├── models.py                    # Shared data models
+├── models/                      # Shared data models (split into submodules)
+│   ├── __init__.py              # Re-exports kernel surface
+│   ├── graph.py                 # NodeType, EdgeType, GraphNode, GraphEdge
+│   ├── knowledge.py             # EntityType, ExtractedEntity, ExtractedRelation
+│   ├── frontier.py              # TrendStatus, GapType
+│   ├── monitoring.py            # PaperSource, SubscriptionLimitError
+│   └── exceptions.py            # GraphStoreError, NodeNotFoundError, ...
 │
 ├── monitoring/                  # Milestone 9.1
 │   ├── __init__.py
@@ -510,9 +528,9 @@ src/services/intelligence/
 │   ├── __init__.py
 │   ├── entity_extractor.py
 │   ├── relation_linker.py
-│   ├── graph_store.py
 │   ├── query_engine.py
 │   └── contradiction_detector.py
+│   # NOTE: graph storage moved to src/storage/intelligence_graph/
 │
 ├── frontier/                    # Milestone 9.4
 │   ├── __init__.py
@@ -522,13 +540,15 @@ src/services/intelligence/
 │   ├── gap_finder.py
 │   └── strategic_advisor.py
 │
-├── storage/                     # Unified storage layer
-│   ├── __init__.py
-│   ├── unified_graph.py
-│   ├── time_series.py
-│   └── migrations.py
-│
 └── unified_query.py             # Cross-layer query engine
+
+src/storage/intelligence_graph/  # Cross-cutting graph persistence (PR #105)
+├── __init__.py                  # Re-exports public surface
+├── unified_graph.py             # GraphStore Protocol + SQLiteGraphStore
+├── algorithms.py                # GraphAlgorithms (PageRank, ...) — off-Protocol
+├── migrations.py                # Versioned schema migrations
+├── time_series.py               # Temporal data storage
+└── path_utils.py                # Storage path sanitization helpers
 ```
 
 ---

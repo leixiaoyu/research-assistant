@@ -48,10 +48,31 @@ def db_path() -> Path:
     return path
 
 
+def _seed_subscription(db_path: Path, subscription_id: str) -> None:
+    """Insert a stub ``subscriptions`` row so the FK on
+    ``monitoring_runs.subscription_id`` (added in MIGRATION_V3) is
+    satisfied. Tests that record runs need their subscription_id to
+    resolve to a real parent row.
+    """
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO subscriptions (
+                subscription_id, user_id, name, config
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (subscription_id, "default", "stub", "{}"),
+        )
+        conn.commit()
+
+
 @pytest.fixture
 def repo(db_path: Path) -> MonitoringRunRepository:
     r = MonitoringRunRepository(db_path)
     r.initialize()
+    # Seed the default subscription_id used by ``_make_run`` so tests
+    # that don't override it still satisfy the new FK from V3.
+    _seed_subscription(db_path, "sub-test001")
     return r
 
 
@@ -212,6 +233,7 @@ class TestUserId:
     def test_default_user_id_used_when_not_provided(self, db_path: Path) -> None:
         repo = MonitoringRunRepository(db_path, user_id="alice")
         repo.initialize()
+        _seed_subscription(db_path, "sub-test001")
         run = _make_run()
         repo.record_run(run)
         with sqlite3.connect(str(db_path)) as conn:
@@ -291,7 +313,11 @@ class TestListRuns:
         # Sorted DESC: 12, 11, 10
         assert [r.run_id for r in runs] == ["run-001", "run-002", "run-000"]
 
-    def test_list_filter_by_subscription(self, repo: MonitoringRunRepository) -> None:
+    def test_list_filter_by_subscription(
+        self, repo: MonitoringRunRepository, db_path: Path
+    ) -> None:
+        _seed_subscription(db_path, "sub-x")
+        _seed_subscription(db_path, "sub-y")
         repo.record_run(_make_run(run_id="run-a", subscription_id="sub-x"))
         repo.record_run(_make_run(run_id="run-b", subscription_id="sub-y"))
         result = repo.list_runs(subscription_id="sub-x")

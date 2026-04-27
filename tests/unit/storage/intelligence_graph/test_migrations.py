@@ -697,3 +697,165 @@ class TestMigrationTransactionRollback:
         # (b) The migration must NOT be recorded.
         applied_versions = {m["version"] for m in manager.get_applied_migrations()}
         assert 4242 not in applied_versions
+
+
+class TestMigrationV3MonitoringRunsFk:
+    """Tests for MIGRATION_V3_MONITORING_RUNS_FK (PR #119 review #C1, #S8)."""
+
+    def _open(self, db_path: Path) -> sqlite3.Connection:
+        """Open a connection with foreign keys enforced (V3 needs them)."""
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def test_v3_recreates_table_with_fk_to_subscriptions(self, temp_db: Path) -> None:
+        """After V3, deleting a subscription must cascade-delete its runs."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+
+        conn = self._open(temp_db)
+        try:
+            # Insert a subscription so we can reference it.
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-fk-test", "alice", "Sub", "{}"),
+            )
+            # Insert a run referencing the subscription.
+            conn.execute(
+                """
+                INSERT INTO monitoring_runs (
+                    run_id, subscription_id, user_id,
+                    started_at, status
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "run-fk-test",
+                    "sub-fk-test",
+                    "alice",
+                    "2024-01-01T00:00:00+00:00",
+                    "success",
+                ),
+            )
+            conn.commit()
+
+            # Sanity: row exists.
+            cnt = conn.execute(
+                "SELECT COUNT(*) FROM monitoring_runs WHERE run_id = ?",
+                ("run-fk-test",),
+            ).fetchone()[0]
+            assert cnt == 1
+
+            # Delete the subscription -- FK CASCADE must remove the run.
+            conn.execute(
+                "DELETE FROM subscriptions WHERE subscription_id = ?",
+                ("sub-fk-test",),
+            )
+            conn.commit()
+
+            cnt = conn.execute(
+                "SELECT COUNT(*) FROM monitoring_runs WHERE run_id = ?",
+                ("run-fk-test",),
+            ).fetchone()[0]
+            assert cnt == 0, "run should have been cascade-deleted"
+        finally:
+            conn.close()
+
+    def test_v3_rejects_invalid_status_via_check(self, temp_db: Path) -> None:
+        """Inserting an unknown status string must raise IntegrityError."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+
+        conn = self._open(temp_db)
+        try:
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-check", "alice", "Sub", "{}"),
+            )
+            conn.commit()
+
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    """
+                    INSERT INTO monitoring_runs (
+                        run_id, subscription_id, user_id,
+                        started_at, status
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "run-bad-status",
+                        "sub-check",
+                        "alice",
+                        "2024-01-01T00:00:00+00:00",
+                        "BOGUS_STATUS",
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def test_v3_accepts_all_known_status_values(self, temp_db: Path) -> None:
+        """Each MonitoringRunStatus enum value must be accepted by the CHECK."""
+        from src.services.intelligence.monitoring.models import (
+            MonitoringRunStatus,
+        )
+
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+
+        conn = self._open(temp_db)
+        try:
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-status", "alice", "Sub", "{}"),
+            )
+            for i, status in enumerate(MonitoringRunStatus):
+                conn.execute(
+                    """
+                    INSERT INTO monitoring_runs (
+                        run_id, subscription_id, user_id,
+                        started_at, status
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"run-status-{i}",
+                        "sub-status",
+                        "alice",
+                        "2024-01-01T00:00:00+00:00",
+                        status.value,
+                    ),
+                )
+            conn.commit()
+
+            cnt = conn.execute("SELECT COUNT(*) FROM monitoring_runs").fetchone()[0]
+            assert cnt == len(list(MonitoringRunStatus))
+        finally:
+            conn.close()
+
+    def test_v3_index_on_subscription_id_exists(self, temp_db: Path) -> None:
+        """Both indexes (composite + single-column) must be present after V3."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+
+        conn = sqlite3.connect(str(temp_db))
+        try:
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='index' AND tbl_name='monitoring_runs'"
+            )
+            indexes = {row[0] for row in cursor.fetchall()}
+            assert "idx_monitoring_runs_subscription" in indexes
+            assert "idx_monitoring_runs_sub_started" in indexes
+        finally:
+            conn.close()

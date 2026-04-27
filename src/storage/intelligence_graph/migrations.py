@@ -229,10 +229,73 @@ MIGRATION_V2_MONITORING_RUNS = Migration(
 )
 
 
+# Schema version 3: Add FK + status CHECK to monitoring_runs (Phase 9.1
+# self-review fixes — PR #119 #C1 + #S8).
+#
+# WHY THIS IS A NEW MIGRATION (NOT A V2 EDIT)
+# -------------------------------------------
+# Migrations are immutable post-creation -- editing V2 in place would
+# cause databases that already ran V2 to silently diverge from the
+# canonical schema (their version column says "v2" but their tables
+# look different). A separate V3 keeps the migration log honest.
+#
+# WHY DESTRUCTIVE REBUILD IS SAFE HERE
+# ------------------------------------
+# PR #119 has not merged yet -- ``monitoring_runs`` exists only on this
+# branch and on contributor laptops. There is no production audit data
+# to preserve. The migration drops the table (CASCADE removes
+# ``monitoring_papers`` rows via the existing FK) and recreates it with:
+#
+# - FOREIGN KEY (subscription_id) REFERENCES subscriptions(subscription_id)
+#   ON DELETE CASCADE  -- review #C1
+# - CHECK (status IN ('success','partial','failed')) -- review #S8;
+#   values mirror MonitoringRunStatus enum exactly
+# - CREATE INDEX idx_monitoring_runs_subscription on (subscription_id)
+#   -- review #C1 supplemental, accelerates FK enforcement
+#
+# The original (subscription_id, started_at DESC) composite index from
+# V2 is also re-created because dropping the table dropped its indexes.
+MIGRATION_V3_MONITORING_RUNS_FK = Migration(
+    version=3,
+    name="monitoring_runs_fk_and_status_check",
+    description=(
+        "Rebuild monitoring_runs with FK to subscriptions(ON DELETE CASCADE)"
+        " and CHECK constraint on status. Drops/recreates the table; safe"
+        " because PR #119 has not merged so no production data exists."
+    ),
+    up="""
+    DROP TABLE IF EXISTS monitoring_runs;
+
+    CREATE TABLE monitoring_runs (
+        run_id TEXT PRIMARY KEY,
+        subscription_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        status TEXT NOT NULL
+            CHECK (status IN ('success', 'partial', 'failed')),
+        error TEXT,
+        papers_found INTEGER NOT NULL DEFAULT 0,
+        papers_new INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (subscription_id)
+            REFERENCES subscriptions(subscription_id)
+            ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_monitoring_runs_sub_started
+        ON monitoring_runs(subscription_id, started_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_monitoring_runs_subscription
+        ON monitoring_runs(subscription_id);
+    """,
+)
+
+
 # All migrations in order
 ALL_MIGRATIONS: list[Migration] = [
     MIGRATION_V1_INITIAL,
     MIGRATION_V2_MONITORING_RUNS,
+    MIGRATION_V3_MONITORING_RUNS_FK,
 ]
 
 

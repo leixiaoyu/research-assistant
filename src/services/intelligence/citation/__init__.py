@@ -1,20 +1,21 @@
-"""Milestone 9.2: Citation Graph Intelligence (Week 1 surface).
+"""Milestone 9.2: Citation Graph Intelligence (Week 1 + 1.5 surface).
 
 This package builds and persists citation graphs from external APIs
 (Semantic Scholar primary, OpenAlex fallback) using the Phase 9
-``GraphStore`` for storage. Week 1 delivers depth=1 graph construction;
-BFS crawler, coupling analyzer, influence scorer, and recommender are
-deferred to follow-up PRs (Weeks 2-3).
+``GraphStore`` for storage. Week 1 + 1.5 deliver depth=1 graph
+construction; BFS crawler, coupling analyzer, influence scorer, and
+recommender are deferred to follow-up PRs (Weeks 2-3).
 
-Public surface (Week 1 PR — descoped):
+Public surface:
 
 - :class:`CitationNode` / :class:`CitationEdge` — domain models that
   layer over the shared ``GraphNode`` / ``GraphEdge`` kernel.
 - :class:`CitationDirection` — small enum for traversal direction.
 - :class:`SemanticScholarCitationClient` — primary citation source.
+- :class:`OpenAlexCitationClient` — fallback citation source with
+  polite-pool email convention.
 
-Deferred to Week 1.5 follow-up PR (small, focused):
-- ``OpenAlexCitationClient`` (fallback with polite-pool email)
+Deferred to the graph-builder follow-up commit in this same PR:
 - ``CitationGraphBuilder`` (composes clients + persists via
   ``GraphStore.add_nodes_batch`` / ``add_edges_batch``)
 
@@ -37,6 +38,9 @@ from src.services.intelligence.citation.models import (
     make_citation_edge_id,
     make_paper_node_id,
 )
+from src.services.intelligence.citation.openalex_client import (
+    OpenAlexCitationClient,
+)
 from src.services.intelligence.citation.semantic_scholar_client import (
     SemanticScholarCitationClient,
 )
@@ -50,4 +54,5 @@ __all__ = [
     "make_paper_node_id",
     # Clients
     "SemanticScholarCitationClient",
+    "OpenAlexCitationClient",
 ]

@@ -79,6 +79,9 @@ addopts = [
     "--strict-config",
     "--verbose",
 ]
+# Tests use explicit @pytest.mark.asyncio markers; pin to strict so a
+# missing marker fails fast rather than silently skipping coroutine tests.
+asyncio_mode = "strict"
 
 [tool.coverage.run]
 source = ["src"]

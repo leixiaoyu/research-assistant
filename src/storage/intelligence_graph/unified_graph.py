@@ -399,6 +399,12 @@ class SQLiteGraphStore:
 
         Raises:
             GraphStoreError: If store not initialized.
+
+        TODO(phase-10): consolidate onto
+            ``src.storage.intelligence_graph.connection.open_connection``
+            once this store moves to the per-operation context-manager
+            pattern used by ``SubscriptionManager`` /
+            ``MonitoringRunRepository``.
         """
         if not self._initialized:
             raise GraphStoreError(

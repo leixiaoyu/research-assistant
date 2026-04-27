@@ -229,6 +229,12 @@ class MigrationManager:
 
         Returns:
             SQLite connection ready for use.
+
+        TODO(phase-10): consolidate onto
+            ``src.storage.intelligence_graph.connection.open_connection``
+            once this manager moves to the per-operation context-manager
+            pattern used by ``SubscriptionManager`` /
+            ``MonitoringRunRepository``.
         """
         conn = sqlite3.connect(str(self.db_path))
         conn.execute("PRAGMA foreign_keys = ON")

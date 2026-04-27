@@ -12,6 +12,7 @@ Re-exports the most-used surface for convenience.
 """
 
 from src.storage.intelligence_graph.algorithms import GraphAlgorithms
+from src.storage.intelligence_graph.connection import open_connection
 from src.storage.intelligence_graph.migrations import (
     ALL_MIGRATIONS,
     MIGRATION_V1_INITIAL,
@@ -41,4 +42,5 @@ __all__ = [
     "TimeSeriesPoint",
     "TimeSeriesAggregate",
     "AggregationPeriod",
+    "open_connection",
 ]

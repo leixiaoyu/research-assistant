@@ -447,11 +447,24 @@ class SemanticScholarCitationClient:
                             "Semantic Scholar citation rate limit exceeded",
                             retry_after=retry_after,
                         )
-                    if 300 <= response.status < 400:
+                    # Explicit list of redirect statuses we reject:
+                    # 301/302/303/307/308 are the genuine redirects that
+                    # would otherwise leak our ``x-api-key`` to whatever
+                    # host the ``Location`` header names. 304 is *not*
+                    # a redirect (it's "Not Modified" — caller's cached
+                    # copy is still good) so it must not be treated as
+                    # one (#S4).
+                    if response.status in (301, 302, 303, 307, 308):
                         location = response.headers.get("Location", "<none>")
+                        # ``repr`` neutralises CRLF (renders ``\r\n`` as
+                        # the literal escape) and the slice caps length —
+                        # a hostile upstream cannot inject control
+                        # characters or arbitrarily long payloads into
+                        # our exception message (#S5).
+                        safe_location = repr(location[:200])
                         raise APIError(
                             f"Semantic Scholar returned an unexpected redirect "
-                            f"({response.status} -> {location}); "
+                            f"({response.status} -> {safe_location}); "
                             "redirects are disabled for SSRF protection."
                         )
                     if response.status == 404:
@@ -464,11 +477,10 @@ class SemanticScholarCitationClient:
                         raise APIError(
                             f"Semantic Scholar error {response.status}: {text}"
                         )
-                    # Bound memory before parsing. ``content_length`` is
-                    # ``Optional[int]``; we only act when the upstream
-                    # advertised a size that exceeds the cap. Servers
-                    # that omit the header still get parsed (aiohttp
-                    # itself will raise on truly massive streams).
+                    # Bound memory before parsing. First check the
+                    # advertised ``content_length`` — cheapest possible
+                    # rejection when the server tells us the size up
+                    # front.
                     content_length = response.content_length
                     if (
                         content_length is not None
@@ -478,7 +490,20 @@ class SemanticScholarCitationClient:
                             f"Semantic Scholar response too large: "
                             f"{content_length} bytes > {_MAX_RESPONSE_BYTES} cap."
                         )
-                    body: dict[str, Any] = await response.json()
+                    # Even when ``content_length`` is absent (chunked
+                    # transfer, gzip, etc.) we must enforce the cap —
+                    # ``response.json()`` would otherwise buffer
+                    # arbitrarily many bytes. Read at most one byte over
+                    # the cap so we can detect (and reject) overruns
+                    # without ever holding more than the cap+1 in
+                    # memory (#S6).
+                    raw = await response.content.read(_MAX_RESPONSE_BYTES + 1)
+                    if len(raw) > _MAX_RESPONSE_BYTES:
+                        raise APIError(
+                            f"Semantic Scholar response exceeded "
+                            f"{_MAX_RESPONSE_BYTES} bytes (streaming/chunked)."
+                        )
+                    body: dict[str, Any] = json.loads(raw)
                     return body
         except asyncio.TimeoutError as exc:
             raise APIError(
@@ -521,7 +546,16 @@ class SemanticScholarCitationClient:
             target = parsedate_to_datetime(value)
         except (TypeError, ValueError):
             return None
-        now = datetime.now(target.tzinfo or timezone.utc)
+        # Defensive: a non-conforming upstream may send an HTTP-date
+        # with no timezone token, in which case ``parsedate_to_datetime``
+        # returns a *naive* datetime. Subtracting a naive datetime from
+        # a tz-aware ``datetime.now`` raises ``TypeError`` and would
+        # escape ``_http_get`` unwrapped — a DoS-adjacent failure on the
+        # 429 path. Coerce naive → UTC so we still produce a useful
+        # backoff hint instead of dropping the value (#S3).
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=timezone.utc)
+        now = datetime.now(target.tzinfo)
         delta = (target - now).total_seconds()
         return max(0.0, delta)
 

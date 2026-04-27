@@ -591,17 +591,45 @@ def test_serialize_then_deserialize_roundtrip():
 
 
 def _mock_aiohttp_response(
-    status, json_body=None, text_body="oops", headers=None, content_length=None
+    status,
+    json_body=None,
+    text_body="oops",
+    headers=None,
+    content_length=None,
+    raw_body=None,
 ):
-    """Build an async-context-manager-compatible mocked response."""
+    """Build an async-context-manager-compatible mocked response.
+
+    ``json_body`` is the dict the production code is expected to receive
+    after ``json.loads`` of the streamed body. We serialise it to bytes
+    and hand them out via the mocked ``response.content.read`` (the
+    production code now reads bytes itself rather than calling
+    ``.json()`` directly — see #S6).
+
+    ``raw_body`` lets a caller pass exact bytes (e.g. to simulate an
+    oversized chunked-transfer payload that exceeds the cap).
+    """
+    import json as _json
+
     resp = MagicMock()
     resp.status = status
+    # ``.json`` is kept as an AsyncMock so any test that *did* call it
+    # before the #S6 change still gets a return value, and the
+    # ``assert_not_called`` check in ``test_oversized_response_*``
+    # remains a useful regression guard against re-introducing
+    # ``await response.json()`` on the hot path.
     resp.json = AsyncMock(return_value=json_body)
     resp.text = AsyncMock(return_value=text_body)
     resp.headers = headers if headers is not None else {}
     # ``content_length`` is ``Optional[int]`` on aiohttp.ClientResponse;
     # default to ``None`` so the size-cap branch is exercised separately.
     resp.content_length = content_length
+
+    if raw_body is None:
+        raw_body = b"" if json_body is None else _json.dumps(json_body).encode("utf-8")
+    content = MagicMock()
+    content.read = AsyncMock(return_value=raw_body)
+    resp.content = content
 
     cm = MagicMock()
     cm.__aenter__ = AsyncMock(return_value=resp)
@@ -906,6 +934,53 @@ async def test_http_get_raises_api_error_on_301_without_location(client):
             await client._http_get("http://x", {})
 
 
+@pytest.mark.asyncio
+async def test_http_get_304_not_treated_as_redirect_error(client):
+    """304 Not Modified is not a redirect — must not raise (#S4).
+
+    304 means "your cached copy is still good". The previous
+    ``300 <= status < 400`` branch swept it up as a redirect and raised
+    APIError. We narrow to the explicit redirect set
+    ``{301, 302, 303, 307, 308}`` so 304 falls through to the generic
+    non-200 branch (which still raises, but with the actual status —
+    304 isn't a successful body for our use case).
+    """
+    cm = _mock_aiohttp_response(304, text_body="not modified", headers={})
+    p, _ = _patch_session(cm)
+    with p:
+        # 304 should NOT match "redirects are disabled" — it's caught by
+        # the generic non-200 branch instead.
+        with pytest.raises(APIError) as ei:
+            await client._http_get("http://x", {})
+    assert "redirects are disabled" not in str(ei.value)
+    assert "304" in str(ei.value)
+
+
+@pytest.mark.asyncio
+async def test_http_get_redirect_location_with_crlf_is_sanitized(client):
+    """A malicious ``Location: foo\\r\\nX-Inject:bar`` must not break the
+    error message (#S5).
+
+    The ``repr`` wrapper renders CRLF as the literal escape sequence
+    rather than embedding control characters into the exception message
+    that would later flow into structured logs.
+    """
+    cm = _mock_aiohttp_response(
+        302,
+        text_body="moved",
+        headers={"Location": "foo\r\nX-Inject:bar"},
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(APIError) as ei:
+            await client._http_get("http://x", {})
+    msg = str(ei.value)
+    # Raw control characters must not appear in the message.
+    assert "\r\n" not in msg
+    # The escape sequence rendered by ``repr`` is what we expect.
+    assert "\\r\\n" in msg
+
+
 # ---------------------------------------------------------------------------
 # Security hardening — Fix #9: Retry-After parsing
 # ---------------------------------------------------------------------------
@@ -1006,6 +1081,32 @@ def test_parse_retry_after_returns_none_for_none():
     assert SemanticScholarCitationClient._parse_retry_after(None) is None
 
 
+@pytest.mark.asyncio
+async def test_429_with_httpdate_no_timezone_treated_as_utc(client):
+    """HTTP-date with no zone token must coerce to UTC, not crash (#S3).
+
+    ``parsedate_to_datetime`` returns a *naive* datetime when the input
+    omits the trailing zone (which RFC HTTP-dates always include, but
+    non-conforming upstreams sometimes don't). Subtracting that from a
+    tz-aware ``datetime.now`` previously raised an unwrapped TypeError
+    that escaped ``_http_get`` — DoS-adjacent on the 429 path. We now
+    coerce naive → UTC and produce a sane positive backoff hint.
+    """
+    # A future date with NO timezone token (note: no 'GMT' / '+0000')
+    cm = _mock_aiohttp_response(
+        429,
+        text_body="slow",
+        headers={"Retry-After": "Wed, 01 Jan 2200 00:00:00"},
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(RateLimitError) as ei:
+            await client._http_get("http://x", {})
+    # No exception should escape; we should get a finite, positive hint.
+    assert ei.value.retry_after is not None
+    assert ei.value.retry_after > 0
+
+
 # ---------------------------------------------------------------------------
 # Security hardening — Fix #10: response size cap
 # ---------------------------------------------------------------------------
@@ -1043,12 +1144,35 @@ async def test_response_at_cap_is_accepted(client):
 
 @pytest.mark.asyncio
 async def test_response_with_no_content_length_is_parsed(client):
-    """Missing Content-Length header → defer to aiohttp's stream guard."""
+    """Missing Content-Length header → bounded read still parses small body."""
     cm = _mock_aiohttp_response(200, json_body={"ok": True}, content_length=None)
     p, _ = _patch_session(cm)
     with p:
         body = await client._http_get("http://x", {})
     assert body == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_chunked_oversized_response_rejected_after_read(client):
+    """Chunked transfer with no Content-Length must still be size-capped (#S6).
+
+    A misbehaving / hostile upstream can omit Content-Length and stream
+    arbitrarily many bytes. The bounded read of ``cap + 1`` bytes lets
+    us detect (and reject) the overflow without ever buffering more than
+    the cap+1 in memory.
+    """
+    cap = 10 * 1024 * 1024  # _MAX_RESPONSE_BYTES
+    oversized = b"x" * (cap + 100)
+    cm = _mock_aiohttp_response(
+        200,
+        json_body=None,
+        content_length=None,  # advertised size missing → fall through
+        raw_body=oversized,
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(APIError, match="streaming/chunked"):
+            await client._http_get("http://x", {})
 
 
 # ---------------------------------------------------------------------------

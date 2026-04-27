@@ -804,7 +804,11 @@ async def test_get_citations_also_validates_paper_id(client):
 
 @pytest.mark.asyncio
 async def test_paper_id_with_doi_is_quoted_in_url(client):
-    """Legitimate DOIs (with `/`) pass validation but are URL-quoted."""
+    """Legitimate DOIs (with `/`) pass validation but are URL-quoted.
+
+    Also asserts that colons (used by S2 namespace prefixes) round-trip
+    literally through ``quote(..., safe=':')`` — see #C1.
+    """
     captured: list[str] = []
 
     async def fake_http_get(url, params):
@@ -821,6 +825,45 @@ async def test_paper_id_with_doi_is_quoted_in_url(client):
     assert any("10.1%2Fseed" in u for u in captured)
     # And the original raw slash must NOT appear inside the id segment.
     assert not any("/paper/10.1/seed" in u for u in captured)
+    # Colons must NOT be percent-encoded — S2 namespaces depend on them.
+    assert not any("%3A" in u or "%3a" in u for u in captured)
+
+
+@pytest.mark.asyncio
+async def test_paper_id_with_arxiv_namespace_preserves_colon(client):
+    """``arxiv:1706.03762`` — colon must round-trip literally (#C1)."""
+    captured: list[str] = []
+
+    async def fake_http_get(url, params):
+        captured.append(url)
+        if "/paper/" in url and not url.endswith("/references"):
+            return {**SEED_PAYLOAD, "paperId": "arxiv:1706.03762"}
+        return {"data": []}
+
+    with patch.object(client, "_http_get", side_effect=fake_http_get):
+        await client.get_references("arxiv:1706.03762", max_results=5)
+
+    # The literal colon-prefixed namespace must reach S2 unencoded.
+    assert any("/paper/arxiv:1706.03762" in u for u in captured)
+    assert not any("arxiv%3A" in u or "arxiv%3a" in u for u in captured)
+
+
+@pytest.mark.asyncio
+async def test_paper_id_with_corpus_id_preserves_colon(client):
+    """``CorpusId:12345`` — colon must round-trip literally (#C1)."""
+    captured: list[str] = []
+
+    async def fake_http_get(url, params):
+        captured.append(url)
+        if "/paper/" in url and not url.endswith("/references"):
+            return {**SEED_PAYLOAD, "paperId": "CorpusId:12345"}
+        return {"data": []}
+
+    with patch.object(client, "_http_get", side_effect=fake_http_get):
+        await client.get_references("CorpusId:12345", max_results=5)
+
+    assert any("/paper/CorpusId:12345" in u for u in captured)
+    assert not any("CorpusId%3A" in u or "CorpusId%3a" in u for u in captured)
 
 
 # ---------------------------------------------------------------------------
@@ -876,7 +919,7 @@ async def test_429_with_numeric_retry_after(client):
     with p:
         with pytest.raises(RateLimitError) as ei:
             await client._http_get("http://x", {})
-    assert ei.value.retry_after_seconds == pytest.approx(120.0)
+    assert ei.value.retry_after == pytest.approx(120.0)
 
 
 @pytest.mark.asyncio
@@ -893,19 +936,19 @@ async def test_429_with_httpdate_retry_after(client):
     with p:
         with pytest.raises(RateLimitError) as ei:
             await client._http_get("http://x", {})
-    assert ei.value.retry_after_seconds is not None
-    assert ei.value.retry_after_seconds > 0
+    assert ei.value.retry_after is not None
+    assert ei.value.retry_after > 0
 
 
 @pytest.mark.asyncio
 async def test_429_without_retry_after(client):
-    """Missing Retry-After header → ``retry_after_seconds`` is ``None``."""
+    """Missing Retry-After header → ``retry_after`` is ``None``."""
     cm = _mock_aiohttp_response(429, text_body="slow", headers={})
     p, _ = _patch_session(cm)
     with p:
         with pytest.raises(RateLimitError) as ei:
             await client._http_get("http://x", {})
-    assert ei.value.retry_after_seconds is None
+    assert ei.value.retry_after is None
 
 
 @pytest.mark.asyncio
@@ -918,7 +961,7 @@ async def test_429_with_unparseable_retry_after(client):
     with p:
         with pytest.raises(RateLimitError) as ei:
             await client._http_get("http://x", {})
-    assert ei.value.retry_after_seconds is None
+    assert ei.value.retry_after is None
 
 
 @pytest.mark.asyncio
@@ -929,7 +972,7 @@ async def test_429_with_empty_retry_after(client):
     with p:
         with pytest.raises(RateLimitError) as ei:
             await client._http_get("http://x", {})
-    assert ei.value.retry_after_seconds is None
+    assert ei.value.retry_after is None
 
 
 @pytest.mark.asyncio
@@ -944,7 +987,7 @@ async def test_429_with_past_httpdate_clamps_to_zero(client):
     with p:
         with pytest.raises(RateLimitError) as ei:
             await client._http_get("http://x", {})
-    assert ei.value.retry_after_seconds == 0.0
+    assert ei.value.retry_after == 0.0
 
 
 @pytest.mark.asyncio
@@ -955,7 +998,7 @@ async def test_429_with_negative_numeric_clamps_to_zero(client):
     with p:
         with pytest.raises(RateLimitError) as ei:
             await client._http_get("http://x", {})
-    assert ei.value.retry_after_seconds == 0.0
+    assert ei.value.retry_after == 0.0
 
 
 def test_parse_retry_after_returns_none_for_none():
@@ -1108,9 +1151,9 @@ def test_rate_limit_error_default_retry_after_is_none():
     """Old call sites that pass only a message must still work."""
     err = RateLimitError("oops")
     assert str(err) == "oops"
-    assert err.retry_after_seconds is None
+    assert err.retry_after is None
 
 
 def test_rate_limit_error_accepts_retry_after():
-    err = RateLimitError("slow down", retry_after_seconds=42.5)
-    assert err.retry_after_seconds == 42.5
+    err = RateLimitError("slow down", retry_after=42.5)
+    assert err.retry_after == 42.5

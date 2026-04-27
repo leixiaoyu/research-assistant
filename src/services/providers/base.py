@@ -13,20 +13,28 @@ class APIError(Exception):
 class RateLimitError(APIError):
     """Rate limit exceeded.
 
-    The optional ``retry_after_seconds`` attribute carries the upstream
+    The optional ``retry_after`` attribute carries the upstream
     server's ``Retry-After`` hint when present (parsed from either the
     numeric-seconds form or the HTTP-date form). Callers implementing
     backoff should prefer this value over their own heuristic when it
     is provided. ``None`` means the server gave no hint.
+
+    Naming note: this attribute is named ``retry_after`` (not
+    ``retry_after_seconds``) to match the project-wide convention used
+    by ``src.utils.exceptions.RateLimitError``,
+    ``src.services.llm.exceptions.RateLimitError``, and the shared
+    retry orchestrator at ``src.utils.retry`` which reads
+    ``e.retry_after``. A field name drift would silently drop the
+    backoff hint when this exception flows through the orchestrator.
     """
 
     def __init__(
         self,
         message: str = "",
-        retry_after_seconds: float | None = None,
+        retry_after: float | None = None,
     ) -> None:
         super().__init__(message)
-        self.retry_after_seconds = retry_after_seconds
+        self.retry_after = retry_after
 
 
 class APIParameterError(APIError):

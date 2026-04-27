@@ -345,10 +345,16 @@ class SemanticScholarCitationClient:
 
     async def _fetch_paper(self, paper_id: str) -> dict[str, Any]:
         """Fetch the seed paper's own metadata."""
-        # Even with the regex allow-list applied upstream, percent-encode
-        # the id so a DOI's ``/`` characters are treated as data rather
-        # than path separators when interpolated into the URL.
-        url = f"{self.BASE_URL}/paper/{quote(paper_id, safe='')}"
+        # Quote the id so a DOI's ``/`` characters are treated as data
+        # rather than path separators when interpolated into the URL.
+        # ``safe=":"`` preserves the colon used by S2 namespace prefixes
+        # (``arxiv:1706.03762``, ``CorpusId:12345``, DOI URN forms) which
+        # the S2 API resolves on the raw decoded segment — encoding the
+        # colon would 404 those legitimate id forms. ``/`` is *not*
+        # listed as safe, so it still gets percent-encoded as the
+        # traversal defense (defense-in-depth alongside the regex and
+        # forbid-list above).
+        url = f"{self.BASE_URL}/paper/{quote(paper_id, safe=':')}"
         params = {"fields": _S2_PAPER_FIELDS}
         return await self._http_get(url, params=params)
 
@@ -365,10 +371,12 @@ class SemanticScholarCitationClient:
         plateaus, and smaller pages let us bail early once ``max_results``
         is hit without wasting bandwidth.
         """
-        # Percent-encode the id (DOIs contain ``/``) so it stays inside
-        # the ``/paper/{id}/`` segment rather than escaping into the
-        # endpoint path.
-        url = f"{self.BASE_URL}/paper/{quote(paper_id, safe='')}/{endpoint}"
+        # Quote the id so it stays inside the ``/paper/{id}/`` segment
+        # rather than escaping into the endpoint path. ``safe=":"``
+        # preserves namespace prefix colons (``arxiv:``, ``CorpusId:``)
+        # while still encoding ``/`` for traversal protection. See the
+        # equivalent comment in ``_fetch_paper`` for full rationale.
+        url = f"{self.BASE_URL}/paper/{quote(paper_id, safe=':')}/{endpoint}"
         page_size = min(100, max_results, _S2_MAX_PAGE_LIMIT)
 
         collected: list[dict[str, Any]] = []
@@ -437,7 +445,7 @@ class SemanticScholarCitationClient:
                         )
                         raise RateLimitError(
                             "Semantic Scholar citation rate limit exceeded",
-                            retry_after_seconds=retry_after,
+                            retry_after=retry_after,
                         )
                     if 300 <= response.status < 400:
                         location = response.headers.get("Location", "<none>")

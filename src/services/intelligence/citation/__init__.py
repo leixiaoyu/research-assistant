@@ -14,10 +14,9 @@ Public surface:
 - :class:`SemanticScholarCitationClient` — primary citation source.
 - :class:`OpenAlexCitationClient` — fallback citation source with
   polite-pool email convention.
-
-Deferred to the graph-builder follow-up commit in this same PR:
-- ``CitationGraphBuilder`` (composes clients + persists via
-  ``GraphStore.add_nodes_batch`` / ``add_edges_batch``)
+- :class:`CitationGraphBuilder` / :class:`GraphBuildResult` — composes
+  the two clients and persists via ``GraphStore.add_nodes_batch`` /
+  ``add_edges_batch`` (depth=1 only; BFS crawl is Week 2).
 
 Architecture choice (recorded for downstream milestones):
 We deliberately built **dedicated citation clients alongside** the
@@ -31,6 +30,10 @@ Wrapping them would require either widening the ABC or layering an
 adapter on top — both add coupling without saving meaningful code.
 """
 
+from src.services.intelligence.citation.graph_builder import (
+    CitationGraphBuilder,
+    GraphBuildResult,
+)
 from src.services.intelligence.citation.models import (
     CitationDirection,
     CitationEdge,
@@ -55,4 +58,7 @@ __all__ = [
     # Clients
     "SemanticScholarCitationClient",
     "OpenAlexCitationClient",
+    # Builder
+    "CitationGraphBuilder",
+    "GraphBuildResult",
 ]

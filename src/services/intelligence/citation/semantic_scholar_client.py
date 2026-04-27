@@ -28,8 +28,12 @@ import asyncio
 import hashlib
 import json
 import os
+import re
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Optional, cast
+from urllib.parse import quote
 
 import aiohttp
 import diskcache
@@ -56,6 +60,35 @@ _S2_MAX_PAGE_LIMIT = 1000
 # Default per-call ceiling. Far below the spec's worst-case crawl-level
 # budget so a single ``get_references`` cannot pull thousands of pages.
 _DEFAULT_MAX_RESULTS = 200
+
+# Strict allow-list for paper ids accepted by the public API. Blocks
+# any character that could change URL semantics (whitespace, CRLF,
+# query/fragment markers, etc.). The punctuation we *do* allow
+# (``: . / _ -``) is needed for legitimate external id forms:
+# ``arxiv:1706.03762``, ``10.18653/v1/...``, and S2 native hex ids.
+# Note that even though ``/`` is permitted by the pattern (DOIs need
+# it), we still ``urllib.parse.quote(..., safe="")`` the value before
+# interpolating into the URL — the regex defends against payload
+# injection while the quoting defends against path traversal during
+# URL construction.
+_PAPER_ID_PATTERN = re.compile(r"^[A-Za-z0-9:./_\-]+$")
+
+# Substrings that look benign under the allow-list above (they only
+# use permitted characters) but that signal an SSRF / traversal payload
+# in an id field. We reject these explicitly so a misuse cannot reach
+# the URL builder even if a future caller forgets to quote.
+# - ``://`` flags an inlined URL (``http://evil``).
+# - ``..`` flags relative-path traversal (``../../admin``).
+# - leading ``/`` or ``//`` would absolute-path the URL after quoting
+#   strips off; we reject leading slashes outright.
+_PAPER_ID_FORBIDDEN_SUBSTRINGS = ("://", "..")
+
+# Hard cap on the size of a single S2 response body we will parse.
+# Without this, a malicious or misbehaving upstream could stream an
+# arbitrarily large payload into ``response.json()`` and exhaust
+# memory. 10 MB comfortably covers a 1000-row page of full citation
+# metadata (~5 KB/row in practice) while bounding worst-case spend.
+_MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 
 # Fields requested from S2 for both endpoints. Ordered for readability;
 # S2 ignores order. We request both ``citationCount`` and
@@ -213,6 +246,24 @@ class SemanticScholarCitationClient:
         """Common path for ``get_references`` / ``get_citations``."""
         if not paper_id or not paper_id.strip():
             raise ValueError("paper_id must be a non-empty string")
+        # Reject anything that doesn't match our strict allow-list before
+        # we ever build a URL. This blocks SSRF / URL-injection vectors:
+        # CRLF (``foo\r\nHost: evil``), query strings / fragments
+        # (``foo?evil=1#``), whitespace, etc.
+        if not _PAPER_ID_PATTERN.match(paper_id):
+            raise ValueError(
+                f"Invalid paper_id format: {paper_id!r}. "
+                "Allowed: alphanumeric, colon, period, slash, underscore, hyphen."
+            )
+        # Some payloads use only allowed characters but still signal an
+        # SSRF / traversal attempt. Reject those explicitly as well.
+        if paper_id.startswith("/") or any(
+            s in paper_id for s in _PAPER_ID_FORBIDDEN_SUBSTRINGS
+        ):
+            raise ValueError(
+                f"Invalid paper_id format: {paper_id!r}. "
+                "Embedded URLs / path traversal sequences are not permitted."
+            )
         if max_results < 1:
             raise ValueError("max_results must be >= 1")
         if endpoint not in {"references", "citations"}:
@@ -294,7 +345,10 @@ class SemanticScholarCitationClient:
 
     async def _fetch_paper(self, paper_id: str) -> dict[str, Any]:
         """Fetch the seed paper's own metadata."""
-        url = f"{self.BASE_URL}/paper/{paper_id}"
+        # Even with the regex allow-list applied upstream, percent-encode
+        # the id so a DOI's ``/`` characters are treated as data rather
+        # than path separators when interpolated into the URL.
+        url = f"{self.BASE_URL}/paper/{quote(paper_id, safe='')}"
         params = {"fields": _S2_PAPER_FIELDS}
         return await self._http_get(url, params=params)
 
@@ -311,7 +365,10 @@ class SemanticScholarCitationClient:
         plateaus, and smaller pages let us bail early once ``max_results``
         is hit without wasting bandwidth.
         """
-        url = f"{self.BASE_URL}/paper/{paper_id}/{endpoint}"
+        # Percent-encode the id (DOIs contain ``/``) so it stays inside
+        # the ``/paper/{id}/`` segment rather than escaping into the
+        # endpoint path.
+        url = f"{self.BASE_URL}/paper/{quote(paper_id, safe='')}/{endpoint}"
         page_size = min(100, max_results, _S2_MAX_PAGE_LIMIT)
 
         collected: list[dict[str, Any]] = []
@@ -345,10 +402,15 @@ class SemanticScholarCitationClient:
         """Issue a single GET to S2 with rate limiting + error handling.
 
         Distinguishes:
-        - 200: returns the parsed JSON body.
+        - 200: returns the parsed JSON body (after a content-length cap
+          check; oversized bodies raise ``APIError`` before parsing).
+        - 3xx: raises ``APIError``. We disable automatic redirects so a
+          compromised or hostile upstream cannot redirect our
+          API-key-bearing request to an attacker-controlled host.
         - 404: raises ``APIError`` (the seed paper id is unknown — not
           retryable).
-        - 429: raises ``RateLimitError`` (caller may retry).
+        - 429: raises ``RateLimitError`` carrying the parsed
+          ``Retry-After`` hint when the server provided one.
         - 5xx / other: raises ``APIError``.
         """
         await self.rate_limiter.acquire("semantic_scholar_citations")
@@ -364,10 +426,25 @@ class SemanticScholarCitationClient:
                     params=params,
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=self.request_timeout_seconds),
+                    # Disable automatic redirect-following: an upstream
+                    # 3xx pointing at an attacker-controlled host would
+                    # otherwise receive our ``x-api-key`` header.
+                    allow_redirects=False,
                 ) as response:
                     if response.status == 429:
+                        retry_after = self._parse_retry_after(
+                            response.headers.get("Retry-After")
+                        )
                         raise RateLimitError(
-                            "Semantic Scholar citation rate limit exceeded"
+                            "Semantic Scholar citation rate limit exceeded",
+                            retry_after_seconds=retry_after,
+                        )
+                    if 300 <= response.status < 400:
+                        location = response.headers.get("Location", "<none>")
+                        raise APIError(
+                            f"Semantic Scholar returned an unexpected redirect "
+                            f"({response.status} -> {location}); "
+                            "redirects are disabled for SSRF protection."
                         )
                     if response.status == 404:
                         text = await response.text()
@@ -379,6 +456,20 @@ class SemanticScholarCitationClient:
                         raise APIError(
                             f"Semantic Scholar error {response.status}: {text}"
                         )
+                    # Bound memory before parsing. ``content_length`` is
+                    # ``Optional[int]``; we only act when the upstream
+                    # advertised a size that exceeds the cap. Servers
+                    # that omit the header still get parsed (aiohttp
+                    # itself will raise on truly massive streams).
+                    content_length = response.content_length
+                    if (
+                        content_length is not None
+                        and content_length > _MAX_RESPONSE_BYTES
+                    ):
+                        raise APIError(
+                            f"Semantic Scholar response too large: "
+                            f"{content_length} bytes > {_MAX_RESPONSE_BYTES} cap."
+                        )
                     body: dict[str, Any] = await response.json()
                     return body
         except asyncio.TimeoutError as exc:
@@ -386,6 +477,45 @@ class SemanticScholarCitationClient:
                 f"Semantic Scholar request timed out after "
                 f"{self.request_timeout_seconds}s"
             ) from exc
+
+    @staticmethod
+    def _parse_retry_after(value: Optional[str]) -> Optional[float]:
+        """Parse an HTTP ``Retry-After`` header value to seconds.
+
+        RFC 7231 §7.1.3 allows two forms:
+        - delta-seconds (a non-negative integer), e.g. ``"120"``.
+        - HTTP-date (RFC 7231 §7.1.1.1), e.g.
+          ``"Wed, 21 Oct 2015 07:28:00 GMT"``.
+
+        Returns ``None`` when the header is absent or unparseable;
+        callers should treat ``None`` as "no hint, use your own
+        backoff" and never trust the value blindly (negative or
+        far-future dates clamp to ``0.0``).
+        """
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        # Numeric (delta-seconds) form first — it's the common case.
+        try:
+            seconds = float(value)
+        except ValueError:
+            seconds = None  # type: ignore[assignment]
+        if seconds is not None:
+            return max(0.0, seconds)
+        # HTTP-date form. ``parsedate_to_datetime`` returns a tz-aware
+        # datetime when the input includes a zone (RFC HTTP-dates
+        # always do); it raises ``ValueError`` (or in pathological cases
+        # ``TypeError``) on bad input. There is no ``None`` return path
+        # in CPython so we deliberately do not guard against it.
+        try:
+            target = parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+        now = datetime.now(target.tzinfo or timezone.utc)
+        delta = (target - now).total_seconds()
+        return max(0.0, delta)
 
     # ------------------------------------------------------------------
     # Payload <-> CitationNode glue
@@ -443,8 +573,21 @@ class SemanticScholarCitationClient:
         We hash the inputs so the resulting key is filesystem-safe and
         bounded in length — paper ids can include slashes (DOIs) which
         would otherwise break diskcache on some platforms.
+
+        ``bool(self.api_key)`` is folded into the key so an
+        unauthenticated client and an authenticated client never share a
+        cache slot. Two reasons:
+        1. S2 returns slightly different field availability and rate
+           limits depending on whether the request was authenticated;
+           the bodies are not always interchangeable.
+        2. Sharing slots could let an unauthenticated process read a
+           response that was only fetched because an authenticated key
+           was available — a subtle privilege-leak vector.
+
+        The presence flag is hashed (never the key itself), so the on-
+        disk cache file names still reveal nothing about the secret.
         """
-        raw = f"{endpoint}|{paper_id}|{max_results}"
+        raw = f"{endpoint}|{paper_id}|{max_results}|auth={bool(self.api_key)}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def _cache_get(self, key: str) -> Optional[bytes]:

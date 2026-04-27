@@ -590,12 +590,18 @@ def test_serialize_then_deserialize_roundtrip():
 # ---------------------------------------------------------------------------
 
 
-def _mock_aiohttp_response(status, json_body=None, text_body="oops"):
+def _mock_aiohttp_response(
+    status, json_body=None, text_body="oops", headers=None, content_length=None
+):
     """Build an async-context-manager-compatible mocked response."""
     resp = MagicMock()
     resp.status = status
     resp.json = AsyncMock(return_value=json_body)
     resp.text = AsyncMock(return_value=text_body)
+    resp.headers = headers if headers is not None else {}
+    # ``content_length`` is ``Optional[int]`` on aiohttp.ClientResponse;
+    # default to ``None`` so the size-cap branch is exercised separately.
+    resp.content_length = content_length
 
     cm = MagicMock()
     cm.__aenter__ = AsyncMock(return_value=resp)
@@ -754,3 +760,357 @@ async def test_second_call_hits_cache_no_http(tmp_path, fast_limiter):
 
     assert call_count["n"] == first_call_count
     c.close()
+
+
+# ---------------------------------------------------------------------------
+# Security hardening (Phase 9.2) — input validation: SSRF / URL injection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_paper_id_rejects_traversal(client):
+    """Path traversal attempts must be rejected before URL building."""
+    with pytest.raises(ValueError, match="Invalid paper_id"):
+        await client.get_references("../../admin")
+
+
+@pytest.mark.asyncio
+async def test_paper_id_rejects_crlf_injection(client):
+    """CRLF injection must be rejected (header-splitting vector)."""
+    with pytest.raises(ValueError, match="Invalid paper_id"):
+        await client.get_references("foo HTTP/1.1\r\nHost: evil")
+
+
+@pytest.mark.asyncio
+async def test_paper_id_rejects_full_url(client):
+    """Full URLs as paper_id must be rejected (SSRF vector)."""
+    with pytest.raises(ValueError, match="Invalid paper_id"):
+        await client.get_references("http://evil")
+
+
+@pytest.mark.asyncio
+async def test_paper_id_rejects_query_string(client):
+    """Query strings / fragments must be stripped at the validator."""
+    with pytest.raises(ValueError, match="Invalid paper_id"):
+        await client.get_references("foo?evil=1#")
+
+
+@pytest.mark.asyncio
+async def test_get_citations_also_validates_paper_id(client):
+    """The same validation gates the /citations endpoint."""
+    with pytest.raises(ValueError, match="Invalid paper_id"):
+        await client.get_citations("../../etc/passwd")
+
+
+@pytest.mark.asyncio
+async def test_paper_id_with_doi_is_quoted_in_url(client):
+    """Legitimate DOIs (with `/`) pass validation but are URL-quoted."""
+    captured: list[str] = []
+
+    async def fake_http_get(url, params):
+        captured.append(url)
+        if "/paper/" in url and not url.endswith("/references"):
+            return {**SEED_PAYLOAD, "paperId": "10.1/seed"}
+        return {"data": []}
+
+    with patch.object(client, "_http_get", side_effect=fake_http_get):
+        await client.get_references("10.1/seed", max_results=5)
+
+    # The slash in the DOI must be percent-encoded in the URL path so it
+    # cannot escape the /paper/{id}/ segment.
+    assert any("10.1%2Fseed" in u for u in captured)
+    # And the original raw slash must NOT appear inside the id segment.
+    assert not any("/paper/10.1/seed" in u for u in captured)
+
+
+# ---------------------------------------------------------------------------
+# Security hardening — Fix #4: redirects disabled
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_http_get_passes_allow_redirects_false(client):
+    """``allow_redirects=False`` must be passed to ``session.get``."""
+    cm = _mock_aiohttp_response(200, json_body={})
+    p, session = _patch_session(cm)
+    with p:
+        await client._http_get("http://x", {})
+    _, kwargs = session.get.call_args
+    assert kwargs["allow_redirects"] is False
+
+
+@pytest.mark.asyncio
+async def test_http_get_raises_api_error_on_302(client):
+    """A 3xx response must surface as ``APIError`` (no auto-follow)."""
+    cm = _mock_aiohttp_response(
+        302,
+        text_body="moved",
+        headers={"Location": "http://attacker.example/api"},
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(APIError, match="redirects are disabled"):
+            await client._http_get("http://x", {})
+
+
+@pytest.mark.asyncio
+async def test_http_get_raises_api_error_on_301_without_location(client):
+    """Redirect with no Location header still raises (defensive branch)."""
+    cm = _mock_aiohttp_response(301, text_body="moved", headers={})
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(APIError, match="<none>"):
+            await client._http_get("http://x", {})
+
+
+# ---------------------------------------------------------------------------
+# Security hardening — Fix #9: Retry-After parsing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_429_with_numeric_retry_after(client):
+    """Numeric Retry-After (delta-seconds) must be parsed and surfaced."""
+    cm = _mock_aiohttp_response(429, text_body="slow", headers={"Retry-After": "120"})
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(RateLimitError) as ei:
+            await client._http_get("http://x", {})
+    assert ei.value.retry_after_seconds == pytest.approx(120.0)
+
+
+@pytest.mark.asyncio
+async def test_429_with_httpdate_retry_after(client):
+    """HTTP-date Retry-After must be parsed to seconds-from-now."""
+    # A date well in the future yields a positive delta; we don't pin
+    # the exact value (clock-dependent) but assert it's plausible.
+    cm = _mock_aiohttp_response(
+        429,
+        text_body="slow",
+        headers={"Retry-After": "Wed, 01 Jan 2200 00:00:00 GMT"},
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(RateLimitError) as ei:
+            await client._http_get("http://x", {})
+    assert ei.value.retry_after_seconds is not None
+    assert ei.value.retry_after_seconds > 0
+
+
+@pytest.mark.asyncio
+async def test_429_without_retry_after(client):
+    """Missing Retry-After header → ``retry_after_seconds`` is ``None``."""
+    cm = _mock_aiohttp_response(429, text_body="slow", headers={})
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(RateLimitError) as ei:
+            await client._http_get("http://x", {})
+    assert ei.value.retry_after_seconds is None
+
+
+@pytest.mark.asyncio
+async def test_429_with_unparseable_retry_after(client):
+    """Garbage Retry-After value safely degrades to ``None``."""
+    cm = _mock_aiohttp_response(
+        429, text_body="slow", headers={"Retry-After": "not-a-date"}
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(RateLimitError) as ei:
+            await client._http_get("http://x", {})
+    assert ei.value.retry_after_seconds is None
+
+
+@pytest.mark.asyncio
+async def test_429_with_empty_retry_after(client):
+    """Empty Retry-After string degrades to ``None``."""
+    cm = _mock_aiohttp_response(429, text_body="slow", headers={"Retry-After": "   "})
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(RateLimitError) as ei:
+            await client._http_get("http://x", {})
+    assert ei.value.retry_after_seconds is None
+
+
+@pytest.mark.asyncio
+async def test_429_with_past_httpdate_clamps_to_zero(client):
+    """Past HTTP-date clamps to ``0.0`` rather than going negative."""
+    cm = _mock_aiohttp_response(
+        429,
+        text_body="slow",
+        headers={"Retry-After": "Wed, 01 Jan 2000 00:00:00 GMT"},
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(RateLimitError) as ei:
+            await client._http_get("http://x", {})
+    assert ei.value.retry_after_seconds == 0.0
+
+
+@pytest.mark.asyncio
+async def test_429_with_negative_numeric_clamps_to_zero(client):
+    """Negative numeric Retry-After clamps to ``0.0``."""
+    cm = _mock_aiohttp_response(429, text_body="slow", headers={"Retry-After": "-30"})
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(RateLimitError) as ei:
+            await client._http_get("http://x", {})
+    assert ei.value.retry_after_seconds == 0.0
+
+
+def test_parse_retry_after_returns_none_for_none():
+    """Static helper: ``None`` input returns ``None``."""
+    assert SemanticScholarCitationClient._parse_retry_after(None) is None
+
+
+# ---------------------------------------------------------------------------
+# Security hardening — Fix #10: response size cap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_oversized_response_raises_before_parse(client):
+    """``content_length`` > cap must raise without invoking ``json()``."""
+    cm = _mock_aiohttp_response(
+        200,
+        json_body={"should": "not be parsed"},
+        content_length=10 * 1024 * 1024 + 1,  # one byte over the cap
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(APIError, match="response too large"):
+            await client._http_get("http://x", {})
+
+    # The body parser must NOT have been called for the oversized path.
+    resp = cm.__aenter__.return_value
+    resp.json.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_response_at_cap_is_accepted(client):
+    """A response exactly at the cap is accepted (boundary)."""
+    cm = _mock_aiohttp_response(
+        200, json_body={"ok": True}, content_length=10 * 1024 * 1024
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        body = await client._http_get("http://x", {})
+    assert body == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_response_with_no_content_length_is_parsed(client):
+    """Missing Content-Length header → defer to aiohttp's stream guard."""
+    cm = _mock_aiohttp_response(200, json_body={"ok": True}, content_length=None)
+    p, _ = _patch_session(cm)
+    with p:
+        body = await client._http_get("http://x", {})
+    assert body == {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Security hardening — Fix #19: cache key API-key context
+# ---------------------------------------------------------------------------
+
+
+def test_cache_key_differs_with_and_without_api_key(fast_limiter):
+    """Auth presence must change the cache key — never share slots."""
+    c_anon = SemanticScholarCitationClient(
+        api_key=None, rate_limiter=fast_limiter, cache_dir=None
+    )
+    c_auth = SemanticScholarCitationClient(
+        api_key="secret", rate_limiter=fast_limiter, cache_dir=None
+    )
+    k_anon = c_anon._cache_key("references", "seed1", 5)
+    k_auth = c_auth._cache_key("references", "seed1", 5)
+    assert k_anon != k_auth
+
+
+def test_cache_key_does_not_leak_api_key_value(fast_limiter):
+    """Two authenticated clients with *different* keys must collide.
+
+    The fix folds in only ``bool(self.api_key)`` — the secret value
+    must NEVER appear in the hashed input. Two clients that both have
+    *any* key should produce the same cache key for the same query.
+    """
+    c1 = SemanticScholarCitationClient(
+        api_key="key-one", rate_limiter=fast_limiter, cache_dir=None
+    )
+    c2 = SemanticScholarCitationClient(
+        api_key="key-two", rate_limiter=fast_limiter, cache_dir=None
+    )
+    assert c1._cache_key("references", "seed1", 5) == c2._cache_key(
+        "references", "seed1", 5
+    )
+
+
+@pytest.mark.asyncio
+async def test_authenticated_and_anonymous_clients_keep_separate_cache_slots(
+    tmp_path, fast_limiter
+):
+    """End-to-end: same paper, different auth context → separate slots.
+
+    Both clients must be able to populate their own slot independently;
+    a fetch by one must not satisfy the other.
+    """
+    anon_seed = {**SEED_PAYLOAD, "title": "Anon-fetched"}
+    auth_seed = {**SEED_PAYLOAD, "title": "Auth-fetched"}
+
+    c_anon = SemanticScholarCitationClient(
+        api_key=None, rate_limiter=fast_limiter, cache_dir=tmp_path
+    )
+    c_auth = SemanticScholarCitationClient(
+        api_key="secret", rate_limiter=fast_limiter, cache_dir=tmp_path
+    )
+
+    async def anon_http(url, params):
+        if "/references" in url:
+            return {"data": []}
+        return anon_seed
+
+    async def auth_http(url, params):
+        if "/references" in url:
+            return {"data": []}
+        return auth_seed
+
+    with patch.object(c_anon, "_http_get", side_effect=anon_http):
+        seed_anon, _, _ = await c_anon.get_references("seed1", max_results=5)
+    with patch.object(c_auth, "_http_get", side_effect=auth_http):
+        seed_auth, _, _ = await c_auth.get_references("seed1", max_results=5)
+
+    assert seed_anon.title == "Anon-fetched"
+    assert seed_auth.title == "Auth-fetched"
+
+    # Re-issue both calls — each must hit its own cache slot, not the
+    # other client's. We assert this by making the HTTP path raise: a
+    # cache hit means no HTTP, so the AssertionError never fires.
+    async def boom(url, params):
+        raise AssertionError("HTTP must not be called on cache hit")
+
+    with patch.object(c_anon, "_http_get", side_effect=boom):
+        seed_anon2, _, _ = await c_anon.get_references("seed1", max_results=5)
+    with patch.object(c_auth, "_http_get", side_effect=boom):
+        seed_auth2, _, _ = await c_auth.get_references("seed1", max_results=5)
+
+    assert seed_anon2.title == "Anon-fetched"
+    assert seed_auth2.title == "Auth-fetched"
+
+    c_anon.close()
+    c_auth.close()
+
+
+# ---------------------------------------------------------------------------
+# RateLimitError — backwards-compatible constructor
+# ---------------------------------------------------------------------------
+
+
+def test_rate_limit_error_default_retry_after_is_none():
+    """Old call sites that pass only a message must still work."""
+    err = RateLimitError("oops")
+    assert str(err) == "oops"
+    assert err.retry_after_seconds is None
+
+
+def test_rate_limit_error_accepts_retry_after():
+    err = RateLimitError("slow down", retry_after_seconds=42.5)
+    assert err.retry_after_seconds == 42.5

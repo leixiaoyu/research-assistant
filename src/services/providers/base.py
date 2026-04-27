@@ -11,9 +11,22 @@ class APIError(Exception):
 
 
 class RateLimitError(APIError):
-    """Rate limit exceeded"""
+    """Rate limit exceeded.
 
-    pass
+    The optional ``retry_after_seconds`` attribute carries the upstream
+    server's ``Retry-After`` hint when present (parsed from either the
+    numeric-seconds form or the HTTP-date form). Callers implementing
+    backoff should prefer this value over their own heuristic when it
+    is provided. ``None`` means the server gave no hint.
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 class APIParameterError(APIError):

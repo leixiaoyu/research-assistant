@@ -56,6 +56,7 @@ from src.services.intelligence.monitoring.models import (
     ResearchSubscription,
     SubscriptionStatus,
 )
+from src.storage.intelligence_graph.connection import open_connection
 from src.storage.intelligence_graph.migrations import MigrationManager
 from src.storage.intelligence_graph.path_utils import sanitize_storage_path
 
@@ -112,25 +113,18 @@ class SubscriptionManager:
     def _connect(self) -> Iterator[sqlite3.Connection]:
         """Open + auto-close a SQLite connection with the standard PRAGMAs.
 
-        SQLite's ``Connection.__exit__`` commits / rolls back but does
-        NOT close. Wrapping with ``contextlib.contextmanager`` and an
-        explicit ``finally: conn.close()`` keeps file-descriptor usage
-        bounded under a long-running scheduler.
+        Delegates to :func:`open_connection` so the PRAGMA set is
+        defined exactly once across the intelligence-graph layer. The
+        ``BEGIN IMMEDIATE`` write-lock acquisition used by
+        :meth:`add_subscription` stays at the call site — that is
+        operation-level (not connection-level) behavior.
         """
         if not self._initialized:
             raise RuntimeError(
                 "SubscriptionManager not initialized. Call initialize() first."
             )
-        conn = sqlite3.connect(str(self.db_path))
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA synchronous = NORMAL")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.row_factory = sqlite3.Row
-        try:
+        with open_connection(self.db_path) as conn:
             yield conn
-        finally:
-            conn.close()
 
     # ------------------------------------------------------------------
     # Serialization

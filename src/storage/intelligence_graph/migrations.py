@@ -182,9 +182,57 @@ MIGRATION_V1_INITIAL = Migration(
 )
 
 
+# Schema version 2: Monitoring run audit tables (Phase 9.1)
+#
+# Adds two tables consumed by ``MonitoringRunRepository``:
+#
+# - ``monitoring_runs``: one row per ``MonitoringRun`` (subscription +
+#   cycle outcome + counters + optional error).
+# - ``monitoring_papers``: per-paper outcome of each run, FK'd to
+#   ``monitoring_runs(run_id) ON DELETE CASCADE`` so deleting a run
+#   transparently cleans up its paper records.
+#
+# Index on ``(subscription_id, started_at DESC)`` accelerates the
+# "most recent runs for this subscription" query that the digest
+# generator (Week 2) and any future CLI listing would issue.
+MIGRATION_V2_MONITORING_RUNS = Migration(
+    version=2,
+    name="monitoring_runs",
+    description="Add monitoring_runs + monitoring_papers tables for run audit",
+    up="""
+    CREATE TABLE IF NOT EXISTS monitoring_runs (
+        run_id TEXT PRIMARY KEY,
+        subscription_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        status TEXT NOT NULL,
+        error TEXT,
+        papers_found INTEGER NOT NULL DEFAULT 0,
+        papers_new INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_monitoring_runs_sub_started
+        ON monitoring_runs(subscription_id, started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS monitoring_papers (
+        run_id TEXT NOT NULL,
+        paper_id TEXT NOT NULL,
+        registered INTEGER NOT NULL DEFAULT 0,
+        relevance_score REAL,
+        relevance_reasoning TEXT,
+        PRIMARY KEY (run_id, paper_id),
+        FOREIGN KEY (run_id) REFERENCES monitoring_runs(run_id)
+            ON DELETE CASCADE
+    );
+    """,
+)
+
+
 # All migrations in order
 ALL_MIGRATIONS: list[Migration] = [
     MIGRATION_V1_INITIAL,
+    MIGRATION_V2_MONITORING_RUNS,
 ]
 
 
@@ -229,6 +277,12 @@ class MigrationManager:
 
         Returns:
             SQLite connection ready for use.
+
+        TODO(phase-10): consolidate onto
+            ``src.storage.intelligence_graph.connection.open_connection``
+            once this manager moves to the per-operation context-manager
+            pattern used by ``SubscriptionManager`` /
+            ``MonitoringRunRepository``.
         """
         conn = sqlite3.connect(str(self.db_path))
         conn.execute("PRAGMA foreign_keys = ON")

@@ -830,6 +830,95 @@ async def test_get_citations_also_validates_paper_id(client):
         await client.get_citations("../../etc/passwd")
 
 
+# ---------------------------------------------------------------------------
+# Security hardening (Phase 9.2, round 2) — #S9: SSRF unicode/null/long
+# variants. The regex allow-list is ASCII-only; these tests pin that
+# choice so a future loosening (e.g. ``re.UNICODE``) wouldn't sneak in.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_paper_id_rejects_null_byte(client):
+    """Embedded NUL must be rejected — terminator-injection vector (#S9)."""
+    with pytest.raises(ValueError, match="Invalid paper_id"):
+        await client.get_references("\x00abc")
+
+
+@pytest.mark.asyncio
+async def test_paper_id_rejects_unicode_letter(client):
+    """Greek letters look like a-z but aren't ASCII — must reject (#S9)."""
+    with pytest.raises(ValueError, match="Invalid paper_id"):
+        await client.get_references("αβγ")
+
+
+@pytest.mark.asyncio
+async def test_paper_id_rejects_unicode_digit(client):
+    """Arabic-Indic digits are not [0-9] — must reject (#S9)."""
+    with pytest.raises(ValueError, match="Invalid paper_id"):
+        await client.get_references("\u0661\u0662\u0663")  # ١٢٣
+
+
+@pytest.mark.asyncio
+async def test_paper_id_rejects_long_string(client):
+    """Length above _PAPER_ID_MAX_LENGTH (512) must be rejected (#S9).
+
+    Bounds the URL length and protects against payload-stuffing using
+    otherwise-legal characters. 513 = max+1.
+    """
+    with pytest.raises(ValueError, match="Invalid paper_id"):
+        await client.get_references("a" * 513)
+
+
+@pytest.mark.asyncio
+async def test_paper_id_accepts_string_at_max_length(client):
+    """Length exactly at the cap is accepted by the validator (#S9, boundary).
+
+    We exercise the validator only (not the model layer): patch
+    ``_fetch_paper`` and ``_fetch_relationship_pages`` to short-circuit
+    the network path so the test focuses on whether the input passes
+    validation at the entry point. A return of an empty result tuple
+    proves the validator did not raise.
+    """
+    boundary_id = "a" * 512  # exactly _PAPER_ID_MAX_LENGTH
+
+    # Short-circuit both internal fetchers so we can isolate the
+    # validator (the seed-node CitationNode itself caps at 512 chars
+    # *including* the ``paper:s2:`` prefix, which is a separate concern
+    # from URL-length validation tested here).
+    async def fake_fetch_paper(pid):
+        return {"paperId": "short"}  # bypasses model length cap
+
+    async def fake_fetch_pages(endpoint, pid, max_results):
+        return []
+
+    with patch.object(client, "_fetch_paper", side_effect=fake_fetch_paper):
+        with patch.object(
+            client, "_fetch_relationship_pages", side_effect=fake_fetch_pages
+        ):
+            # Validator must not raise — boundary is inclusive of cap.
+            seed, related, edges = await client.get_references(
+                boundary_id, max_results=5
+            )
+
+    assert related == []
+    assert edges == []
+    assert seed is not None
+
+
+@pytest.mark.asyncio
+async def test_paper_id_rejects_tab(client):
+    """Embedded TAB is whitespace — must reject (#S9)."""
+    with pytest.raises(ValueError, match="Invalid paper_id"):
+        await client.get_references("foo\tbar")
+
+
+@pytest.mark.asyncio
+async def test_paper_id_rejects_backtick(client):
+    """Backtick is a shell metachar — must reject (#S9)."""
+    with pytest.raises(ValueError, match="Invalid paper_id"):
+        await client.get_references("foo`bar")
+
+
 @pytest.mark.asyncio
 async def test_paper_id_with_doi_is_quoted_in_url(client):
     """Legitimate DOIs (with `/`) pass validation but are URL-quoted.
@@ -957,6 +1046,58 @@ async def test_http_get_304_not_treated_as_redirect_error(client):
 
 
 @pytest.mark.asyncio
+async def test_http_get_rejects_307_temporary_redirect(client):
+    """307 (Temporary Redirect) must be rejected (#S7).
+
+    Mirrors the existing 301/302 tests. Aiohttp's default behaviour
+    on 307 is to repeat the request method and follow Location, which
+    would leak our ``x-api-key``. Even with ``allow_redirects=False``
+    we want to fail loud rather than silently return an empty body.
+    """
+    cm = _mock_aiohttp_response(
+        307,
+        text_body="moved",
+        headers={"Location": "http://attacker.example/api"},
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(APIError, match="redirects are disabled"):
+            await client._http_get("http://x", {})
+
+
+@pytest.mark.asyncio
+async def test_http_get_rejects_308_permanent_redirect(client):
+    """308 (Permanent Redirect) must be rejected (#S7).
+
+    308 is the method-preserving cousin of 301. Same SSRF concern as
+    307.
+    """
+    cm = _mock_aiohttp_response(
+        308,
+        text_body="moved",
+        headers={"Location": "http://attacker.example/api"},
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(APIError, match="redirects are disabled"):
+            await client._http_get("http://x", {})
+
+
+@pytest.mark.asyncio
+async def test_http_get_rejects_303_see_other(client):
+    """303 (See Other) is in the explicit redirect set; verify (#S7)."""
+    cm = _mock_aiohttp_response(
+        303,
+        text_body="moved",
+        headers={"Location": "http://attacker.example/api"},
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(APIError, match="redirects are disabled"):
+            await client._http_get("http://x", {})
+
+
+@pytest.mark.asyncio
 async def test_http_get_redirect_location_with_crlf_is_sanitized(client):
     """A malicious ``Location: foo\\r\\nX-Inject:bar`` must not break the
     error message (#S5).
@@ -987,7 +1128,7 @@ async def test_http_get_redirect_location_with_crlf_is_sanitized(client):
 
 
 @pytest.mark.asyncio
-async def test_429_with_numeric_retry_after(client):
+async def test_http_get_429_with_numeric_retry_after(client):
     """Numeric Retry-After (delta-seconds) must be parsed and surfaced."""
     cm = _mock_aiohttp_response(429, text_body="slow", headers={"Retry-After": "120"})
     p, _ = _patch_session(cm)
@@ -998,10 +1139,14 @@ async def test_429_with_numeric_retry_after(client):
 
 
 @pytest.mark.asyncio
-async def test_429_with_httpdate_retry_after(client):
-    """HTTP-date Retry-After must be parsed to seconds-from-now."""
-    # A date well in the future yields a positive delta; we don't pin
-    # the exact value (clock-dependent) but assert it's plausible.
+async def test_http_get_429_with_httpdate_retry_after(client):
+    """HTTP-date Retry-After must be parsed to seconds-from-now (#S10).
+
+    Asserts a tight bound rather than just ``> 0``: the test uses a
+    year-2200 date so the expected delta is roughly 150-190 years in
+    seconds (~5-6 billion). A buggy implementation returning the raw
+    timestamp (~7e9) or ``inf`` would now be caught.
+    """
     cm = _mock_aiohttp_response(
         429,
         text_body="slow",
@@ -1012,11 +1157,15 @@ async def test_429_with_httpdate_retry_after(client):
         with pytest.raises(RateLimitError) as ei:
             await client._http_get("http://x", {})
     assert ei.value.retry_after is not None
-    assert ei.value.retry_after > 0
+    # 150-190 years in seconds is ~4.7e9 to ~6.0e9. Bracketing this
+    # range catches the raw-timestamp bug (~7.3e9 in 2026) and any
+    # accidental ``float("inf")`` return without being so tight that
+    # clock drift on the test machine produces flakes.
+    assert 4_500_000_000 < ei.value.retry_after < 6_000_000_000
 
 
 @pytest.mark.asyncio
-async def test_429_without_retry_after(client):
+async def test_http_get_429_without_retry_after(client):
     """Missing Retry-After header → ``retry_after`` is ``None``."""
     cm = _mock_aiohttp_response(429, text_body="slow", headers={})
     p, _ = _patch_session(cm)
@@ -1027,7 +1176,7 @@ async def test_429_without_retry_after(client):
 
 
 @pytest.mark.asyncio
-async def test_429_with_unparseable_retry_after(client):
+async def test_http_get_429_with_unparseable_retry_after(client):
     """Garbage Retry-After value safely degrades to ``None``."""
     cm = _mock_aiohttp_response(
         429, text_body="slow", headers={"Retry-After": "not-a-date"}
@@ -1040,7 +1189,7 @@ async def test_429_with_unparseable_retry_after(client):
 
 
 @pytest.mark.asyncio
-async def test_429_with_empty_retry_after(client):
+async def test_http_get_429_with_empty_retry_after(client):
     """Empty Retry-After string degrades to ``None``."""
     cm = _mock_aiohttp_response(429, text_body="slow", headers={"Retry-After": "   "})
     p, _ = _patch_session(cm)
@@ -1051,7 +1200,7 @@ async def test_429_with_empty_retry_after(client):
 
 
 @pytest.mark.asyncio
-async def test_429_with_past_httpdate_clamps_to_zero(client):
+async def test_http_get_429_with_past_httpdate_clamps_to_zero(client):
     """Past HTTP-date clamps to ``0.0`` rather than going negative."""
     cm = _mock_aiohttp_response(
         429,
@@ -1066,7 +1215,7 @@ async def test_429_with_past_httpdate_clamps_to_zero(client):
 
 
 @pytest.mark.asyncio
-async def test_429_with_negative_numeric_clamps_to_zero(client):
+async def test_http_get_429_with_negative_numeric_clamps_to_zero(client):
     """Negative numeric Retry-After clamps to ``0.0``."""
     cm = _mock_aiohttp_response(429, text_body="slow", headers={"Retry-After": "-30"})
     p, _ = _patch_session(cm)
@@ -1082,7 +1231,7 @@ def test_parse_retry_after_returns_none_for_none():
 
 
 @pytest.mark.asyncio
-async def test_429_with_httpdate_no_timezone_treated_as_utc(client):
+async def test_http_get_429_with_httpdate_no_timezone_treated_as_utc(client):
     """HTTP-date with no zone token must coerce to UTC, not crash (#S3).
 
     ``parsedate_to_datetime`` returns a *naive* datetime when the input
@@ -1279,5 +1428,13 @@ def test_rate_limit_error_default_retry_after_is_none():
 
 
 def test_rate_limit_error_accepts_retry_after():
+    """``retry_after`` keyword arg is preserved on the exception (#N2).
+
+    This is the construction path used by ``_http_get`` after parsing
+    a numeric or HTTP-date Retry-After header. The retry orchestrator
+    at ``src.utils.retry:124`` reads ``e.retry_after`` to honour the
+    server-supplied backoff hint; if the field name drifts again the
+    hint is silently dropped.
+    """
     err = RateLimitError("slow down", retry_after=42.5)
     assert err.retry_after == 42.5

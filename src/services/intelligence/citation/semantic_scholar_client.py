@@ -67,11 +67,19 @@ _DEFAULT_MAX_RESULTS = 200
 # (``: . / _ -``) is needed for legitimate external id forms:
 # ``arxiv:1706.03762``, ``10.18653/v1/...``, and S2 native hex ids.
 # Note that even though ``/`` is permitted by the pattern (DOIs need
-# it), we still ``urllib.parse.quote(..., safe="")`` the value before
+# it), we still ``urllib.parse.quote(..., safe=":")`` the value before
 # interpolating into the URL — the regex defends against payload
 # injection while the quoting defends against path traversal during
-# URL construction.
+# URL construction. ``A-Za-z0-9`` matches ASCII only — unicode
+# letters/digits are deliberately rejected because S2 ids are ASCII
+# and a unicode lookalike could obscure an injection vector.
 _PAPER_ID_PATTERN = re.compile(r"^[A-Za-z0-9:./_\-]+$")
+
+# Hard cap on paper-id length. S2 ids never exceed ~70 characters in
+# practice (a SHA-256 hex is 64); 512 leaves comfortable headroom while
+# bounding worst-case URL length and rejecting payload-stuffing
+# attempts that pad otherwise-legal characters into the megabyte range.
+_PAPER_ID_MAX_LENGTH = 512
 
 # Substrings that look benign under the allow-list above (they only
 # use permitted characters) but that signal an SSRF / traversal payload
@@ -246,6 +254,14 @@ class SemanticScholarCitationClient:
         """Common path for ``get_references`` / ``get_citations``."""
         if not paper_id or not paper_id.strip():
             raise ValueError("paper_id must be a non-empty string")
+        # Bound length before regex-matching: a multi-megabyte input
+        # would otherwise burn CPU on the regex backtracking even
+        # though it would ultimately be rejected.
+        if len(paper_id) > _PAPER_ID_MAX_LENGTH:
+            raise ValueError(
+                f"Invalid paper_id format: length {len(paper_id)} exceeds "
+                f"maximum {_PAPER_ID_MAX_LENGTH}."
+            )
         # Reject anything that doesn't match our strict allow-list before
         # we ever build a URL. This blocks SSRF / URL-injection vectors:
         # CRLF (``foo\r\nHost: evil``), query strings / fragments

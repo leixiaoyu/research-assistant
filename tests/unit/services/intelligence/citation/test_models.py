@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -83,7 +84,10 @@ def test_make_paper_node_id_rejects_empty_source():
 def test_make_citation_edge_id_is_deterministic():
     e1 = make_citation_edge_id("paper:s2:abc", "paper:s2:def")
     e2 = make_citation_edge_id("paper:s2:abc", "paper:s2:def")
-    assert e1 == e2 == "edge:cites:paper:s2:abc:paper:s2:def"
+    assert e1 == e2
+    # Format: 'edge:cites:' + 32 lowercase hex chars (SHA-256 truncated)
+    assert e1.startswith("edge:cites:")
+    assert re.fullmatch(r"edge:cites:[0-9a-f]{32}", e1)
 
 
 def test_make_citation_edge_id_directional_difference():
@@ -93,10 +97,32 @@ def test_make_citation_edge_id_directional_difference():
 
 
 def test_make_citation_edge_id_sanitizes_inputs():
-    edge_id = make_citation_edge_id("paper s2 abc", "paper/def")
-    # Spaces and slashes get scrubbed
-    assert " " not in edge_id
-    assert "/" not in edge_id
+    # Scrubbing happens before hashing; the resulting edge_id is hex
+    # (no spaces or slashes possible by construction). The behavioral
+    # check is that two inputs producing identical scrubbed ids hash
+    # to the same edge.
+    e1 = make_citation_edge_id("paper s2 abc", "paper/def")
+    e2 = make_citation_edge_id("paper_s2_abc", "paper_def")
+    assert e1 == e2
+
+
+def test_make_citation_edge_id_no_collision_on_colon_boundary():
+    """Regression: SHA-256 hashing closes the collision window.
+
+    Pre-fix, ``edge:cites:{a}:{b}`` would collide for any two pairs
+    where ``a + ':' + b`` produced the same string after splitting on
+    colons. The classic case:
+
+        ('paper:s2:abc',      'paper:s2:def:ghi')
+        ('paper:s2:abc:paper', 's2:def:ghi')
+
+    Both would yield ``edge:cites:paper:s2:abc:paper:s2:def:ghi``,
+    silently merging unrelated edges in ``add_edges_batch``. This test
+    pins that distinct pairs always produce distinct edge ids.
+    """
+    e1 = make_citation_edge_id("paper:s2:abc", "paper:s2:def:ghi")
+    e2 = make_citation_edge_id("paper:s2:abc:paper", "s2:def:ghi")
+    assert e1 != e2
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +429,9 @@ def test_citation_edge_to_graph_edge_minimal():
     assert g.source_id == "paper:s2:a"
     assert g.target_id == "paper:s2:b"
     assert g.edge_type == EdgeType.CITES
-    assert g.edge_id == "edge:cites:paper:s2:a:paper:s2:b"
+    # SHA-256 hashed edge_id (collision-safe, see make_citation_edge_id docstring)
+    assert g.edge_id == make_citation_edge_id("paper:s2:a", "paper:s2:b")
+    assert re.fullmatch(r"edge:cites:[0-9a-f]{32}", g.edge_id)
     # Only source property when no extras
     assert g.properties == {"source": "semantic_scholar"}
 

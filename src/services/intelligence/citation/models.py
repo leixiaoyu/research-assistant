@@ -25,6 +25,7 @@ Design notes:
 
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import datetime, timezone
 from enum import Enum
@@ -82,13 +83,24 @@ def make_citation_edge_id(citing_id: str, cited_id: str) -> str:
     Deterministic edge ids let bulk inserts be idempotent within a
     single transaction (a duplicate raises a constraint error before
     any partial write — see ``add_edges_batch``).
+
+    Implementation note: the citing/cited node ids both contain ``:``
+    separators (e.g. ``paper:s2:abc``). Concatenating them with another
+    ``:`` would let two distinct pairs collide on the resulting edge
+    id (``a:b:c + d:e:f`` and ``a:b + c:d:e:f`` both yield
+    ``a:b:c:d:e:f``), which would silently merge unrelated edges in
+    ``add_edges_batch``. We hash the pair with SHA-256 to get a
+    collision-free, deterministic, length-bounded id. Only the first
+    32 hex chars (128 bits) are kept to stay within the storage
+    layer's ``edge_id`` length budget; collisions remain
+    cryptographically negligible at our scale (~10^9 edges).
     """
     # The two node ids are already validated, but we still scrub here
     # to defend against future callers passing raw external ids.
-    return (
-        f"edge:cites:"
-        f"{_normalize_id_segment(citing_id)}:{_normalize_id_segment(cited_id)}"
-    )
+    citing = _normalize_id_segment(citing_id)
+    cited = _normalize_id_segment(cited_id)
+    digest = hashlib.sha256(f"{citing}|{cited}".encode("utf-8")).hexdigest()[:32]
+    return f"edge:cites:{digest}"
 
 
 class CitationDirection(str, Enum):

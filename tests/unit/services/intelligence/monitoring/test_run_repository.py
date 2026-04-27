@@ -118,6 +118,56 @@ def _make_record(
     )
 
 
+def _make_begin_immediate_failure_open(  # type: ignore[no-untyped-def]
+    error_message: str,
+):
+    """Return a fake ``open_connection`` plus an attempt counter dict.
+
+    The fake yields a thin proxy whose ``execute`` raises an
+    ``OperationalError`` with ``error_message`` whenever the SQL is
+    exactly ``"BEGIN IMMEDIATE"``. Every other call is delegated to the
+    real connection so PRAGMA setup, queries, and rollback all behave
+    normally.
+
+    sqlite3.Connection methods are read-only (C-implemented), so we
+    cannot monkeypatch them directly -- a proxy is necessary.
+    """
+    import sqlite3 as _sqlite3
+    from contextlib import contextmanager
+
+    from src.storage.intelligence_graph.connection import (
+        open_connection as real_open,
+    )
+
+    attempts = {"n": 0}
+
+    class _ConnProxy:
+        def __init__(self, real_conn: _sqlite3.Connection) -> None:
+            self._real = real_conn
+
+        def execute(self, sql: str, *args: object, **kwargs: object) -> object:
+            if sql == "BEGIN IMMEDIATE":
+                raise _sqlite3.OperationalError(error_message)
+            return self._real.execute(sql, *args, **kwargs)
+
+        def executemany(self, sql: str, *args: object, **kwargs: object) -> object:
+            return self._real.executemany(sql, *args, **kwargs)
+
+        def commit(self) -> None:
+            self._real.commit()
+
+        def rollback(self) -> None:
+            self._real.rollback()
+
+    @contextmanager  # type: ignore[arg-type]
+    def fake_open(db_path):  # type: ignore[no-untyped-def]
+        with real_open(db_path) as conn:
+            attempts["n"] += 1
+            yield _ConnProxy(conn)
+
+    return fake_open, attempts
+
+
 # ---------------------------------------------------------------------------
 # Initialization
 # ---------------------------------------------------------------------------
@@ -344,6 +394,110 @@ class TestListRuns:
 # ---------------------------------------------------------------------------
 # Foreign Key CASCADE
 # ---------------------------------------------------------------------------
+
+
+class TestOperationalErrorRetry:
+    """Tests for ``record_run`` retry on transient ``database is locked``
+    (PR #119 review #S9). Uses real threading + a long-held BEGIN
+    IMMEDIATE on a second connection to force lock contention -- not
+    a mock.
+    """
+
+    def test_record_run_retries_on_locked_then_succeeds(self, db_path: Path) -> None:
+        """A short-lived blocking writer should be tolerated by the
+        retry loop -- the second writer eventually wins and persists.
+        """
+        import threading
+
+        from src.storage.intelligence_graph.connection import open_connection
+
+        repo = MonitoringRunRepository(db_path)
+        repo.initialize()
+        _seed_subscription(db_path, "sub-test001")
+
+        # Hold an EXCLUSIVE write lock on a separate connection for a
+        # short window, then release. The repository's retry loop
+        # (50ms, 100ms backoff) should cover the gap.
+        release_event = threading.Event()
+        holder_started = threading.Event()
+
+        def hold_lock() -> None:
+            with open_connection(db_path) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                holder_started.set()
+                # Use shorter than total retry budget so the second
+                # attempt has a chance to succeed.
+                release_event.wait(timeout=1.0)
+                conn.rollback()
+
+        holder = threading.Thread(target=hold_lock)
+        holder.start()
+        try:
+            assert holder_started.wait(timeout=1.0), "holder failed to start"
+            # Tighten the busy_timeout-bypass window: release the
+            # blocker after the first attempt should have failed.
+            timer = threading.Timer(0.08, release_event.set)
+            timer.start()
+            try:
+                run = _make_run()
+                repo.record_run(run)
+            finally:
+                timer.cancel()
+            release_event.set()
+        finally:
+            holder.join(timeout=5.0)
+
+        fetched = repo.get_run(run.run_id)
+        assert fetched is not None
+        assert fetched.run_id == run.run_id
+
+    def test_record_run_propagates_non_lock_operational_error(
+        self, repo: MonitoringRunRepository, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OperationalError without "locked" in the message must not be
+        retried -- it surfaces immediately so callers see the real bug.
+        Uses a proxy ``open_connection`` whose BEGIN IMMEDIATE raises a
+        non-lock OperationalError; everything else delegates to the
+        real connection.
+        """
+        import sqlite3 as _sqlite3
+
+        from src.services.intelligence.monitoring import run_repository as rr_mod
+
+        fake_open, attempts = _make_begin_immediate_failure_open(
+            error_message="disk I/O error"
+        )
+        monkeypatch.setattr(rr_mod, "open_connection", fake_open)
+        run = _make_run(run_id="run-no-retry")
+        with pytest.raises(_sqlite3.OperationalError, match="disk I/O error"):
+            repo.record_run(run)
+        # No retry on a non-lock error.
+        assert attempts["n"] == 1
+
+    def test_record_run_gives_up_after_max_attempts(
+        self, repo: MonitoringRunRepository, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If the lock contention persists past all retries, the final
+        OperationalError must propagate so the runner can log + skip.
+        """
+        import sqlite3 as _sqlite3
+
+        from src.services.intelligence.monitoring import run_repository as rr_mod
+
+        fake_open, attempts = _make_begin_immediate_failure_open(
+            error_message="database is locked"
+        )
+        monkeypatch.setattr(rr_mod, "open_connection", fake_open)
+        # Speed the test up so we don't sleep through the real backoff.
+        monkeypatch.setattr(
+            MonitoringRunRepository,
+            "_RECORD_RUN_RETRY_BACKOFF_SECONDS",
+            0.001,
+        )
+        run = _make_run(run_id="run-give-up")
+        with pytest.raises(_sqlite3.OperationalError, match="database is locked"):
+            repo.record_run(run)
+        assert attempts["n"] == MonitoringRunRepository._RECORD_RUN_MAX_ATTEMPTS
 
 
 class TestCascadeDelete:

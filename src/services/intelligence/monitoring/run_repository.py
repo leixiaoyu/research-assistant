@@ -54,6 +54,7 @@ to insert the run row plus all its paper rows atomically.
 from __future__ import annotations
 
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -137,6 +138,15 @@ class MonitoringRunRepository:
     # ------------------------------------------------------------------
     # Writes
     # ------------------------------------------------------------------
+    # Retry tuning for ``record_run`` lock contention (PR #119 review #S9).
+    # WAL + busy_timeout already buys 5s on the connection level; this
+    # adds three short application-level retries on top so a transient
+    # ``OperationalError("database is locked")`` from a colliding writer
+    # does not silently drop an audit row (the runner's per-sub error
+    # envelope catches generic Exception and continues).
+    _RECORD_RUN_MAX_ATTEMPTS = 3
+    _RECORD_RUN_RETRY_BACKOFF_SECONDS = 0.05  # 50ms, 100ms (linear)
+
     def record_run(
         self,
         run: MonitoringRun,
@@ -149,6 +159,14 @@ class MonitoringRunRepository:
         transaction so a partial commit cannot leave dangling papers
         without their parent run (or vice versa).
 
+        Concurrency:
+            Uses ``BEGIN IMMEDIATE`` (matching ``SubscriptionManager``)
+            so the write lock is acquired up front -- the existence
+            check + INSERTs are atomic against concurrent writers.
+            Transient ``OperationalError("database is locked")`` are
+            retried up to ``_RECORD_RUN_MAX_ATTEMPTS`` times with linear
+            backoff so a colliding writer doesn't drop the audit row.
+
         Args:
             run: ``MonitoringRun`` to persist.
             user_id: Owner user. When ``None`` the repository's
@@ -157,11 +175,67 @@ class MonitoringRunRepository:
         Raises:
             ValueError: If a run with the same ``run_id`` already
                 exists -- runs are append-only by design.
+            sqlite3.OperationalError: If the lock contention persists
+                past all retry attempts. The runner logs and continues
+                rather than aborting the cycle.
         """
         owner = user_id or self._default_user_id
         finished = run.finished_at.isoformat() if run.finished_at else None
+
+        attempt = 0
+        while True:
+            try:
+                self._record_run_once(run, owner, finished)
+                break  # success
+            except sqlite3.OperationalError as exc:
+                # Only retry the specific "database is locked" race; any
+                # other OperationalError (corrupt db, disk full, schema
+                # drift) propagates immediately. After exhausting all
+                # attempts, re-raise so the caller sees the failure.
+                is_lock_error = "locked" in str(exc).lower()
+                is_last_attempt = attempt >= self._RECORD_RUN_MAX_ATTEMPTS - 1
+                if not is_lock_error or is_last_attempt:
+                    raise
+                backoff = self._RECORD_RUN_RETRY_BACKOFF_SECONDS * (attempt + 1)
+                logger.warning(
+                    "monitoring_run_record_retry",
+                    run_id=run.run_id,
+                    attempt=attempt + 1,
+                    max_attempts=self._RECORD_RUN_MAX_ATTEMPTS,
+                    backoff_seconds=backoff,
+                    error=str(exc),
+                )
+                time.sleep(backoff)
+                attempt += 1
+
+        logger.info(
+            "monitoring_run_recorded",
+            run_id=run.run_id,
+            subscription_id=run.subscription_id,
+            user_id=owner,
+            status=run.status.value,
+            papers_found=run.papers_seen,
+            papers_new=run.papers_new,
+        )
+
+    def _record_run_once(
+        self,
+        run: MonitoringRun,
+        owner: str,
+        finished: Optional[str],
+    ) -> None:
+        """Single-attempt write of one run + its papers.
+
+        Extracted from :meth:`record_run` so the retry loop is the only
+        place that catches ``OperationalError`` -- keeps the success
+        path tidy and the retry boundary explicit.
+        """
         with self._connect() as conn:
-            conn.execute("BEGIN")
+            # BEGIN IMMEDIATE acquires the write lock up front so the
+            # existence check + INSERTs are atomic against concurrent
+            # writers (matches subscription_manager.add_subscription --
+            # review #C2).
+            conn.execute("BEGIN IMMEDIATE")
             try:
                 cursor = conn.execute(
                     "SELECT 1 FROM monitoring_runs WHERE run_id = ?",
@@ -212,16 +286,6 @@ class MonitoringRunRepository:
             except Exception:
                 conn.rollback()
                 raise
-
-        logger.info(
-            "monitoring_run_recorded",
-            run_id=run.run_id,
-            subscription_id=run.subscription_id,
-            user_id=owner,
-            status=run.status.value,
-            papers_found=run.papers_seen,
-            papers_new=run.papers_new,
-        )
 
     # ------------------------------------------------------------------
     # Reads

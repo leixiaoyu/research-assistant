@@ -393,3 +393,103 @@ class TestPathSafety:
 
         with pytest.raises(SecurityError):
             SubscriptionManager("/etc/forbidden.db")
+
+
+# ---------------------------------------------------------------------------
+# Concurrency — TOCTOU regression
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentAdd:
+    def test_concurrent_add_under_cap_serializes(
+        self, manager: SubscriptionManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: BEGIN IMMEDIATE closes the count+INSERT race.
+
+        Pre-fix, two concurrent ``add_subscription`` calls could both
+        observe ``count==MAX-1`` (deferred read), both pass the cap
+        check, and both INSERT — leaving the user one subscription over
+        the documented limit. With ``BEGIN IMMEDIATE``, the second
+        writer blocks until the first commits, then re-reads the count
+        and either succeeds (still under cap) or raises
+        ``SubscriptionLimitError``.
+
+        With cap=N and N+M concurrent threads where M>0, exactly N
+        should succeed and M should raise ``SubscriptionLimitError``.
+        """
+        import threading
+
+        cap = 5
+        extra = 5
+        monkeypatch.setattr(SubscriptionManager, "MAX_SUBSCRIPTIONS_PER_USER", cap)
+
+        results: list[Exception | None] = [None] * (cap + extra)
+        barrier = threading.Barrier(cap + extra)
+
+        def worker(idx: int) -> None:
+            barrier.wait()  # release all threads simultaneously
+            try:
+                manager.add_subscription(
+                    _make_subscription(
+                        subscription_id=f"sub-{idx:03d}", user_id="alice"
+                    )
+                )
+            except Exception as exc:  # capture for assertion
+                results[idx] = exc
+
+        threads = [
+            threading.Thread(target=worker, args=(i,)) for i in range(cap + extra)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        successes = sum(1 for r in results if r is None)
+        limit_errors = sum(1 for r in results if isinstance(r, SubscriptionLimitError))
+        assert successes == cap, (
+            f"expected exactly {cap} successes, got {successes}; "
+            f"errors: {[type(r).__name__ for r in results if r is not None]}"
+        )
+        assert limit_errors == extra, (
+            f"expected exactly {extra} SubscriptionLimitError, got {limit_errors}; "
+            f"errors: {[type(r).__name__ for r in results if r is not None]}"
+        )
+        # And the cap is honored in storage.
+        assert len(manager.list_subscriptions(user_id="alice")) == cap
+
+
+# ---------------------------------------------------------------------------
+# Connection lifecycle — leak regression
+# ---------------------------------------------------------------------------
+
+
+class TestConnectionLifecycle:
+    def test_connect_closes_connection_on_exit(
+        self, manager: SubscriptionManager
+    ) -> None:
+        """Regression: ``_connect()`` must close on exit, not just commit.
+
+        Pre-fix, ``with sqlite3.connect(...) as conn`` would commit /
+        rollback but leave the connection open — leaking one file
+        descriptor per CRUD call under a long-running scheduler.
+        """
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            sub = _make_subscription()
+            manager.add_subscription(sub)
+            fetched = manager.get_subscription(sub.subscription_id)
+
+        assert fetched is not None
+        unclosed = [
+            w
+            for w in caught
+            if issubclass(w.category, ResourceWarning)
+            and "unclosed" in str(w.message).lower()
+        ]
+        assert unclosed == [], (
+            f"unexpected ResourceWarning(s) for unclosed resources: "
+            f"{[str(w.message) for w in unclosed]}"
+        )

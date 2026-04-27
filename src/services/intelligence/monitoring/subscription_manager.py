@@ -17,20 +17,36 @@ The model fields beyond what's column-promoted (query, keywords,
 sources, etc.) live inside the ``config`` JSON blob — same pattern the
 graph store uses for ``properties``.
 
-We open one ``sqlite3.Connection`` per call; the table is single-user-
-low-contention so the WAL/busy_timeout pragmas inherited from the
-intelligence-graph PRAGMAs are sufficient. We do NOT use
-``BEGIN IMMEDIATE`` because every mutation is single-row and the
-contention surface is bounded (Phase 10+ multi-user will revisit).
+Concurrency model
+-----------------
+``_connect()`` is a context manager that opens a fresh
+``sqlite3.Connection`` per logical operation, applies the standard
+intelligence-graph PRAGMAs (``foreign_keys=ON``, ``journal_mode=WAL``,
+``synchronous=NORMAL``, ``busy_timeout=5000``), and **closes the
+connection on exit** (sqlite3's own ``__exit__`` only commits/rolls
+back — it does not close, which leaks file descriptors under a
+long-running scheduler).
+
+Mutations that combine a read with a write (most notably
+``add_subscription``, which checks the per-user cap before INSERT)
+issue ``BEGIN IMMEDIATE`` at the start of the transaction so the
+read+write pair is serialized against concurrent writers. Without
+this, two concurrent ``add_subscription`` calls could both observe
+``count==MAX-1`` and both insert, breaking the cap. ``BEGIN IMMEDIATE``
+acquires the SQLite write lock up-front; the second writer blocks for
+up to ``busy_timeout`` and then either succeeds or raises
+``OperationalError("database is locked")`` (which our retry policy
+upstream is responsible for translating into a user-visible error).
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 import structlog
 
@@ -92,7 +108,15 @@ class SubscriptionManager:
             )
         self._initialized = True
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """Open + auto-close a SQLite connection with the standard PRAGMAs.
+
+        SQLite's ``Connection.__exit__`` commits / rolls back but does
+        NOT close. Wrapping with ``contextlib.contextmanager`` and an
+        explicit ``finally: conn.close()`` keeps file-descriptor usage
+        bounded under a long-running scheduler.
+        """
         if not self._initialized:
             raise RuntimeError(
                 "SubscriptionManager not initialized. Call initialize() first."
@@ -103,7 +127,10 @@ class SubscriptionManager:
         conn.execute("PRAGMA synchronous = NORMAL")
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     # ------------------------------------------------------------------
     # Serialization
@@ -174,6 +201,11 @@ class SubscriptionManager:
             )
 
         with self._connect() as conn:
+            # Acquire write lock UP FRONT so the count check + INSERT
+            # are atomic against concurrent writers. Without this, two
+            # callers can both observe count==MAX-1 and both insert,
+            # silently breaking the per-user cap.
+            conn.execute("BEGIN IMMEDIATE")
             current = self._count_user_subscriptions(conn, subscription.user_id)
             if current >= self.MAX_SUBSCRIPTIONS_PER_USER:
                 raise SubscriptionLimitError(

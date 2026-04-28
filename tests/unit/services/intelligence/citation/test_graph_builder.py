@@ -14,9 +14,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from pydantic import ValidationError
+
 from src.services.intelligence.citation.graph_builder import (
+    BuildForPaperRequest,
     CitationGraphBuilder,
     GraphBuildResult,
+    ProviderTag,
+    _sanitize_error_msg,
 )
 from src.services.intelligence.citation.models import (
     CitationDirection,
@@ -118,26 +123,89 @@ def test_constructor_assigns_dependencies(store, s2_client, oa_client):
 
 @pytest.mark.asyncio
 async def test_build_rejects_depth_other_than_one(builder):
-    with pytest.raises(ValueError, match="depth=1 only"):
+    """Pydantic boundary validation rejects depth>1 before any provider call (#S9)."""
+    with pytest.raises(ValidationError):
         await builder.build_for_paper("paper:s2:abc", depth=2)
 
 
 @pytest.mark.asyncio
 async def test_build_rejects_empty_paper_id(builder):
-    with pytest.raises(ValueError, match="non-empty"):
+    with pytest.raises(ValidationError):
         await builder.build_for_paper("", depth=1)
 
 
 @pytest.mark.asyncio
 async def test_build_rejects_whitespace_paper_id(builder):
-    with pytest.raises(ValueError, match="non-empty"):
+    with pytest.raises(ValidationError):
         await builder.build_for_paper("   ", depth=1)
+
+
+@pytest.mark.asyncio
+async def test_build_rejects_oversized_paper_id(builder):
+    """Length cap protects URL builder downstream from megabyte payloads."""
+    with pytest.raises(ValidationError):
+        await builder.build_for_paper("a" * 257, depth=1)
+
+
+@pytest.mark.asyncio
+async def test_build_rejects_paper_id_with_url_scheme(builder):
+    """``://`` is not in the allow-list (no ``:`` followed by ``//`` is legal)."""
+    # ``://`` collapses to colon + slash + slash — all allowed individually
+    # by the pattern. The provider-side ``_normalize_*`` methods enforce
+    # the forbid-list. The builder boundary trusts the provider for that
+    # final check; here we only verify the pattern catches whitespace
+    # and other URL-injection metacharacters that survive both layers.
+    with pytest.raises(ValidationError):
+        await builder.build_for_paper("http://evil@host", depth=1)
+
+
+@pytest.mark.asyncio
+async def test_build_rejects_paper_id_with_query_string(builder):
+    with pytest.raises(ValidationError):
+        await builder.build_for_paper("abc?evil=1", depth=1)
+
+
+@pytest.mark.asyncio
+async def test_build_rejects_paper_id_with_crlf(builder):
+    with pytest.raises(ValidationError):
+        await builder.build_for_paper("abc\r\nLog-Injection: 1", depth=1)
+
+
+@pytest.mark.asyncio
+async def test_build_validation_runs_before_provider_call(
+    builder, s2_client, oa_client
+):
+    """No provider call should happen if input fails Pydantic validation."""
+    with pytest.raises(ValidationError):
+        await builder.build_for_paper("invalid space id", depth=1)
+    s2_client.get_references.assert_not_awaited()
+    oa_client.get_references.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_build_rejects_zero_max_results(builder):
     with pytest.raises(ValueError, match="max_results must be"):
         await builder.build_for_paper("paper:s2:abc", max_results=0)
+
+
+def test_build_for_paper_request_accepts_legitimate_ids():
+    """DOIs, arxiv ids, and S2 native ids all match the allow-list."""
+    BuildForPaperRequest(paper_id="10.18653/v1/2020.acl-main.703")
+    BuildForPaperRequest(paper_id="arxiv:1706.03762")
+    BuildForPaperRequest(paper_id="paper:s2:204e3073")
+    BuildForPaperRequest(paper_id="W2741809807")
+
+
+def test_build_for_paper_request_rejects_extra_fields():
+    """``extra="forbid"`` blocks unknown fields."""
+    with pytest.raises(ValidationError):
+        BuildForPaperRequest(paper_id="W1", unknown_field="x")
+
+
+def test_build_for_paper_request_default_depth_and_direction():
+    r = BuildForPaperRequest(paper_id="W1")
+    assert r.depth == 1
+    assert r.direction == CitationDirection.OUT
 
 
 # ---------------------------------------------------------------------------
@@ -677,20 +745,60 @@ def test_builder_does_not_import_sqlite3():
 
 
 def test_combine_providers_both_none():
-    assert CitationGraphBuilder._combine_providers("none", "none") == "none"
+    assert (
+        CitationGraphBuilder._combine_providers(ProviderTag.NONE, ProviderTag.NONE)
+        == ProviderTag.NONE
+    )
 
 
 def test_combine_providers_one_none_uses_other():
-    assert CitationGraphBuilder._combine_providers("none", "s2") == "s2"
-    assert CitationGraphBuilder._combine_providers("openalex", "none") == "openalex"
+    assert (
+        CitationGraphBuilder._combine_providers(ProviderTag.NONE, ProviderTag.S2)
+        == ProviderTag.S2
+    )
+    assert (
+        CitationGraphBuilder._combine_providers(ProviderTag.OPENALEX, ProviderTag.NONE)
+        == ProviderTag.OPENALEX
+    )
 
 
 def test_combine_providers_same_value():
-    assert CitationGraphBuilder._combine_providers("s2", "s2") == "s2"
+    assert (
+        CitationGraphBuilder._combine_providers(ProviderTag.S2, ProviderTag.S2)
+        == ProviderTag.S2
+    )
 
 
 def test_combine_providers_mixed_returns_both():
-    assert CitationGraphBuilder._combine_providers("s2", "openalex") == "both"
+    assert (
+        CitationGraphBuilder._combine_providers(ProviderTag.S2, ProviderTag.OPENALEX)
+        == ProviderTag.BOTH
+    )
+
+
+def test_provider_tag_string_equality_preserved():
+    """``ProviderTag(str, Enum)`` keeps existing string comparisons working."""
+    assert ProviderTag.S2 == "s2"
+    assert ProviderTag.OPENALEX == "openalex"
+    assert ProviderTag.NONE == "none"
+    assert ProviderTag.BOTH == "both"
+
+
+def test_sanitize_error_msg_strips_crlf():
+    """CRLF and other control bytes are replaced with ``?`` (#N4)."""
+    out = _sanitize_error_msg("abc\r\nX-Injected: 1")
+    assert "\r" not in out
+    assert "\n" not in out
+
+
+def test_sanitize_error_msg_caps_length():
+    out = _sanitize_error_msg("a" * 500, max_len=50)
+    assert len(out) == 50
+
+
+def test_sanitize_error_msg_passes_printable():
+    out = _sanitize_error_msg("simple message")
+    assert out == "simple message"
 
 
 # ---------------------------------------------------------------------------

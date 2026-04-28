@@ -31,8 +31,10 @@ adapter on top — both add coupling without saving meaningful code.
 """
 
 from src.services.intelligence.citation.graph_builder import (
+    BuildForPaperRequest,
     CitationGraphBuilder,
     GraphBuildResult,
+    ProviderTag,
 )
 from src.services.intelligence.citation.models import (
     CitationDirection,
@@ -61,4 +63,6 @@ __all__ = [
     # Builder
     "CitationGraphBuilder",
     "GraphBuildResult",
+    "ProviderTag",
+    "BuildForPaperRequest",
 ]

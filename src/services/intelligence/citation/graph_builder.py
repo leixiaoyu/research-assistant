@@ -31,9 +31,11 @@ Scope of this PR (REQ-9.2.1, descoped Week 1.5):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Optional
 
 import structlog
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.services.intelligence.citation.models import (
     CitationDirection,
@@ -58,12 +60,65 @@ from src.storage.intelligence_graph import GraphStore
 logger = structlog.get_logger(__name__)
 
 
-# Sentinel so callers can distinguish "we didn't try this provider" from
-# "this provider returned no edges". Used inside ``GraphBuildResult``.
-_PROVIDER_NONE = "none"
-_PROVIDER_S2 = "s2"
-_PROVIDER_OPENALEX = "openalex"
-_PROVIDER_BOTH = "both"
+class ProviderTag(str, Enum):
+    """Typed label for which provider supplied a build's data (#S6).
+
+    Inherits from ``str`` so JSON serialisation (and existing string
+    comparisons in tests / log enrichment) keep working unchanged. The
+    enum gives mypy and exhaustive-switch consumers a real type instead
+    of a free-form string.
+    """
+
+    NONE = "none"
+    S2 = "s2"
+    OPENALEX = "openalex"
+    BOTH = "both"
+
+
+# Hard cap on the size of error messages we forward into ``errors[]``
+# and structlog records. Bounds memory, cuts log spend, and keeps a
+# misbehaving upstream from exploding our DB row size if errors land in
+# a persistence path later.
+_MAX_FORWARDED_ERROR_LENGTH = 200
+
+
+def _sanitize_error_msg(msg: str, max_len: int = _MAX_FORWARDED_ERROR_LENGTH) -> str:
+    """Strip CR/LF/control chars and cap length to prevent log injection.
+
+    A hostile upstream (or a buggy provider) could embed CRLF or other
+    control bytes inside an error message; if we forwarded that
+    verbatim into a log line or a structured ``errors[]`` field, the
+    bytes could split the log record (log injection) or smuggle ANSI
+    escape sequences into operator terminals. Replacing every
+    non-printable byte with ``?`` is a one-pass defense and keeps the
+    message human-readable for legitimate input (#N4).
+    """
+    cleaned = "".join(c if c.isprintable() else "?" for c in msg)
+    return cleaned[:max_len]
+
+
+class BuildForPaperRequest(BaseModel):
+    """Pydantic input model for ``CitationGraphBuilder.build_for_paper`` (#S9).
+
+    Defense-in-depth on the builder boundary: a future caller bypassing
+    the providers' own validation would otherwise reach URL
+    interpolation with whatever ``paper_id`` they pass. The Pydantic
+    model enforces a strict allow-list and length cap before any
+    provider call is issued.
+
+    The pattern (``[A-Za-z0-9:./_\\-]+``) intentionally allows the
+    punctuation needed for legitimate external id forms — DOIs
+    (``10.x/y``), arxiv ids (``arxiv:1706.03762``), and S2 / OpenAlex
+    native ids — while excluding URL/CRLF/path-traversal metacharacters.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    paper_id: str = Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9:./_\-]+$")
+    # depth>1 is the Week-2 BFS deliverable; ``ge=1, le=1`` keeps the
+    # surface honest until the crawler ships.
+    depth: int = Field(default=1, ge=1, le=1)
+    direction: CitationDirection = CitationDirection.OUT
 
 
 @dataclass(frozen=True)
@@ -78,20 +133,20 @@ class GraphBuildResult:
             re-run still count here because the bulk insert was issued.
         edges_added: Count of edges inserted into the graph store, with
             the same caveat as ``nodes_added``.
-        provider_used: Which provider supplied the data.
-            One of ``"s2"``, ``"openalex"``, ``"both"`` (when direction
-            ``BOTH`` got a mixed answer), or ``"none"`` when neither
-            provider returned anything.
-        errors: Human-readable error messages collected during the call.
-            Empty on success. Populated when a provider failed but the
-            builder kept going (e.g. S2 errored → fell back to
-            OpenAlex), or when both providers failed.
+        provider_used: Which provider supplied the data, as a
+            :class:`ProviderTag` enum (#S6). String comparison still
+            works because the enum inherits from ``str``.
+        errors: Sanitized human-readable error messages collected during
+            the call (see ``_sanitize_error_msg``). Empty on success.
+            Populated when a provider failed but the builder kept going
+            (e.g. S2 errored → fell back to OpenAlex), or when both
+            providers failed.
     """
 
     seed_paper_id: str
     nodes_added: int
     edges_added: int
-    provider_used: str
+    provider_used: ProviderTag
     errors: list[str] = field(default_factory=list)
 
 
@@ -130,9 +185,11 @@ class CitationGraphBuilder:
                 this should be the OpenAlex work id (``W123…``) — but
                 the fallback only triggers if S2 fails, so callers
                 normally pass the S2-friendly form and rely on the
-                primary path.
+                primary path. Validated against ``BuildForPaperRequest``
+                before any provider call (#S9).
             depth: Currently must be ``1``. Higher values raise
-                ``ValueError`` — BFS crawl is the Week-2 follow-up.
+                ``pydantic.ValidationError`` — BFS crawl is the Week-2
+                follow-up.
             direction: ``OUT`` for references, ``IN`` for citations,
                 ``BOTH`` for both directions (one round-trip per side).
             max_results: Per-direction cap on returned rows. Defaults
@@ -142,15 +199,15 @@ class CitationGraphBuilder:
             A :class:`GraphBuildResult` describing what was persisted
             and which provider supplied the data.
         """
-        if depth != 1:
-            # Hard fail for now; once the BFS crawler lands the
-            # builder will recurse instead of refusing.
-            raise ValueError(
-                f"build_for_paper currently supports depth=1 only "
-                f"(got depth={depth})"
-            )
-        if not paper_id or not paper_id.strip():
-            raise ValueError("paper_id must be a non-empty string")
+        # Defense-in-depth input validation (#S9). The Pydantic model
+        # rejects empty / oversized / regex-failing paper_ids and any
+        # depth > 1 BEFORE we ever reach a provider call.
+        request = BuildForPaperRequest(
+            paper_id=paper_id, depth=depth, direction=direction
+        )
+        paper_id = request.paper_id
+        depth = request.depth
+        direction = request.direction
         if max_results < 1:
             raise ValueError("max_results must be >= 1")
 
@@ -211,7 +268,7 @@ class CitationGraphBuilder:
                 seed_paper_id=paper_id,
                 nodes_added=0,
                 edges_added=0,
-                provider_used=_PROVIDER_NONE,
+                provider_used=ProviderTag.NONE,
                 errors=errors,
             )
 
@@ -251,7 +308,7 @@ class CitationGraphBuilder:
         Optional[CitationNode],
         list[CitationNode],
         list[CitationEdge],
-        str,
+        ProviderTag,
         list[str],
     ]:
         """Call S2 first, fall back to OpenAlex on empty / error.
@@ -263,6 +320,10 @@ class CitationGraphBuilder:
         references / citations on file at S2) and do *not* fall back —
         OpenAlex is unlikely to do better and would double the API
         cost.
+
+        Error messages forwarded into ``errors`` are sanitized via
+        :func:`_sanitize_error_msg` before being appended (#N4) so
+        upstream CRLF cannot inject log lines.
         """
         errors: list[str] = []
 
@@ -274,35 +335,37 @@ class CitationGraphBuilder:
         except APIError as exc:
             # APIError covers both 404 and 5xx and RateLimitError. We
             # log + record the error and fall through to OpenAlex.
+            sanitized = _sanitize_error_msg(str(exc))
             logger.warning(
                 "citation_s2_failed",
                 seed_paper_id=paper_id,
                 direction=direction.value,
-                error=str(exc),
+                error=sanitized,
             )
-            errors.append(f"s2: {exc}")
+            errors.append(_sanitize_error_msg(f"s2: {exc}"))
             seed = None
             related = []
             edges = []
 
         if seed is not None:
-            return seed, related, edges, _PROVIDER_S2, errors
+            return seed, related, edges, ProviderTag.S2, errors
 
         # Pass 2: OpenAlex fallback.
         try:
             oa_seed, oa_related, oa_edges = await self._call_provider(
                 self.openalex_client, paper_id, direction, max_results
             )
-            return oa_seed, oa_related, oa_edges, _PROVIDER_OPENALEX, errors
+            return oa_seed, oa_related, oa_edges, ProviderTag.OPENALEX, errors
         except APIError as exc:
+            sanitized = _sanitize_error_msg(str(exc))
             logger.warning(
                 "citation_openalex_failed",
                 seed_paper_id=paper_id,
                 direction=direction.value,
-                error=str(exc),
+                error=sanitized,
             )
-            errors.append(f"openalex: {exc}")
-            return None, [], [], _PROVIDER_NONE, errors
+            errors.append(_sanitize_error_msg(f"openalex: {exc}"))
+            return None, [], [], ProviderTag.NONE, errors
 
     @staticmethod
     async def _call_provider(
@@ -319,22 +382,24 @@ class CitationGraphBuilder:
         return await client.get_citations(paper_id, max_results=max_results)
 
     @staticmethod
-    def _combine_providers(out_provider: str, in_provider: str) -> str:
+    def _combine_providers(
+        out_provider: ProviderTag, in_provider: ProviderTag
+    ) -> ProviderTag:
         """Reduce two per-direction provider tags to a single label.
 
         The exact rules are:
-        - both ``none`` → ``none``
-        - one ``none``, the other set → use the other one (a single
+        - both ``NONE`` → ``NONE``
+        - one ``NONE``, the other set → use the other one (a single
           direction succeeded)
-        - both the same non-``none`` value → that value
-        - mixed (e.g. ``s2`` + ``openalex``) → ``both``
+        - both the same non-``NONE`` value → that value
+        - mixed (e.g. ``S2`` + ``OPENALEX``) → ``BOTH``
         """
-        providers = {p for p in (out_provider, in_provider) if p != _PROVIDER_NONE}
+        providers = {p for p in (out_provider, in_provider) if p != ProviderTag.NONE}
         if not providers:
-            return _PROVIDER_NONE
+            return ProviderTag.NONE
         if len(providers) == 1:
             return providers.pop()
-        return _PROVIDER_BOTH
+        return ProviderTag.BOTH
 
     def _persist(
         self,
@@ -413,7 +478,9 @@ class CitationGraphBuilder:
                     # Idempotent re-run — typed signal, not an error.
                     continue
                 except GraphStoreError as inner_exc:
-                    errors.append(f"node {node.node_id}: {inner_exc}")
+                    errors.append(
+                        _sanitize_error_msg(f"node {node.node_id}: {inner_exc}")
+                    )
             return inserted
 
     def _bulk_insert_edges(self, edges: list[GraphEdge], errors: list[str]) -> int:
@@ -443,5 +510,7 @@ class CitationGraphBuilder:
                 except GraphStoreDuplicateError:
                     continue
                 except GraphStoreError as inner_exc:
-                    errors.append(f"edge {edge.edge_id}: {inner_exc}")
+                    errors.append(
+                        _sanitize_error_msg(f"edge {edge.edge_id}: {inner_exc}")
+                    )
             return inserted

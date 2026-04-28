@@ -31,9 +31,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
+import re
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Optional, cast
+from urllib.parse import quote
 
 import aiohttp
 import diskcache
@@ -93,10 +98,55 @@ _OPENALEX_WORK_SELECT = ",".join(
 _OPENALEX_SEED_SELECT = _OPENALEX_WORK_SELECT
 
 
+# Strict allow-list for OpenAlex work ids. The shape of an OpenAlex
+# work id is the literal letter ``W`` followed by a digit run (typically
+# 8-10 digits today; 15 leaves headroom for future growth). Anything
+# outside this shape is rejected before it ever reaches URL
+# construction. ASCII-only by design — Unicode lookalikes could mask an
+# injection vector.
+_WORK_ID_PATTERN = re.compile(r"^W\d{1,15}$")
+
+# Substrings that the regex above already excludes but which we re-check
+# explicitly as a defense-in-depth tripwire. If a future maintainer
+# loosens the regex (e.g. to support a new namespace prefix), the
+# forbid-list still blocks the worst SSRF / traversal payloads.
+# - ``..`` flags relative-path traversal.
+# - ``://`` flags inlined URLs (``http://evil``).
+# - ``?`` and ``#`` would split the URL into query/fragment segments
+#   and could be used to smuggle parameters past our explicit ones.
+_WORK_ID_FORBIDDEN_SUBSTRINGS = ("..", "://", "?", "#")
+
+# Hard cap on work-id length — well above ``W`` + 15-digit run, so the
+# regex is the binding check, but the length check fails fast on
+# multi-megabyte payload-stuffing attempts before regex backtracking
+# burns CPU.
+_MAX_WORK_ID_LENGTH = 32
+
+# Hard cap on the size of a single OpenAlex response body we will
+# parse. Without this, a malicious or misbehaving upstream could stream
+# an arbitrarily large payload into ``response.json()`` and exhaust
+# memory. 25 MB is intentionally larger than the S2 cap (10 MB) — a
+# single OpenAlex page can include 200 full ``Work`` payloads with all
+# selected fields, which is heavier than S2's per-row shape.
+_MAX_RESPONSE_BYTES = 25 * 1024 * 1024
+
+
 # Module-level flag so we warn at most once per process when the polite
 # email is missing. Tests reset this via ``reset_polite_email_warning``
 # (kept private to the module).
 _POLITE_EMAIL_WARNED = False
+
+
+# Mute aiohttp's transport-level DEBUG logger at import time. The
+# polite-pool email is appended to every URL as a ``mailto`` query
+# param; aiohttp's ``aiohttp.client`` logger emits the full URL at
+# DEBUG which would leak the email into application logs whenever a
+# downstream consumer raises the global log level. Setting the floor to
+# INFO globally is the simplest defensible choice — those DEBUG records
+# are rarely useful in production and never emitted by this module's
+# own structlog calls. The alternative (a redacting handler) adds code
+# without a behavioural difference for any caller we care about.
+logging.getLogger("aiohttp.client").setLevel(logging.INFO)
 
 
 def _reset_polite_email_warning() -> None:
@@ -149,7 +199,10 @@ class OpenAlexCitationClient:
                 If ``None``, falls back to the ``OPENALEX_POLITE_EMAIL``
                 env var. If that is also unset we log a single WARN and
                 use the anonymous pool (still works, just slower). The
-                email is *never* logged.
+                value is never emitted by this client; aiohttp's
+                transport debug logger is muted to INFO at module
+                import time to prevent transport-level URL leakage of
+                the ``mailto`` query parameter (#S7).
             rate_limiter: Optional pre-built rate limiter. When ``None``
                 the client builds one matching the polite-pool budget
                 (60 req/min) or the anonymous budget (20 req/min) when
@@ -340,8 +393,16 @@ class OpenAlexCitationClient:
         return result
 
     async def _fetch_work(self, work_id: str) -> dict[str, Any]:
-        """Fetch a single work's metadata from OpenAlex."""
-        url = f"{self.BASE_URL}/works/{work_id}"
+        """Fetch a single work's metadata from OpenAlex.
+
+        ``work_id`` is presumed to have already been validated by
+        ``_normalize_work_id`` (the only caller goes through
+        ``_fetch_relationships``). We still ``urllib.parse.quote(...,
+        safe="")`` it as defense-in-depth — if a future refactor adds
+        a caller that forgets the normalize step, the quoting still
+        prevents path traversal at URL construction time.
+        """
+        url = f"{self.BASE_URL}/works/{quote(work_id, safe='')}"
         params = {"select": _OPENALEX_SEED_SELECT}
         return await self._http_get(url, params=params)
 
@@ -358,7 +419,21 @@ class OpenAlexCitationClient:
         ``filter=openalex:W1|W2|...`` query.
         """
         ref_urls = seed_payload.get("referenced_works") or []
-        ref_ids = [self._normalize_work_id(url) for url in ref_urls if url]
+        # ``_normalize_work_id`` now raises on hostile / malformed ids;
+        # we silently drop those rather than aborting the whole call —
+        # a single bad reference must not poison the rest of the
+        # hydration batch.
+        ref_ids: list[str] = []
+        for url in ref_urls:
+            if not url:
+                continue
+            try:
+                ref_ids.append(self._normalize_work_id(url))
+            except ValueError:
+                logger.warning(
+                    "openalex_skip_invalid_referenced_work",
+                    referenced_work=url,
+                )
         ref_ids = ref_ids[:max_results]
         if not ref_ids:
             return []
@@ -371,10 +446,15 @@ class OpenAlexCitationClient:
         hydrated: list[dict[str, Any]] = []
         for i in range(0, len(ref_ids), _OPENALEX_ID_BATCH_SIZE):
             chunk = ref_ids[i : i + _OPENALEX_ID_BATCH_SIZE]
+            # Each id was validated by ``_normalize_work_id`` so quoting
+            # is a no-op for legitimate inputs; we still quote each id
+            # individually as defense-in-depth (mirrors #C1 policy in
+            # ``_fetch_work`` / ``_fetch_citing_works``).
+            quoted_chunk = [quote(cid, safe="") for cid in chunk]
             payload = await self._http_get(
                 f"{self.BASE_URL}/works",
                 params={
-                    "filter": "openalex:" + "|".join(chunk),
+                    "filter": "openalex:" + "|".join(quoted_chunk),
                     "per-page": str(min(len(chunk), _OPENALEX_MAX_PER_PAGE)),
                     "select": _OPENALEX_WORK_SELECT,
                 },
@@ -406,6 +486,12 @@ class OpenAlexCitationClient:
         """
         url = f"{self.BASE_URL}/works"
         page_size = min(_OPENALEX_MAX_PER_PAGE, max_results)
+        # ``work_id`` came through ``_normalize_work_id`` already, so
+        # the only legal characters are ``W`` + digits. ``quote`` is
+        # therefore a no-op in practice — we apply it as
+        # defense-in-depth to mirror the URL-construction policy in
+        # ``_fetch_work`` (#C1).
+        safe_work_id = quote(work_id, safe="")
 
         collected: list[dict[str, Any]] = []
         page = 1
@@ -413,7 +499,7 @@ class OpenAlexCitationClient:
             payload = await self._http_get(
                 url,
                 params={
-                    "filter": f"cites:{work_id}",
+                    "filter": f"cites:{safe_work_id}",
                     "per-page": str(page_size),
                     "page": str(page),
                     "select": _OPENALEX_WORK_SELECT,
@@ -443,10 +529,16 @@ class OpenAlexCitationClient:
         """Issue a single GET to OpenAlex with rate limiting + error handling.
 
         Distinguishes:
-        - 200: returns the parsed JSON body.
+        - 200: returns the parsed JSON body (after a content-length cap
+          check; oversized bodies raise ``APIError`` before parsing).
+        - 3xx (301/302/303/307/308): raises ``APIError``. We disable
+          automatic redirects so a compromised or hostile upstream
+          cannot redirect our (potentially polite-pool-bearing)
+          request to an attacker-controlled host (#C2).
         - 404: raises ``APIError`` (the work id is unknown — not
           retryable).
-        - 429: raises ``RateLimitError`` (caller may retry).
+        - 429: raises ``RateLimitError`` carrying the parsed
+          ``Retry-After`` hint when the server provided one (#C4).
         - 5xx / other: raises ``APIError``.
         """
         await self.rate_limiter.acquire("openalex_citations")
@@ -464,21 +556,126 @@ class OpenAlexCitationClient:
                     url,
                     params=request_params,
                     timeout=aiohttp.ClientTimeout(total=self.request_timeout_seconds),
+                    # Disable automatic redirect-following: an upstream
+                    # 3xx pointing at an attacker-controlled host would
+                    # otherwise receive our ``mailto`` polite-pool
+                    # email plus any future auth header (#C2).
+                    allow_redirects=False,
                 ) as response:
                     if response.status == 429:
-                        raise RateLimitError("OpenAlex rate limit exceeded")
+                        retry_after = self._parse_retry_after(
+                            response.headers.get("Retry-After")
+                        )
+                        raise RateLimitError(
+                            "OpenAlex rate limit exceeded",
+                            retry_after=retry_after,
+                        )
+                    # Explicit list of redirect statuses we reject:
+                    # 301/302/303/307/308 are the genuine redirects
+                    # that would otherwise leak our request to whatever
+                    # host the ``Location`` header names. 304 is *not*
+                    # a redirect (it's "Not Modified") so it must not
+                    # be treated as one.
+                    if response.status in (301, 302, 303, 307, 308):
+                        location = response.headers.get("Location", "<none>")
+                        # ``repr`` neutralises CRLF (renders ``\r\n``
+                        # as the literal escape) and the slice caps
+                        # length — a hostile upstream cannot inject
+                        # control characters or arbitrarily long
+                        # payloads into our exception message.
+                        safe_location = repr(location[:200])
+                        raise APIError(
+                            f"OpenAlex returned an unexpected redirect "
+                            f"({response.status} -> {safe_location}); "
+                            "redirects are disabled for SSRF protection."
+                        )
                     if response.status == 404:
                         text = await response.text()
                         raise APIError(f"Work not found on OpenAlex (404): {text}")
                     if response.status != 200:
                         text = await response.text()
                         raise APIError(f"OpenAlex error {response.status}: {text}")
-                    body: dict[str, Any] = await response.json()
+                    # Bound memory before parsing. First check the
+                    # advertised ``content_length`` — cheapest possible
+                    # rejection when the server tells us the size up
+                    # front (#C3).
+                    content_length = response.content_length
+                    if (
+                        content_length is not None
+                        and content_length > _MAX_RESPONSE_BYTES
+                    ):
+                        raise APIError(
+                            f"OpenAlex response too large: "
+                            f"{content_length} bytes > {_MAX_RESPONSE_BYTES} cap."
+                        )
+                    # Even when ``content_length`` is absent (chunked
+                    # transfer, gzip, etc.) we must enforce the cap —
+                    # ``response.json()`` would otherwise buffer
+                    # arbitrarily many bytes. Read at most one byte
+                    # over the cap so we can detect (and reject)
+                    # overruns without ever holding more than cap+1 in
+                    # memory.
+                    raw = await response.content.read(_MAX_RESPONSE_BYTES + 1)
+                    if len(raw) > _MAX_RESPONSE_BYTES:
+                        raise APIError(
+                            f"OpenAlex response exceeded "
+                            f"{_MAX_RESPONSE_BYTES} bytes (streaming/chunked)."
+                        )
+                    body: dict[str, Any] = json.loads(raw)
                     return body
         except asyncio.TimeoutError as exc:
             raise APIError(
                 f"OpenAlex request timed out after " f"{self.request_timeout_seconds}s"
             ) from exc
+
+    @staticmethod
+    def _parse_retry_after(value: Optional[str]) -> Optional[float]:
+        """Parse an HTTP ``Retry-After`` header value to seconds.
+
+        RFC 7231 §7.1.3 allows two forms:
+        - delta-seconds (a non-negative integer), e.g. ``"120"``.
+        - HTTP-date (RFC 7231 §7.1.1.1), e.g.
+          ``"Wed, 21 Oct 2015 07:28:00 GMT"``.
+
+        Returns ``None`` when the header is absent or unparsable;
+        callers should treat ``None`` as "no hint, use your own
+        backoff" and never trust the value blindly (negative or
+        far-future dates clamp to ``0.0``). Mirrors the post-#118
+        S2 client implementation so the orchestrator sees a
+        consistent shape across both providers (#C4).
+        """
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        # Numeric (delta-seconds) form first — it's the common case.
+        try:
+            seconds = float(value)
+        except ValueError:
+            seconds = None  # type: ignore[assignment]
+        if seconds is not None:
+            return max(0.0, seconds)
+        # HTTP-date form. ``parsedate_to_datetime`` returns a tz-aware
+        # datetime when the input includes a zone (RFC HTTP-dates
+        # always do); it raises ``ValueError`` (or in pathological
+        # cases ``TypeError``) on bad input.
+        try:
+            target = parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+        # Defensive: a non-conforming upstream may send an HTTP-date
+        # with no timezone token, in which case ``parsedate_to_datetime``
+        # returns a *naive* datetime. Subtracting a naive datetime
+        # from a tz-aware ``datetime.now`` raises ``TypeError`` and
+        # would escape ``_http_get`` unwrapped — a DoS-adjacent
+        # failure on the 429 path. Coerce naive → UTC so we still
+        # produce a useful backoff hint instead of dropping the value.
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=timezone.utc)
+        now = datetime.now(target.tzinfo)
+        delta = (target - now).total_seconds()
+        return max(0.0, delta)
 
     # ------------------------------------------------------------------
     # Payload <-> CitationNode glue
@@ -486,26 +683,63 @@ class OpenAlexCitationClient:
 
     @staticmethod
     def _normalize_work_id(value: str) -> str:
-        """Strip the ``https://openalex.org/`` prefix if present.
+        """Strip the ``https://openalex.org/`` prefix and validate.
 
         OpenAlex's ``referenced_works`` field stores full URLs; the
         REST endpoints want the bare id (``W12345``). Accepts either
         form so callers can pass whichever is convenient.
+
+        The returned id is guaranteed to match ``_WORK_ID_PATTERN`` —
+        the strict ``^W\\d{1,15}$`` allow-list — and to be free of any
+        URL/traversal metacharacter listed in
+        ``_WORK_ID_FORBIDDEN_SUBSTRINGS``. Any failure raises
+        ``ValueError`` so the URL builder upstream is never asked to
+        interpolate a hostile payload (#C1).
+
+        Raises:
+            ValueError: If the input is empty after trimming, exceeds
+                ``_MAX_WORK_ID_LENGTH``, contains a forbidden
+                substring, or fails the regex match.
         """
         if not value:
-            return value
+            raise ValueError(f"Invalid OpenAlex work_id: {value!r}")
         cleaned = value.strip()
         if "/" in cleaned:
+            # Last path segment after any URL prefix. Accepts both bare
+            # ids and full ``https://openalex.org/Wxxx`` URLs.
             cleaned = cleaned.rsplit("/", 1)[-1]
+
+        # Length check first — cheapest rejection for payload-stuffing.
+        if not cleaned or len(cleaned) > _MAX_WORK_ID_LENGTH:
+            raise ValueError(f"Invalid OpenAlex work_id: {value!r}")
+
+        # Forbid-list before regex so the failure mode is explicit on
+        # the worst payloads even if someone later loosens the regex.
+        if any(substr in cleaned for substr in _WORK_ID_FORBIDDEN_SUBSTRINGS):
+            raise ValueError(f"Invalid OpenAlex work_id: {value!r}")
+
+        if not _WORK_ID_PATTERN.match(cleaned):
+            raise ValueError(f"Invalid OpenAlex work_id: {value!r}")
+
         return cleaned
 
     @classmethod
     def _extract_id(cls, payload: dict[str, Any]) -> Optional[str]:
-        """Return the bare OpenAlex id from a work payload, or None."""
+        """Return the bare OpenAlex id from a work payload, or None.
+
+        Returns ``None`` when ``id`` is absent OR when the value fails
+        the strict ``_normalize_work_id`` validator. This shields the
+        caller (``_payload_to_node`` / hydration map building) from
+        upstream payloads carrying malformed or hostile ids — those
+        rows are silently dropped rather than poisoning the URL builder.
+        """
         raw = payload.get("id")
         if not raw:
             return None
-        return cls._normalize_work_id(str(raw))
+        try:
+            return cls._normalize_work_id(str(raw))
+        except ValueError:
+            return None
 
     def _payload_to_node(self, payload: dict[str, Any]) -> CitationNode:
         """Convert an OpenAlex work payload into a :class:`CitationNode`."""

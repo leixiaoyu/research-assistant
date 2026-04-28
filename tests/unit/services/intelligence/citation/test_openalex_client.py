@@ -232,8 +232,68 @@ def test_normalize_handles_bare_id():
     assert OpenAlexCitationClient._normalize_work_id("W123") == "W123"
 
 
-def test_normalize_handles_empty_string():
-    assert OpenAlexCitationClient._normalize_work_id("") == ""
+def test_normalize_rejects_empty_string():
+    with pytest.raises(ValueError, match="Invalid OpenAlex work_id"):
+        OpenAlexCitationClient._normalize_work_id("")
+
+
+def test_normalize_rejects_traversal():
+    with pytest.raises(ValueError, match="Invalid OpenAlex work_id"):
+        OpenAlexCitationClient._normalize_work_id("W123/../../admin")
+
+
+def test_normalize_rejects_url_scheme_smuggled():
+    # The rsplit defang strips the trailing segment, so this id stays
+    # ``W1`` and would normally pass — that's defense in depth: the
+    # forbid-list catches payloads that survive defang. We test the
+    # path-traversal payload above; the URL-scheme payload after
+    # defang is verified by ``test_normalize_strips_url_prefix``.
+    # Here we ensure that a payload WITHOUT a slash but with an
+    # embedded scheme still gets rejected.
+    with pytest.raises(ValueError, match="Invalid OpenAlex work_id"):
+        OpenAlexCitationClient._normalize_work_id("W1://evil")
+
+
+def test_normalize_rejects_query_string():
+    with pytest.raises(ValueError, match="Invalid OpenAlex work_id"):
+        OpenAlexCitationClient._normalize_work_id("W1?evil=1")
+
+
+def test_normalize_rejects_fragment():
+    with pytest.raises(ValueError, match="Invalid OpenAlex work_id"):
+        OpenAlexCitationClient._normalize_work_id("W1#frag")
+
+
+def test_normalize_rejects_oversized():
+    with pytest.raises(ValueError, match="Invalid OpenAlex work_id"):
+        OpenAlexCitationClient._normalize_work_id("W" + "1" * 64)
+
+
+def test_normalize_rejects_lowercase_w():
+    with pytest.raises(ValueError, match="Invalid OpenAlex work_id"):
+        OpenAlexCitationClient._normalize_work_id("w123")
+
+
+def test_normalize_rejects_non_digit_suffix():
+    with pytest.raises(ValueError, match="Invalid OpenAlex work_id"):
+        OpenAlexCitationClient._normalize_work_id("Wabc")
+
+
+def test_normalize_accepts_canonical_W_id():
+    assert OpenAlexCitationClient._normalize_work_id("W12345") == "W12345"
+
+
+def test_normalize_strips_openalex_prefix():
+    assert (
+        OpenAlexCitationClient._normalize_work_id("https://openalex.org/W2741809807")
+        == "W2741809807"
+    )
+
+
+def test_normalize_rejects_only_slash():
+    # ``rsplit("/", 1)[-1]`` returns "" → length-zero rejection
+    with pytest.raises(ValueError, match="Invalid OpenAlex work_id"):
+        OpenAlexCitationClient._normalize_work_id("/")
 
 
 def test_extract_id_returns_none_for_missing_id():
@@ -243,6 +303,11 @@ def test_extract_id_returns_none_for_missing_id():
 def test_extract_id_returns_normalized_id():
     payload = {"id": "https://openalex.org/W42"}
     assert OpenAlexCitationClient._extract_id(payload) == "W42"
+
+
+def test_extract_id_returns_none_for_invalid_id():
+    payload = {"id": "https://openalex.org/../admin"}
+    assert OpenAlexCitationClient._extract_id(payload) is None
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +523,30 @@ async def test_get_references_referenced_works_field_missing(client):
         _, related, _ = await client.get_references("W1", max_results=5)
 
     assert related == []
+
+
+@pytest.mark.asyncio
+async def test_get_references_skips_invalid_referenced_work_url(client):
+    """Hostile/malformed entries inside ``referenced_works`` are dropped
+    silently so a single bad reference does not poison the batch (#C1)."""
+    seed = dict(
+        SEED_PAYLOAD,
+        referenced_works=[
+            "https://openalex.org/../admin",  # traversal — rejected
+            "https://openalex.org/W101",
+        ],
+    )
+
+    async def fake_http_get(url, params):
+        if url.endswith("/works/W1"):
+            return seed
+        return {"results": [_hydrated_ref("W101")]}
+
+    with patch.object(client, "_http_get", side_effect=fake_http_get):
+        _, related, _ = await client.get_references("W1", max_results=5)
+
+    assert len(related) == 1
+    assert related[0].external_ids["openalex"] == "W101"
 
 
 @pytest.mark.asyncio
@@ -860,11 +949,39 @@ def test_serialize_then_deserialize_roundtrip():
 # ---------------------------------------------------------------------------
 
 
-def _mock_aiohttp_response(status, json_body=None, text_body="oops"):
+def _mock_aiohttp_response(
+    status,
+    json_body=None,
+    text_body="oops",
+    headers=None,
+    content_length=None,
+    raw_body=None,
+):
+    """Build an async-context-manager-compatible mocked response.
+
+    ``json_body`` is the dict the production code is expected to receive
+    after ``json.loads`` of the streamed body. We serialise it to bytes
+    and hand them out via the mocked ``response.content.read`` (the
+    production code now reads bytes itself rather than calling
+    ``.json()`` directly — see #C3).
+
+    ``raw_body`` lets a caller pass exact bytes (e.g. to simulate an
+    oversized chunked-transfer payload that exceeds the cap).
+    """
+    import json as _json
+
     resp = MagicMock()
     resp.status = status
     resp.json = AsyncMock(return_value=json_body)
     resp.text = AsyncMock(return_value=text_body)
+    resp.headers = headers if headers is not None else {}
+    resp.content_length = content_length
+
+    if raw_body is None:
+        raw_body = b"" if json_body is None else _json.dumps(json_body).encode("utf-8")
+    content = MagicMock()
+    content.read = AsyncMock(return_value=raw_body)
+    resp.content = content
 
     cm = MagicMock()
     cm.__aenter__ = AsyncMock(return_value=resp)
@@ -964,6 +1081,236 @@ async def test_http_get_wraps_timeout_as_api_error(client):
     with patch("aiohttp.ClientSession", return_value=session_cm):
         with pytest.raises(APIError, match="timed out"):
             await client._http_get("http://x", {})
+
+
+# ---------------------------------------------------------------------------
+# #C2 — redirect handling (allow_redirects=False)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+async def test_http_get_rejects_redirect(client, status):
+    cm = _mock_aiohttp_response(
+        status,
+        text_body="moved",
+        headers={"Location": "https://attacker.example/leak"},
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(APIError, match="unexpected redirect"):
+            await client._http_get("http://x", {})
+
+
+@pytest.mark.asyncio
+async def test_http_get_passes_allow_redirects_false(client):
+    cm = _mock_aiohttp_response(200, json_body={})
+    p, session = _patch_session(cm)
+    with p:
+        await client._http_get("http://x", {})
+    _, kwargs = session.get.call_args
+    assert kwargs["allow_redirects"] is False
+
+
+@pytest.mark.asyncio
+async def test_http_get_redirect_message_neutralises_crlf(client):
+    """Hostile Location header bytes must not inject newlines into our message."""
+    cm = _mock_aiohttp_response(
+        302,
+        text_body="moved",
+        headers={"Location": "evil\r\nX-Injected: 1"},
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(APIError) as exc_info:
+            await client._http_get("http://x", {})
+    msg = str(exc_info.value)
+    # ``repr`` renders \r\n as the literal backslash-r-backslash-n,
+    # so the raw control characters must not appear in the message.
+    assert "\r" not in msg
+    assert "\n" not in msg
+    assert "\\r\\n" in msg
+
+
+@pytest.mark.asyncio
+async def test_http_get_redirect_message_caps_location_length(client):
+    long_loc = "X" * 500
+    cm = _mock_aiohttp_response(302, headers={"Location": long_loc})
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(APIError) as exc_info:
+            await client._http_get("http://x", {})
+    msg = str(exc_info.value)
+    # 200-char cap on the slice + repr quoting overhead
+    assert "X" * 201 not in msg
+
+
+# ---------------------------------------------------------------------------
+# #C3 — response size cap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_http_get_rejects_large_advertised_content_length(client):
+    cm = _mock_aiohttp_response(
+        200,
+        json_body={"ok": True},
+        content_length=26 * 1024 * 1024,
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(APIError, match="response too large"):
+            await client._http_get("http://x", {})
+
+
+@pytest.mark.asyncio
+async def test_http_get_rejects_oversized_streamed_body(client):
+    # Server lies about content_length (or omits it), but streams more
+    # bytes than the cap. We must reject without calling json.loads.
+    huge = b"{" + (b"x" * (25 * 1024 * 1024 + 1))
+    cm = _mock_aiohttp_response(200, raw_body=huge, content_length=None)
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(APIError, match="exceeded"):
+            await client._http_get("http://x", {})
+
+
+@pytest.mark.asyncio
+async def test_http_get_accepts_body_within_cap(client):
+    cm = _mock_aiohttp_response(200, json_body={"ok": True}, content_length=100)
+    p, _ = _patch_session(cm)
+    with p:
+        body = await client._http_get("http://x", {})
+    assert body == {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# #C4 — Retry-After parsing on 429
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_429_with_numeric_retry_after(client):
+    cm = _mock_aiohttp_response(429, headers={"Retry-After": "120"})
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(RateLimitError) as exc_info:
+            await client._http_get("http://x", {})
+    assert exc_info.value.retry_after == pytest.approx(120.0)
+
+
+@pytest.mark.asyncio
+async def test_429_with_httpdate_retry_after(client):
+    # Date in the future → positive delta clamped to >= 0
+    cm = _mock_aiohttp_response(
+        429,
+        headers={"Retry-After": "Wed, 21 Oct 2099 07:28:00 GMT"},
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(RateLimitError) as exc_info:
+            await client._http_get("http://x", {})
+    assert exc_info.value.retry_after is not None
+    assert exc_info.value.retry_after > 0
+
+
+@pytest.mark.asyncio
+async def test_429_with_httpdate_no_timezone_treated_as_utc(client):
+    # No tz token; ``parsedate_to_datetime`` returns naive datetime.
+    # The client must coerce to UTC instead of raising TypeError on
+    # subtraction.
+    cm = _mock_aiohttp_response(
+        429,
+        headers={"Retry-After": "Wed, 21 Oct 2099 07:28:00"},
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(RateLimitError) as exc_info:
+            await client._http_get("http://x", {})
+    assert exc_info.value.retry_after is not None
+
+
+@pytest.mark.asyncio
+async def test_429_without_retry_after(client):
+    cm = _mock_aiohttp_response(429, headers={})
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(RateLimitError) as exc_info:
+            await client._http_get("http://x", {})
+    assert exc_info.value.retry_after is None
+
+
+@pytest.mark.asyncio
+async def test_429_with_unparsable_retry_after(client):
+    cm = _mock_aiohttp_response(429, headers={"Retry-After": "not-a-date"})
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(RateLimitError) as exc_info:
+            await client._http_get("http://x", {})
+    assert exc_info.value.retry_after is None
+
+
+@pytest.mark.asyncio
+async def test_429_with_negative_retry_after_clamped(client):
+    cm = _mock_aiohttp_response(429, headers={"Retry-After": "-30"})
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(RateLimitError) as exc_info:
+            await client._http_get("http://x", {})
+    assert exc_info.value.retry_after == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_429_with_past_httpdate_clamped(client):
+    cm = _mock_aiohttp_response(
+        429, headers={"Retry-After": "Wed, 21 Oct 1970 07:28:00 GMT"}
+    )
+    p, _ = _patch_session(cm)
+    with p:
+        with pytest.raises(RateLimitError) as exc_info:
+            await client._http_get("http://x", {})
+    assert exc_info.value.retry_after == pytest.approx(0.0)
+
+
+def test_parse_retry_after_none_returns_none():
+    assert OpenAlexCitationClient._parse_retry_after(None) is None
+
+
+def test_parse_retry_after_empty_returns_none():
+    assert OpenAlexCitationClient._parse_retry_after("   ") is None
+
+
+# ---------------------------------------------------------------------------
+# #C1 — end-to-end: get_references quotes/validates the work_id in the URL
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_references_rejects_hostile_paper_id(client):
+    """Crafted traversal payload must be rejected before any HTTP call."""
+    # ``_normalize_work_id`` raises before we ever build a URL.
+    with pytest.raises(ValueError, match="Invalid OpenAlex work_id"):
+        await client.get_references("../admin")
+
+
+@pytest.mark.asyncio
+async def test_get_references_url_uses_validated_id(client):
+    captured: list[str] = []
+
+    async def fake_http_get(url, params):
+        captured.append(url)
+        if url.endswith("/works/W1"):
+            return SEED_PAYLOAD
+        return {"results": [_hydrated_ref("W101")]}
+
+    with patch.object(client, "_http_get", side_effect=fake_http_get):
+        await client.get_references("W1", max_results=5)
+
+    # No suspicious characters in the URL we built.
+    assert any(u.endswith("/works/W1") for u in captured)
+    # No traversal smuggled in
+    for u in captured:
+        assert ".." not in u
 
 
 # ---------------------------------------------------------------------------

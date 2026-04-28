@@ -536,7 +536,7 @@ class SemanticScholarCitationClient:
         - HTTP-date (RFC 7231 §7.1.1.1), e.g.
           ``"Wed, 21 Oct 2015 07:28:00 GMT"``.
 
-        Returns ``None`` when the header is absent or unparseable;
+        Returns ``None`` when the header is absent or unparsable;
         callers should treat ``None`` as "no hint, use your own
         backoff" and never trust the value blindly (negative or
         far-future dates clamp to ``0.0``).

@@ -1329,8 +1329,15 @@ async def test_chunked_oversized_response_rejected_after_read(client):
 # ---------------------------------------------------------------------------
 
 
-def test_cache_key_differs_with_and_without_api_key(fast_limiter):
-    """Auth presence must change the cache key — never share slots."""
+def test_cache_key_differs_with_and_without_api_key(fast_limiter, monkeypatch):
+    """Auth presence must change the cache key — never share slots.
+
+    Explicitly clear ``SEMANTIC_SCHOLAR_API_KEY`` so the constructor's
+    env-var fallback (``api_key=None`` -> ``os.getenv(...)``) doesn't
+    silently authenticate the "anonymous" client when CI / a developer's
+    shell has the key set.
+    """
+    monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
     c_anon = SemanticScholarCitationClient(
         api_key=None, rate_limiter=fast_limiter, cache_dir=None
     )
@@ -1362,13 +1369,18 @@ def test_cache_key_does_not_leak_api_key_value(fast_limiter):
 
 @pytest.mark.asyncio
 async def test_authenticated_and_anonymous_clients_keep_separate_cache_slots(
-    tmp_path, fast_limiter
+    tmp_path, fast_limiter, monkeypatch
 ):
     """End-to-end: same paper, different auth context → separate slots.
 
     Both clients must be able to populate their own slot independently;
     a fetch by one must not satisfy the other.
+
+    Explicitly clear ``SEMANTIC_SCHOLAR_API_KEY`` so the constructor's
+    env-var fallback doesn't silently authenticate the "anonymous"
+    client when the test env has the key set.
     """
+    monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
     anon_seed = {**SEED_PAYLOAD, "title": "Anon-fetched"}
     auth_seed = {**SEED_PAYLOAD, "title": "Auth-fetched"}
 

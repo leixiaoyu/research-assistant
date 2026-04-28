@@ -46,7 +46,12 @@ from src.services.intelligence.citation.openalex_client import (
 from src.services.intelligence.citation.semantic_scholar_client import (
     SemanticScholarCitationClient,
 )
-from src.services.intelligence.models import GraphEdge, GraphNode, GraphStoreError
+from src.services.intelligence.models import (
+    GraphEdge,
+    GraphNode,
+    GraphStoreDuplicateError,
+    GraphStoreError,
+)
 from src.services.providers.base import APIError
 from src.storage.intelligence_graph import GraphStore
 
@@ -382,8 +387,11 @@ class CitationGraphBuilder:
 
         The recovery path exists so a re-run for the same seed (where
         the seed node already exists) does not fail the whole call.
-        Per-row inserts swallow ``GraphStoreError("Node already exists")``
-        and report any other failure into ``errors``.
+        Per-row inserts swallow :class:`GraphStoreDuplicateError` (typed
+        UNIQUE-constraint signal — see #S5) and report any other failure
+        into ``errors``. We deliberately avoid substring-matching on the
+        message text: SQLite's wording is not a stable contract and a
+        rephrase upstream would silently break this loop.
         """
         if not nodes:
             return 0
@@ -401,12 +409,11 @@ class CitationGraphBuilder:
                 try:
                     self.store.add_node(node.node_id, node.node_type, node.properties)
                     inserted += 1
+                except GraphStoreDuplicateError:
+                    # Idempotent re-run — typed signal, not an error.
+                    continue
                 except GraphStoreError as inner_exc:
-                    msg = str(inner_exc)
-                    if "already exists" in msg:
-                        # Idempotent re-run — not an error.
-                        continue
-                    errors.append(f"node {node.node_id}: {msg}")
+                    errors.append(f"node {node.node_id}: {inner_exc}")
             return inserted
 
     def _bulk_insert_edges(self, edges: list[GraphEdge], errors: list[str]) -> int:
@@ -433,9 +440,8 @@ class CitationGraphBuilder:
                         edge.properties,
                     )
                     inserted += 1
+                except GraphStoreDuplicateError:
+                    continue
                 except GraphStoreError as inner_exc:
-                    msg = str(inner_exc)
-                    if "already exists" in msg:
-                        continue
-                    errors.append(f"edge {edge.edge_id}: {msg}")
+                    errors.append(f"edge {edge.edge_id}: {inner_exc}")
             return inserted

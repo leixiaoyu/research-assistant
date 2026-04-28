@@ -22,6 +22,7 @@ from src.services.intelligence.models import (
     EdgeType,
     GraphEdge,
     GraphNode,
+    GraphStoreDuplicateError,
     GraphStoreError,
     NodeNotFoundError,
     NodeType,
@@ -492,7 +493,10 @@ class SQLiteGraphStore:
         except sqlite3.IntegrityError as e:
             conn.rollback()
             if "UNIQUE constraint failed" in str(e):
-                raise GraphStoreError(f"Node already exists: {node_id}")
+                # Typed signal so callers performing best-effort idempotent
+                # inserts can ``except GraphStoreDuplicateError`` instead of
+                # substring-matching on the message text.
+                raise GraphStoreDuplicateError(f"Node already exists: {node_id}")
             logger.error("node_add_integrity_error", node_id=node_id, error=str(e))
             raise GraphStoreError(f"Failed to add node: {e}")
         finally:
@@ -566,6 +570,13 @@ class SQLiteGraphStore:
                 count=len(rows),
                 error=str(e),
             )
+            # Distinguish duplicate-id collisions (typical re-run) from
+            # other constraint violations so the caller's recovery path
+            # can match on a typed exception (#S5).
+            if "UNIQUE constraint failed" in str(e):
+                raise GraphStoreDuplicateError(
+                    f"Failed to bulk insert nodes (duplicate node_id): {e}"
+                ) from e
             raise GraphStoreError(f"Failed to bulk insert nodes: {e}") from e
         finally:
             conn.close()
@@ -727,7 +738,8 @@ class SQLiteGraphStore:
                     f"Source or target node not found: {source_id}, {target_id}"
                 )
             if "UNIQUE constraint failed" in str(e):
-                raise GraphStoreError(f"Edge already exists: {edge_id}")
+                # Typed signal — see ``add_node`` for rationale.
+                raise GraphStoreDuplicateError(f"Edge already exists: {edge_id}")
             logger.error(
                 "edge_add_integrity_error",
                 edge_id=edge_id,
@@ -810,6 +822,13 @@ class SQLiteGraphStore:
             if "FOREIGN KEY constraint failed" in str(e):
                 raise ReferentialIntegrityError(
                     f"Bulk edge insert hit a missing source/target node: {e}"
+                ) from e
+            # Distinguish duplicate-id collisions from other constraint
+            # violations so the caller's recovery path can match on a
+            # typed exception (#S5).
+            if "UNIQUE constraint failed" in str(e):
+                raise GraphStoreDuplicateError(
+                    f"Failed to bulk insert edges (duplicate edge_id): {e}"
                 ) from e
             raise GraphStoreError(f"Failed to bulk insert edges: {e}") from e
         finally:

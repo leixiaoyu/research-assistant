@@ -33,6 +33,7 @@ from src.services.intelligence.citation.semantic_scholar_client import (
 )
 from src.services.intelligence.models import (
     EdgeType,
+    GraphStoreDuplicateError,
     GraphStoreError,
     NodeType,
 )
@@ -511,8 +512,9 @@ async def test_node_per_row_recovery_skips_duplicates_silently(
     builder, s2_client, store, monkeypatch
 ):
     """
-    Bulk insert fails, but per-row hits 'already exists' for some rows.
-    Those should NOT be reported as errors.
+    Bulk insert fails, but per-row hits ``GraphStoreDuplicateError`` for
+    some rows. Those should NOT be reported as errors (#S5: typed signal,
+    not substring match on the message).
     """
     seed = _node("s2", "seed1")
     ref = _node("s2", "ref1")
@@ -527,6 +529,62 @@ async def test_node_per_row_recovery_skips_duplicates_silently(
     # ref is new; seed dup
     assert result.nodes_added == 1
     assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_node_per_row_recovery_uses_typed_duplicate_exception(
+    builder, s2_client, store, monkeypatch
+):
+    """The recovery path catches ``GraphStoreDuplicateError`` even if the
+    message text wouldn't match the legacy ``"already exists"`` substring
+    — this pins the typed-exception contract from #S5."""
+    seed = _node("s2", "seed1")
+    s2_client.get_references.return_value = (seed, [], [])
+
+    def boom_batch(_nodes):
+        raise GraphStoreError("synthetic bulk failure")
+
+    call_count = {"n": 0}
+
+    def boom_row(node_id, node_type, properties):
+        call_count["n"] += 1
+        # Message intentionally lacks "already exists" — only the typed
+        # exception matters for the silent-skip contract.
+        raise GraphStoreDuplicateError(f"unique violation on {node_id}")
+
+    monkeypatch.setattr(store, "add_nodes_batch", boom_batch)
+    monkeypatch.setattr(store, "add_node", boom_row)
+
+    result = await builder.build_for_paper("seed1")
+
+    # No errors recorded — duplicates are skipped silently.
+    assert result.errors == []
+    assert result.nodes_added == 0
+    assert call_count["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_edge_per_row_recovery_uses_typed_duplicate_exception(
+    builder, s2_client, store, monkeypatch
+):
+    """Same as the node-side typed-exception pin, for edges."""
+    seed = _node("s2", "seed1")
+    ref = _node("s2", "ref1")
+    s2_client.get_references.return_value = (seed, [ref], [_edge(seed, ref)])
+
+    def boom_batch(_edges):
+        raise GraphStoreError("synthetic edge bulk failure")
+
+    def boom_row(*args, **kwargs):
+        raise GraphStoreDuplicateError("unique violation on edge")
+
+    monkeypatch.setattr(store, "add_edges_batch", boom_batch)
+    monkeypatch.setattr(store, "add_edge", boom_row)
+
+    result = await builder.build_for_paper("seed1")
+
+    assert result.errors == []
+    assert result.edges_added == 0
 
 
 @pytest.mark.asyncio

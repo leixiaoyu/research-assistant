@@ -26,6 +26,7 @@ from src.services.intelligence.models import (
     EdgeType,
     GraphEdge,
     GraphNode,
+    GraphStoreDuplicateError,
     GraphStoreError,
     NodeNotFoundError,
     NodeType,
@@ -123,10 +124,22 @@ class TestNodeOperations:
         assert node.properties == props
 
     def test_add_node_duplicate_raises(self, graph_store: SQLiteGraphStore) -> None:
-        """Test adding duplicate node raises error."""
+        """Test adding duplicate node raises typed duplicate error."""
         graph_store.add_node("paper:1", NodeType.PAPER, {})
 
-        with pytest.raises(GraphStoreError, match="already exists"):
+        # Typed signal — must be a ``GraphStoreDuplicateError`` (a
+        # subclass of ``GraphStoreError`` so existing handlers still
+        # match) and the message must still say "already exists" so
+        # any human-facing logs stay readable (#S5).
+        with pytest.raises(GraphStoreDuplicateError, match="already exists"):
+            graph_store.add_node("paper:1", NodeType.PAPER, {})
+
+    def test_add_node_duplicate_is_graph_store_error_subclass(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Existing ``except GraphStoreError`` handlers still catch dup errors."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        with pytest.raises(GraphStoreError):
             graph_store.add_node("paper:1", NodeType.PAPER, {})
 
     def test_get_node_exists(self, graph_store: SQLiteGraphStore) -> None:
@@ -272,12 +285,12 @@ class TestEdgeOperations:
             graph_store.add_edge("edge:1", "paper:1", "nonexistent", EdgeType.CITES, {})
 
     def test_add_edge_duplicate_raises(self, graph_store: SQLiteGraphStore) -> None:
-        """Test adding duplicate edge raises error."""
+        """Test adding duplicate edge raises typed duplicate error."""
         graph_store.add_node("paper:1", NodeType.PAPER, {})
         graph_store.add_node("paper:2", NodeType.PAPER, {})
         graph_store.add_edge("edge:1", "paper:1", "paper:2", EdgeType.CITES, {})
 
-        with pytest.raises(GraphStoreError, match="already exists"):
+        with pytest.raises(GraphStoreDuplicateError, match="already exists"):
             graph_store.add_edge("edge:1", "paper:1", "paper:2", EdgeType.CITES, {})
 
     def test_get_edge_exists(self, graph_store: SQLiteGraphStore) -> None:
@@ -1263,7 +1276,8 @@ class TestAddNodesBatch:
     def test_add_nodes_batch_atomic_rollback(
         self, graph_store: SQLiteGraphStore
     ) -> None:
-        """A duplicate node_id inside the batch rolls back the whole batch."""
+        """A duplicate node_id inside the batch rolls back the whole batch
+        and surfaces the typed ``GraphStoreDuplicateError`` (#S5)."""
         # Pre-existing node that will collide with one in the batch.
         graph_store.add_node("paper:dup", NodeType.PAPER, {})
         baseline_count = graph_store.get_node_count()
@@ -1274,7 +1288,7 @@ class TestAddNodesBatch:
             self._make_node("paper:new2"),
         ]
 
-        with pytest.raises(GraphStoreError, match="Failed to bulk insert nodes"):
+        with pytest.raises(GraphStoreDuplicateError, match="duplicate node_id"):
             graph_store.add_nodes_batch(batch)
 
         # No new nodes from the batch should have been inserted.
@@ -1283,12 +1297,54 @@ class TestAddNodesBatch:
         assert graph_store.get_node("paper:new2") is None
 
     def test_add_nodes_batch_chains_cause(self, graph_store: SQLiteGraphStore) -> None:
-        """The wrapped GraphStoreError chains the underlying IntegrityError."""
+        """The wrapped GraphStoreDuplicateError chains the IntegrityError."""
         graph_store.add_node("paper:dup", NodeType.PAPER, {})
         batch = [self._make_node("paper:dup")]
-        with pytest.raises(GraphStoreError) as exc_info:
+        with pytest.raises(GraphStoreDuplicateError) as exc_info:
             graph_store.add_nodes_batch(batch)
         assert isinstance(exc_info.value.__cause__, sqlite3.IntegrityError)
+
+    def test_add_nodes_batch_non_unique_error_falls_back_to_generic(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """A non-UNIQUE IntegrityError surfaces as the generic
+        ``GraphStoreError`` (not the duplicate subclass) so callers'
+        recovery loops do not silently swallow it (#S5)."""
+        batch = [self._make_node("paper:1")]
+
+        original_get_conn = graph_store._get_connection
+
+        class _ConnProxy:
+            def __init__(self, conn: sqlite3.Connection) -> None:
+                self._conn = conn
+
+            def __enter__(self):  # type: ignore[no-untyped-def]
+                return self._conn.__enter__()
+
+            def __exit__(self, *args):  # type: ignore[no-untyped-def]
+                return self._conn.__exit__(*args)
+
+            def executemany(self, sql: str, rows):  # type: ignore[no-untyped-def]
+                # Drive the non-UNIQUE branch — message shape mirrors
+                # what SQLite produces for a CHECK constraint failure.
+                raise sqlite3.IntegrityError("CHECK constraint failed: synthetic")
+
+            def execute(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+                return self._conn.execute(*args, **kwargs)
+
+            def close(self) -> None:
+                self._conn.close()
+
+        def get_conn() -> _ConnProxy:  # type: ignore[type-arg]
+            return _ConnProxy(original_get_conn())
+
+        with patch.object(graph_store, "_get_connection", side_effect=get_conn):
+            with pytest.raises(GraphStoreError) as exc_info:
+                graph_store.add_nodes_batch(batch)
+        # Must NOT be the duplicate subclass — the recovery loop relies
+        # on this distinction to surface unrecoverable errors.
+        assert not isinstance(exc_info.value, GraphStoreDuplicateError)
+        assert "Failed to bulk insert nodes" in str(exc_info.value)
 
     def test_add_nodes_batch_rejects_oversized_batch(
         self, graph_store: SQLiteGraphStore
@@ -1354,7 +1410,8 @@ class TestAddEdgesBatch:
     def test_add_edges_batch_atomic_rollback(
         self, graph_store: SQLiteGraphStore
     ) -> None:
-        """A duplicate edge_id inside the batch rolls back the whole batch."""
+        """A duplicate edge_id inside the batch rolls back the whole batch
+        and surfaces the typed ``GraphStoreDuplicateError`` (#S5)."""
         graph_store.add_node("paper:1", NodeType.PAPER, {})
         graph_store.add_node("paper:2", NodeType.PAPER, {})
         graph_store.add_edge("e:dup", "paper:1", "paper:2", EdgeType.CITES, {})
@@ -1366,7 +1423,7 @@ class TestAddEdgesBatch:
             self._make_edge("e:new2", "paper:1", "paper:2"),
         ]
 
-        with pytest.raises(GraphStoreError, match="Failed to bulk insert edges"):
+        with pytest.raises(GraphStoreDuplicateError, match="duplicate edge_id"):
             graph_store.add_edges_batch(batch)
 
         # None of the new edges should be inserted.
@@ -1396,15 +1453,55 @@ class TestAddEdgesBatch:
         assert graph_store.get_edge("e:ok") is None
 
     def test_add_edges_batch_chains_cause(self, graph_store: SQLiteGraphStore) -> None:
-        """The wrapped error chains the underlying IntegrityError as __cause__."""
+        """The wrapped duplicate error chains the IntegrityError as __cause__."""
         graph_store.add_node("paper:1", NodeType.PAPER, {})
         graph_store.add_node("paper:2", NodeType.PAPER, {})
         graph_store.add_edge("e:dup", "paper:1", "paper:2", EdgeType.CITES, {})
-        with pytest.raises(GraphStoreError) as exc_info:
+        with pytest.raises(GraphStoreDuplicateError) as exc_info:
             graph_store.add_edges_batch(
                 [self._make_edge("e:dup", "paper:1", "paper:2")]
             )
         assert isinstance(exc_info.value.__cause__, sqlite3.IntegrityError)
+
+    def test_add_edges_batch_non_unique_non_fk_error_falls_back_to_generic(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """A non-UNIQUE non-FK IntegrityError surfaces as the generic
+        ``GraphStoreError`` (not the duplicate subclass) so callers'
+        recovery loops do not silently swallow it (#S5)."""
+        graph_store.add_node("paper:1", NodeType.PAPER, {})
+        graph_store.add_node("paper:2", NodeType.PAPER, {})
+        batch = [self._make_edge("e:1", "paper:1", "paper:2")]
+
+        original_get_conn = graph_store._get_connection
+
+        class _ConnProxy:
+            def __init__(self, conn: sqlite3.Connection) -> None:
+                self._conn = conn
+
+            def __enter__(self):  # type: ignore[no-untyped-def]
+                return self._conn.__enter__()
+
+            def __exit__(self, *args):  # type: ignore[no-untyped-def]
+                return self._conn.__exit__(*args)
+
+            def executemany(self, sql: str, rows):  # type: ignore[no-untyped-def]
+                raise sqlite3.IntegrityError("CHECK constraint failed: synthetic")
+
+            def execute(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+                return self._conn.execute(*args, **kwargs)
+
+            def close(self) -> None:
+                self._conn.close()
+
+        def get_conn() -> _ConnProxy:  # type: ignore[type-arg]
+            return _ConnProxy(original_get_conn())
+
+        with patch.object(graph_store, "_get_connection", side_effect=get_conn):
+            with pytest.raises(GraphStoreError) as exc_info:
+                graph_store.add_edges_batch(batch)
+        assert not isinstance(exc_info.value, GraphStoreDuplicateError)
+        assert "Failed to bulk insert edges" in str(exc_info.value)
 
     def test_add_edges_batch_rejects_oversized_batch(
         self, graph_store: SQLiteGraphStore

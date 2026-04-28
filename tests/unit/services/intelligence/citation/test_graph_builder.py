@@ -58,7 +58,11 @@ def temp_db():
     yield path
     try:
         path.unlink()
-    except FileNotFoundError:  # pragma: no cover - belt-and-suspenders
+    except FileNotFoundError:
+        # Belt-and-suspenders: fixture cleanup races against rare path
+        # mutations in tests. No pragma — let coverage report it
+        # honestly; if it's truly unreachable the project's pragma
+        # audit will flag it (#N1).
         pass
 
 
@@ -371,8 +375,12 @@ async def test_both_directions_success(builder, s2_client, store):
 
 
 @pytest.mark.asyncio
-async def test_both_directions_mixed_providers(builder, s2_client, oa_client):
-    """OUT succeeds via S2, IN falls back to OpenAlex → provider='both'."""
+async def test_both_directions_mixed_providers(builder, s2_client, oa_client, store):
+    """OUT succeeds via S2, IN falls back to OpenAlex → provider='both'.
+
+    Also pins (#N3) that BOTH seed rows actually land in the store —
+    without the second seed, the IN-side edges would be orphans
+    referencing a missing target node."""
     seed = _node("s2", "seed1")
     refs = [_node("s2", "ref1")]
     s2_client.get_references.return_value = (seed, refs, [_edge(seed, refs[0])])
@@ -392,6 +400,14 @@ async def test_both_directions_mixed_providers(builder, s2_client, oa_client):
     # OUT seed + 1 ref + IN seed (different id) + 1 citer = 4
     assert result.nodes_added == 4
     assert result.edges_added == 2
+
+    # Both seed nodes must actually exist in the store (#N3) — counting
+    # is not enough; orphaned IN-side edges would otherwise reference
+    # a missing target node.
+    assert store.get_node(seed.paper_id) is not None
+    assert store.get_node(oa_seed.paper_id) is not None
+    assert store.get_node(refs[0].paper_id) is not None
+    assert store.get_node(citers[0].paper_id) is not None
 
 
 @pytest.mark.asyncio

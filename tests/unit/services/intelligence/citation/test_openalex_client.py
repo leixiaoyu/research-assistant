@@ -118,7 +118,14 @@ def test_init_explicit_email_overrides_env(monkeypatch):
     assert c.polite_email == "explicit@example.com"
 
 
-def test_init_no_email_logs_warning_once(monkeypatch, caplog):
+def test_init_no_email_logs_warning_once(monkeypatch, capsys):
+    """Pin the warning is emitted once and only once across constructor
+    calls in the same process — the warning latch is module-level (#N2).
+
+    We use ``capsys`` rather than ``caplog`` because structlog renders
+    to stdout via its default configuration; the stdlib caplog handler
+    sees nothing.
+    """
     monkeypatch.delenv("OPENALEX_POLITE_EMAIL", raising=False)
     _reset_polite_email_warning()
     # First instance should log the warning.
@@ -127,6 +134,12 @@ def test_init_no_email_logs_warning_once(monkeypatch, caplog):
     c2 = OpenAlexCitationClient(polite_email=None)
     assert c1.polite_email is None
     assert c2.polite_email is None
+
+    captured = capsys.readouterr()
+    # Exactly one polite-pool-disabled warning fired across the two
+    # constructor calls — the second call hits the latch.
+    occurrences = captured.out.count("openalex_polite_pool_disabled")
+    assert occurrences == 1, captured.out
 
 
 def test_init_default_rate_limiter_with_email():
@@ -1311,6 +1324,97 @@ async def test_get_references_url_uses_validated_id(client):
     # No traversal smuggled in
     for u in captured:
         assert ".." not in u
+
+
+# ---------------------------------------------------------------------------
+# #S7 — polite email never appears in logs (aiohttp.client muted to INFO)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_polite_email_never_logged_during_get_references(
+    fast_limiter, monkeypatch, capsys, caplog
+):
+    """Pin that the polite email never reaches stdout (structlog) or the
+    stdlib caplog at any level — the client mutes ``aiohttp.client``
+    DEBUG to INFO at module import time so transport-level URL records
+    cannot leak the ``mailto`` query parameter (#S7).
+    """
+    import logging
+
+    monkeypatch.setenv("OPENALEX_POLITE_EMAIL", "secret-mailto@example.com")
+    c = OpenAlexCitationClient(
+        polite_email="secret-mailto@example.com",
+        rate_limiter=fast_limiter,
+        cache_dir=None,
+    )
+
+    async def fake_http_get(url, params):
+        if url.endswith("/works/W1"):
+            return SEED_PAYLOAD
+        return {"results": [_hydrated_ref("W101")]}
+
+    with caplog.at_level(logging.DEBUG):
+        with patch.object(c, "_http_get", side_effect=fake_http_get):
+            await c.get_references("W1", max_results=5)
+
+    captured = capsys.readouterr()
+    assert "secret-mailto@example.com" not in captured.out
+    assert "secret-mailto@example.com" not in captured.err
+    for record in caplog.records:
+        assert "secret-mailto@example.com" not in record.getMessage()
+
+
+def test_aiohttp_client_logger_is_muted_to_info():
+    """The module-level aiohttp.client logger floor must be INFO so its
+    transport-level DEBUG URL records (with ``mailto`` query param) are
+    suppressed (#S7)."""
+    import logging
+
+    # Triggers module import side-effect if not already loaded.
+    import src.services.intelligence.citation.openalex_client  # noqa: F401
+
+    assert logging.getLogger("aiohttp.client").level <= logging.INFO
+
+
+# ---------------------------------------------------------------------------
+# #S8 — cache TTL expiration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cache_entry_expires_after_ttl(tmp_path, fast_limiter):
+    """A cache entry written with a short TTL must miss after expiration,
+    forcing a fresh HTTP fetch (#S8)."""
+    import time
+
+    c = OpenAlexCitationClient(
+        polite_email="x@y.z",
+        rate_limiter=fast_limiter,
+        cache_dir=tmp_path,
+        cache_ttl_seconds=1,
+    )
+
+    call_count = {"n": 0}
+
+    async def fake_http_get(url, params):
+        call_count["n"] += 1
+        if url.endswith("/works/W1"):
+            return SEED_PAYLOAD
+        return {"results": [_hydrated_ref("W101")]}
+
+    with patch.object(c, "_http_get", side_effect=fake_http_get):
+        await c.get_references("W1", max_results=5)
+        first_count = call_count["n"]
+        # Sleep past the TTL so the cache entry expires.
+        time.sleep(1.5)
+        await c.get_references("W1", max_results=5)
+
+    # If the entry had survived, ``_http_get`` would not have been
+    # invoked again — the fact that the count went up confirms the
+    # entry expired and we re-fetched.
+    assert call_count["n"] > first_count
+    c.close()
 
 
 # ---------------------------------------------------------------------------

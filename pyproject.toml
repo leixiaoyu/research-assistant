@@ -82,6 +82,20 @@ addopts = [
 # Tests use explicit @pytest.mark.asyncio markers; pin to strict so a
 # missing marker fails fast rather than silently skipping coroutine tests.
 asyncio_mode = "strict"
+# Migrated from the legacy pytest.ini (deleted) so this is the single
+# source of truth for pytest configuration. Without these, the strict
+# `--strict-markers` config fails for the integration/benchmark markers
+# below, and we'd be flooded by Google API deprecation warnings on every
+# run.
+filterwarnings = [
+    "ignore::FutureWarning:google.api_core.*:",
+    "ignore::FutureWarning:google.generativeai.*:",
+    "ignore::DeprecationWarning:google.generativeai.*:",
+]
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "benchmark: marks tests as performance benchmarks (deselect with '-m \"not benchmark\"')",
+]
 
 [tool.coverage.run]
 source = ["src"]

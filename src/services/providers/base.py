@@ -64,7 +64,7 @@ class DiscoveryProvider(ABC):
             APIError: If search fails
             RateLimitError: If rate limit exceeded
         """
-        pass  # pragma: no cover
+        pass
 
     @abstractmethod
     def validate_query(self, query: str) -> str:
@@ -79,16 +79,16 @@ class DiscoveryProvider(ABC):
         Raises:
             ValueError: If query contains invalid syntax or malicious patterns
         """
-        pass  # pragma: no cover
+        pass
 
     @property
     @abstractmethod
     def name(self) -> str:
         """Provider name for logging and identification"""
-        pass  # pragma: no cover
+        pass
 
     @property
     @abstractmethod
     def requires_api_key(self) -> bool:
         """Whether this provider requires an API key"""
-        pass  # pragma: no cover
+        pass

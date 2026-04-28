@@ -1440,7 +1440,7 @@ def test_rate_limit_error_default_retry_after_is_none():
 
 
 def test_rate_limit_error_accepts_retry_after():
-    """``retry_after`` keyword arg is preserved on the exception (#N2).
+    """``retry_after`` keyword arg is preserved on the exception (#SR-9.2).
 
     This is the construction path used by ``_http_get`` after parsing
     a numeric or HTTP-date Retry-After header. The retry orchestrator

@@ -32,8 +32,10 @@ from src.services.intelligence.monitoring.arxiv_monitor import (
     ArxivMonitorResult,
 )
 from src.services.intelligence.monitoring.models import (
+    MonitoringPaperAudit,
     MonitoringPaperRecord,
     MonitoringRun,
+    MonitoringRunAudit,
     MonitoringRunStatus,
     ResearchSubscription,
     SubscriptionStatus,
@@ -49,8 +51,10 @@ from src.services.intelligence.monitoring.subscription_manager import (
 __all__ = [
     "ArxivMonitor",
     "ArxivMonitorResult",
+    "MonitoringPaperAudit",
     "MonitoringPaperRecord",
     "MonitoringRun",
+    "MonitoringRunAudit",
     "MonitoringRunRepository",
     "MonitoringRunStatus",
     "MonitoringRunner",

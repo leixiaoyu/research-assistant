@@ -43,6 +43,17 @@ do). The ``MonitoringRunner`` resolves the owning user from the
 subscription before calling :meth:`record_run` so per-user audit
 queries don't have to JOIN every read.
 
+Read-side type boundary
+-----------------------
+``record_run`` accepts the rich in-memory :class:`MonitoringRun`
+(produced by ``ArxivMonitor``). The read paths (``get_run``,
+``list_runs``) return the audit-only counterparts -- ``MonitoringRunAudit``
+plus per-paper ``MonitoringPaperAudit`` -- which carry exactly the
+columns the audit tables store. This separation prevents the
+``MonitoringPaperRecord(title=paper_id)`` placeholder fabrication
+that was flagged in PR #119 self-review #S6 (which would have
+caused Week 2's digest generator to render arXiv ids as titles).
+
 Concurrency model
 -----------------
 Same approach as ``SubscriptionManager``: each method opens a fresh
@@ -62,10 +73,10 @@ from typing import Iterator, Optional
 
 import structlog
 
-from src.services.intelligence.models.monitoring import PaperSource
 from src.services.intelligence.monitoring.models import (
-    MonitoringPaperRecord,
+    MonitoringPaperAudit,
     MonitoringRun,
+    MonitoringRunAudit,
     MonitoringRunStatus,
 )
 from src.storage.intelligence_graph.connection import open_connection
@@ -324,8 +335,18 @@ class MonitoringRunRepository:
     # ------------------------------------------------------------------
     # Reads
     # ------------------------------------------------------------------
-    def get_run(self, run_id: str) -> Optional[MonitoringRun]:
-        """Fetch a single run (with its paper records), or ``None``."""
+    # Read paths return the audit-only types (PR #119 review #S6) so
+    # consumers see exactly what the table stores -- no fabricated
+    # ``title=paper_id`` placeholders that would silently corrupt the
+    # downstream digest generator.
+    def get_run(self, run_id: str) -> Optional[MonitoringRunAudit]:
+        """Fetch a single run (with its paper records), or ``None``.
+
+        Returns a :class:`MonitoringRunAudit` carrying only the columns
+        actually stored in the audit tables -- callers that need richer
+        in-memory metadata (titles, abstracts, ...) should fetch from
+        the registry by ``paper_id``.
+        """
         with self._connect() as conn:
             cursor = conn.execute(
                 """
@@ -341,13 +362,13 @@ class MonitoringRunRepository:
             if row is None:
                 return None
             papers = self._fetch_papers(conn, run_id)
-        return self._row_to_run(row, papers)
+        return self._row_to_audit(row, papers)
 
     def list_runs(
         self,
         subscription_id: Optional[str] = None,
         limit: int = 50,
-    ) -> list[MonitoringRun]:
+    ) -> list[MonitoringRunAudit]:
         """List runs ordered by ``started_at DESC``.
 
         Args:
@@ -381,10 +402,10 @@ class MonitoringRunRepository:
                 tuple(params),
             )
             rows = cursor.fetchall()
-            runs: list[MonitoringRun] = []
+            runs: list[MonitoringRunAudit] = []
             for row in rows:
                 papers = self._fetch_papers(conn, row["run_id"])
-                runs.append(self._row_to_run(row, papers))
+                runs.append(self._row_to_audit(row, papers))
         return runs
 
     # ------------------------------------------------------------------
@@ -393,7 +414,7 @@ class MonitoringRunRepository:
     @staticmethod
     def _fetch_papers(
         conn: sqlite3.Connection, run_id: str
-    ) -> list[MonitoringPaperRecord]:
+    ) -> list[MonitoringPaperAudit]:
         cursor = conn.execute(
             """
             SELECT paper_id, registered, relevance_score, relevance_reasoning
@@ -403,32 +424,25 @@ class MonitoringRunRepository:
             """,
             (run_id,),
         )
-        records: list[MonitoringPaperRecord] = []
-        for row in cursor.fetchall():
-            records.append(
-                MonitoringPaperRecord(
-                    paper_id=row["paper_id"],
-                    # The DTO requires title; we only store paper_id at
-                    # the audit layer (titles live on the registry).
-                    # Use the paper_id as a placeholder so the model
-                    # round-trips without a JOIN.
-                    title=row["paper_id"],
-                    is_new=bool(row["registered"]),
-                    relevance_score=row["relevance_score"],
-                    relevance_reasoning=row["relevance_reasoning"],
-                )
+        return [
+            MonitoringPaperAudit(
+                paper_id=row["paper_id"],
+                registered=bool(row["registered"]),
+                relevance_score=row["relevance_score"],
+                relevance_reasoning=row["relevance_reasoning"],
             )
-        return records
+            for row in cursor.fetchall()
+        ]
 
     @staticmethod
-    def _row_to_run(
-        row: sqlite3.Row, papers: list[MonitoringPaperRecord]
-    ) -> MonitoringRun:
+    def _row_to_audit(
+        row: sqlite3.Row, papers: list[MonitoringPaperAudit]
+    ) -> MonitoringRunAudit:
         finished_iso = row["finished_at"]
-        return MonitoringRun(
+        return MonitoringRunAudit(
             run_id=row["run_id"],
             subscription_id=row["subscription_id"],
-            source=PaperSource.ARXIV,
+            user_id=row["user_id"],
             started_at=datetime.fromisoformat(row["started_at"]),
             finished_at=(
                 datetime.fromisoformat(finished_iso) if finished_iso else None

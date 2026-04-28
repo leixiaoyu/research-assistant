@@ -277,8 +277,11 @@ class TestRoundTrip:
         assert fetched.papers_new == 1
         # Papers come back ordered by paper_id ASC.
         assert [p.paper_id for p in fetched.papers] == ["2301.0001", "2301.0002"]
-        assert fetched.papers[0].is_new is True
-        assert fetched.papers[1].is_new is False
+        # Read path returns MonitoringPaperAudit (PR #119 #S6); the
+        # ``is_new`` flag on the rich record is persisted as
+        # ``registered`` in the audit type.
+        assert fetched.papers[0].registered is True
+        assert fetched.papers[1].registered is False
         assert fetched.papers[1].relevance_score == 0.85
         assert fetched.papers[1].relevance_reasoning == "strong match"
 

@@ -43,7 +43,8 @@ required.
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Optional
 
 import structlog
 
@@ -59,6 +60,10 @@ from src.services.intelligence.monitoring.run_repository import (
 from src.services.intelligence.monitoring.subscription_manager import (
     SubscriptionManager,
 )
+
+if TYPE_CHECKING:
+    from src.services.providers.arxiv import ArxivProvider
+    from src.services.registry.service import RegistryService
 
 logger = structlog.get_logger()
 
@@ -92,6 +97,53 @@ class MonitoringRunner:
         self._subscriptions = subscription_manager
         self._monitor = monitor
         self._run_repo = run_repo
+
+    @classmethod
+    def from_paths(
+        cls,
+        *,
+        db_path: Path,
+        registry: "RegistryService",
+        arxiv_provider: "ArxivProvider",
+    ) -> "MonitoringRunner":
+        """Convenience factory wiring the standard collaborators.
+
+        The Week-2 ``MonitoringCheckJob`` (#117) and any CLI / REST
+        surface that just has a ``db_path`` plus the shared
+        infrastructure handles (registry, arxiv provider) shouldn't
+        have to instantiate ``SubscriptionManager`` + ``ArxivMonitor`` +
+        ``MonitoringRunRepository`` by hand -- the facade promises a
+        one-liner. This classmethod is that one-liner.
+
+        Both subscription manager and run repo are eagerly initialized
+        so the caller doesn't have to remember the two-phase
+        construct-then-initialize idiom.
+
+        Args:
+            db_path: SQLite database file path. Must lie under one of
+                the approved storage roots (``data/``, ``cache/``, or
+                the system temp dir) -- enforced by
+                :func:`sanitize_storage_path` inside both
+                ``SubscriptionManager`` and ``MonitoringRunRepository``.
+            registry: The shared global ``RegistryService`` used by the
+                monitor for paper deduplication.
+            arxiv_provider: The shared ``ArxivProvider`` used by the
+                monitor to poll ArXiv.
+
+        Returns:
+            A fully-wired, initialized ``MonitoringRunner`` ready for
+            ``run_once()``.
+        """
+        sub_mgr = SubscriptionManager(db_path)
+        sub_mgr.initialize()
+        monitor = ArxivMonitor(provider=arxiv_provider, registry=registry)
+        repo = MonitoringRunRepository(db_path)
+        repo.initialize()
+        return cls(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+        )
 
     async def run_once(self, user_id: Optional[str] = None) -> list[MonitoringRun]:
         """Run one monitoring cycle across all active subscriptions.

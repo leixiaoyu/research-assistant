@@ -303,6 +303,78 @@ class MonitoringPaperRecord(BaseModel):
     )
 
 
+class MonitoringPaperAudit(BaseModel):
+    """Persisted audit fields for a paper seen in a monitoring run.
+
+    Distinct from :class:`MonitoringPaperRecord`, which carries the
+    richer in-memory metadata (``title``, ``url``, ``pdf_url``,
+    ``published_at``, ...) produced by ``ArxivMonitor``. The audit
+    type carries only the columns the ``monitoring_papers`` table
+    actually stores -- so the repository's read path doesn't have to
+    fabricate placeholder data (e.g. PR #119 reviewed
+    ``MonitoringPaperRecord(title=paper_id)`` aliasing, which would
+    cause Week 2's digest generator to render arXiv ids as titles).
+
+    Reviewed in PR #119 self-review #S6.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    paper_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=512,
+        description="Provider paper id (e.g. ArXiv id 2301.12345).",
+    )
+    registered: bool = Field(
+        default=False,
+        description=(
+            "True if the paper was newly registered with the global "
+            "PaperRegistry during this run. Mirrors the ``is_new`` "
+            "flag on ``MonitoringPaperRecord``."
+        ),
+    )
+    relevance_score: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Filled in by the Week 2 RelevanceScorer.",
+    )
+    relevance_reasoning: Optional[str] = Field(
+        default=None,
+        max_length=4096,
+        description="Filled in by the Week 2 RelevanceScorer.",
+    )
+
+
+class MonitoringRunAudit(BaseModel):
+    """Persisted audit-only view of a ``MonitoringRun`` (PR #119 #S6).
+
+    The repository returns this from ``get_run`` / ``list_runs`` instead
+    of the in-memory :class:`MonitoringRun`, so callers see only the
+    columns the audit tables actually stored. Avoids the
+    ``MonitoringPaperRecord(title=paper_id)`` fabrication that the
+    self-review flagged as silent contract corruption.
+
+    Carries the same ``user_id`` denormalization that the table uses,
+    so per-user audit consumers (digest generator, future REST/CLI)
+    don't need a JOIN to ``subscriptions`` for the common case.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(..., min_length=1, max_length=64)
+    subscription_id: str = Field(..., min_length=1, max_length=64)
+    user_id: str = Field(..., min_length=1, max_length=64)
+    started_at: datetime = Field(...)
+    finished_at: Optional[datetime] = Field(default=None)
+    status: MonitoringRunStatus = Field(...)
+    papers_seen: int = Field(default=0, ge=0)
+    papers_new: int = Field(default=0, ge=0)
+    error: Optional[str] = Field(default=None, max_length=2000)
+    papers: list[MonitoringPaperAudit] = Field(default_factory=list)
+
+
 class MonitoringRun(BaseModel):
     """Audit record for one execution of the monitor.
 

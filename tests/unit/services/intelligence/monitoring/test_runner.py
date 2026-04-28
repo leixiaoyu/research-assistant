@@ -120,6 +120,72 @@ def _result_for(
 
 
 # ---------------------------------------------------------------------------
+# Factory: from_paths
+# ---------------------------------------------------------------------------
+
+
+class TestFromPathsFactory:
+    """Test ``MonitoringRunner.from_paths`` (PR #119 #S7).
+
+    Verifies that the convenience factory wires SubscriptionManager,
+    ArxivMonitor, and MonitoringRunRepository correctly so the Week-2
+    job can construct + run a complete cycle in a single call.
+    """
+
+    @pytest.mark.asyncio
+    async def test_from_paths_constructs_full_runner(
+        self, tmp_path  # type: ignore[no-untyped-def]
+    ) -> None:
+        """A from_paths-constructed runner should run_once cleanly
+        against an empty database and return an empty list (no
+        subscriptions registered yet).
+        """
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
+
+        # Use a path inside the system temp dir (one of the approved
+        # storage roots for sanitize_storage_path).
+        db_path = tmp_path / "monitoring.db"
+        registry = MagicMock()  # ArxivMonitor only touches it on .check
+        provider = MagicMock()  # ditto
+
+        runner = MonitoringRunner.from_paths(
+            db_path=db_path,
+            registry=registry,
+            arxiv_provider=provider,
+        )
+        # No subscriptions persisted -> empty cycle.
+        runs = await runner.run_once()
+        assert runs == []
+
+    def test_from_paths_returns_initialized_components(
+        self, tmp_path  # type: ignore[no-untyped-def]
+    ) -> None:
+        """Factory must initialize both the SubscriptionManager and the
+        MonitoringRunRepository so the caller doesn't have to remember
+        the construct-then-initialize idiom.
+        """
+        from src.services.intelligence.monitoring.run_repository import (
+            MonitoringRunRepository,
+        )
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
+        from src.services.intelligence.monitoring.subscription_manager import (
+            SubscriptionManager,
+        )
+
+        db_path = tmp_path / "init.db"
+        runner = MonitoringRunner.from_paths(
+            db_path=db_path,
+            registry=MagicMock(),
+            arxiv_provider=MagicMock(),
+        )
+        assert isinstance(runner._subscriptions, SubscriptionManager)
+        assert isinstance(runner._run_repo, MonitoringRunRepository)
+        # Both are initialized -- internal flag is the cheapest check.
+        assert runner._subscriptions._initialized is True
+        assert runner._run_repo._initialized is True
+
+
+# ---------------------------------------------------------------------------
 # Empty input
 # ---------------------------------------------------------------------------
 

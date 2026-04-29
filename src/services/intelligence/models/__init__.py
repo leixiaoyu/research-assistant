@@ -23,6 +23,7 @@ Submodules:
 
 from src.services.intelligence.models.exceptions import (
     EdgeNotFoundError,
+    GraphStoreDuplicateError,
     GraphStoreError,
     NodeNotFoundError,
     OptimisticLockError,
@@ -45,6 +46,7 @@ __all__ = [
     "ENTITY_NAME_PATTERN",
     # Exceptions
     "GraphStoreError",
+    "GraphStoreDuplicateError",
     "NodeNotFoundError",
     "EdgeNotFoundError",
     "OptimisticLockError",

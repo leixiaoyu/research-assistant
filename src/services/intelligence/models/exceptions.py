@@ -6,7 +6,8 @@ Hierarchy:
         └── GraphStoreError
                 ├── NodeNotFoundError
                 ├── EdgeNotFoundError
-                └── ReferentialIntegrityError
+                ├── ReferentialIntegrityError
+                └── GraphStoreDuplicateError
 
     Exception
         └── OptimisticLockError  (concurrent-modification signal)
@@ -14,11 +15,31 @@ Hierarchy:
 ``OptimisticLockError`` is intentionally NOT a subclass of
 ``GraphStoreError`` so callers can distinguish "operation truly failed"
 from "operation should be retried with fresh data".
+
+``GraphStoreDuplicateError`` is a typed signal for UNIQUE-constraint
+violations. Callers performing best-effort idempotent inserts (e.g. the
+citation graph builder's per-row recovery path) should ``except`` this
+specifically rather than substring-matching on the underlying message —
+SQLite's wording is not a stable contract.
 """
 
 
 class GraphStoreError(Exception):
     """Base exception for graph store operations."""
+
+    pass
+
+
+class GraphStoreDuplicateError(GraphStoreError):
+    """Raised when an insert hits a UNIQUE constraint (duplicate id).
+
+    This is a *typed* signal callers can match on instead of inspecting
+    error message strings — SQLite's ``IntegrityError`` text is not a
+    stable contract and would silently break per-row recovery loops if
+    the underlying driver ever rephrased it. Backends other than
+    SQLite (e.g. a future Neo4j store) raise this same type so the
+    builder layer stays storage-agnostic.
+    """
 
     pass
 

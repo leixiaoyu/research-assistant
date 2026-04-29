@@ -276,7 +276,7 @@ class MonitoringPaperRecord(BaseModel):
     paper_id: str = Field(
         ...,
         min_length=1,
-        max_length=128,
+        max_length=512,
         description="Provider paper id (e.g. ArXiv id 2301.12345).",
     )
     title: str = Field(..., min_length=1, max_length=1024)
@@ -298,7 +298,7 @@ class MonitoringPaperRecord(BaseModel):
     )
     relevance_reasoning: Optional[str] = Field(
         default=None,
-        max_length=1000,
+        max_length=4096,
         description="Filled in by the Week 2 RelevanceScorer.",
     )
 
@@ -316,9 +316,25 @@ class MonitoringPaperAudit(BaseModel):
     cause Week 2's digest generator to render arXiv ids as titles).
 
     Reviewed in PR #119 self-review #S6.
+
+    Title and other rich metadata
+    -----------------------------
+    Audit rows do not store paper title, abstract, URL, or PDF URL.
+    Consumers (e.g., the Week-2 digest generator) should look up
+    ``paper_id`` against
+    :class:`~src.services.registry.service.RegistryService` to retrieve
+    the rich representation. Storing rich fields here would duplicate
+    the registry and bloat the audit table.
+
+    Schema evolution
+    ----------------
+    Adding ``Optional[...]`` fields to this DTO is forward-compatible
+    with existing audit rows (Pydantic strict accepts default ``None``).
+    Adding non-null fields requires a new ``MIGRATION_V4`` to backfill
+    the column with a sensible default before the field is added here.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     paper_id: str = Field(
         ...,
@@ -359,9 +375,16 @@ class MonitoringRunAudit(BaseModel):
     Carries the same ``user_id`` denormalization that the table uses,
     so per-user audit consumers (digest generator, future REST/CLI)
     don't need a JOIN to ``subscriptions`` for the common case.
+
+    Schema evolution
+    ----------------
+    Adding ``Optional[...]`` fields to this DTO is forward-compatible
+    with existing audit rows (Pydantic strict accepts default ``None``).
+    Adding non-null fields requires a new ``MIGRATION_V4`` to backfill
+    the column with a sensible default before the field is added here.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     run_id: str = Field(..., min_length=1, max_length=64)
     subscription_id: str = Field(..., min_length=1, max_length=64)

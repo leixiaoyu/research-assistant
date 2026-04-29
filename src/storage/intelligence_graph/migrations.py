@@ -310,6 +310,13 @@ MIGRATION_V3_MONITORING_RUNS_FK = Migration(
         error TEXT,
         papers_found INTEGER NOT NULL DEFAULT 0,
         papers_new INTEGER NOT NULL DEFAULT 0,
+        -- ON DELETE CASCADE here, combined with monitoring_papers'
+        -- own CASCADE on run_id (V2), means deleting a subscription
+        -- destroys its entire audit trail (runs + papers). Intentional
+        -- for the single-user MVP -- the subscription IS the trail.
+        -- Multi-user phase (Phase 10+) should reconsider: regulatory
+        -- / forensic retention may require RESTRICT or soft-delete.
+        -- (PR #123 #N1.)
         FOREIGN KEY (subscription_id)
             REFERENCES subscriptions(subscription_id)
             ON DELETE CASCADE

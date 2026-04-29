@@ -102,7 +102,7 @@ class MonitoringRunner:
     def from_paths(
         cls,
         *,
-        db_path: Path,
+        db_path: Path | str,
         registry: "RegistryService",
         arxiv_provider: "ArxivProvider",
     ) -> "MonitoringRunner":
@@ -125,6 +125,9 @@ class MonitoringRunner:
                 the system temp dir) -- enforced by
                 :func:`sanitize_storage_path` inside both
                 ``SubscriptionManager`` and ``MonitoringRunRepository``.
+                Accepts ``str`` or ``Path``; coerced to ``Path``
+                upfront for downstream typing (matches
+                ``SubscriptionManager.__init__``).
             registry: The shared global ``RegistryService`` used by the
                 monitor for paper deduplication.
             arxiv_provider: The shared ``ArxivProvider`` used by the
@@ -133,7 +136,22 @@ class MonitoringRunner:
         Returns:
             A fully-wired, initialized ``MonitoringRunner`` ready for
             ``run_once()``.
+
+        Lifecycle note
+        --------------
+        Intended to be constructed ONCE per process (e.g., at scheduler
+        startup) and reused across run cycles. Each construction calls
+        ``MigrationManager.migrate()`` on both repos -- migrations are
+        idempotent but still hit the DB. The future Week-2
+        ``MonitoringCheckJob`` (#117) should hold the runner instance
+        in ``__init__`` and call ``run_once()`` per tick.
+
+        Failure recovery: if either ``initialize()`` raises, simply
+        re-call ``from_paths()`` -- both subscription manager and run
+        repository migrations are idempotent, so the partial
+        construction left behind is safe to discard.
         """
+        db_path = Path(db_path)  # accept str | Path; coerce for downstream typing
         sub_mgr = SubscriptionManager(db_path)
         sub_mgr.initialize()
         monitor = ArxivMonitor(provider=arxiv_provider, registry=registry)

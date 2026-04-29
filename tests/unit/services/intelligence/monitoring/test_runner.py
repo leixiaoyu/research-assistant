@@ -18,7 +18,8 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -28,6 +29,9 @@ from src.services.intelligence.monitoring.models import (
     MonitoringRunStatus,
     ResearchSubscription,
     SubscriptionStatus,
+)
+from src.services.intelligence.monitoring.run_repository import (
+    MonitoringRunRepository,
 )
 from src.services.intelligence.monitoring.runner import MonitoringRunner
 
@@ -133,12 +137,16 @@ class TestFromPathsFactory:
     """
 
     @pytest.mark.asyncio
-    async def test_from_paths_constructs_full_runner(
+    async def test_from_paths_empty_db_returns_empty_list(
         self, tmp_path  # type: ignore[no-untyped-def]
     ) -> None:
         """A from_paths-constructed runner should run_once cleanly
         against an empty database and return an empty list (no
         subscriptions registered yet).
+
+        Renamed from ``test_from_paths_constructs_full_runner`` per
+        CLAUDE.md ``test_<function>_<scenario>`` naming convention
+        (PR #124 #N6).
         """
         from src.services.intelligence.monitoring.runner import MonitoringRunner
 
@@ -163,6 +171,11 @@ class TestFromPathsFactory:
         """Factory must initialize both the SubscriptionManager and the
         MonitoringRunRepository so the caller doesn't have to remember
         the construct-then-initialize idiom.
+
+        Verifies initialization via the public APIs (PR #124 #N7) so
+        the test does not couple to private ``_initialized`` flags --
+        a successful ``list_subscriptions`` / ``list_runs`` call only
+        works after both repos have applied migrations.
         """
         from src.services.intelligence.monitoring.run_repository import (
             MonitoringRunRepository,
@@ -180,9 +193,83 @@ class TestFromPathsFactory:
         )
         assert isinstance(runner._subscriptions, SubscriptionManager)
         assert isinstance(runner._run_repo, MonitoringRunRepository)
-        # Both are initialized -- internal flag is the cheapest check.
-        assert runner._subscriptions._initialized is True
-        assert runner._run_repo._initialized is True
+        # Behavioral check: both repos respond cleanly to a public
+        # read API. ``list_subscriptions`` and ``list_runs`` both raise
+        # RuntimeError("not initialized") if migrations did not run --
+        # so a quiet ``[]`` proves the factory completed initialize().
+        assert runner._subscriptions.list_subscriptions() == []
+        assert runner._run_repo.list_runs() == []
+
+    def test_from_paths_rejects_path_outside_approved_roots(self) -> None:
+        """Path safety must propagate through the factory (PR #124 #C1).
+
+        ``sanitize_storage_path`` is called inside both
+        ``SubscriptionManager`` and ``MonitoringRunRepository``
+        constructors; ``from_paths`` must NOT swallow the resulting
+        ``SecurityError`` -- traversal attempts have to fail loud at
+        the factory boundary so the Week-2 scheduler does not silently
+        construct a runner pointed at ``/etc/passwd``.
+        """
+        from src.utils.security import SecurityError
+
+        with pytest.raises(SecurityError):
+            MonitoringRunner.from_paths(
+                db_path=Path("/etc/passwd"),
+                registry=MagicMock(),
+                arxiv_provider=MagicMock(),
+            )
+
+    def test_from_paths_propagates_repo_initialize_failure(
+        self, tmp_path  # type: ignore[no-untyped-def]
+    ) -> None:
+        """If ``repo.initialize()`` raises after ``sub_mgr.initialize()``
+        succeeds, the failure must propagate cleanly (PR #124 #C2).
+
+        Partial construction is documented as recoverable -- migrations
+        on both repos are idempotent so re-calling ``from_paths`` is
+        safe -- but the failure itself must reach the caller, not be
+        swallowed.
+        """
+        db_path = tmp_path / "monitoring.db"
+        with patch.object(
+            MonitoringRunRepository, "initialize", side_effect=RuntimeError("boom")
+        ):
+            with pytest.raises(RuntimeError, match="boom"):
+                MonitoringRunner.from_paths(
+                    db_path=db_path,
+                    registry=MagicMock(),
+                    arxiv_provider=MagicMock(),
+                )
+
+    def test_from_paths_recovers_after_repo_initialize_failure(
+        self, tmp_path  # type: ignore[no-untyped-def]
+    ) -> None:
+        """A second call after a transient initialize() failure must
+        succeed cleanly (PR #124 #C2).
+
+        Migrations on both repos are idempotent, so the partial state
+        left behind by the first attempt does not poison the retry.
+        Pins the docstring's recovery contract.
+        """
+        db_path = tmp_path / "monitoring.db"
+        with patch.object(
+            MonitoringRunRepository,
+            "initialize",
+            side_effect=[RuntimeError("transient"), None],
+        ):
+            with pytest.raises(RuntimeError, match="transient"):
+                MonitoringRunner.from_paths(
+                    db_path=db_path,
+                    registry=MagicMock(),
+                    arxiv_provider=MagicMock(),
+                )
+            # Second call succeeds -- migrations are idempotent.
+            runner = MonitoringRunner.from_paths(
+                db_path=db_path,
+                registry=MagicMock(),
+                arxiv_provider=MagicMock(),
+            )
+        assert runner is not None
 
 
 # ---------------------------------------------------------------------------

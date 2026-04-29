@@ -230,7 +230,7 @@ MIGRATION_V2_MONITORING_RUNS = Migration(
 
 
 # Schema version 3: Add FK + status CHECK to monitoring_runs (Phase 9.1
-# self-review fixes — PR #119 #C1 + #S8).
+# self-review fixes — PR #119 #C1 + #S8, hardened in PR #123 #S2).
 #
 # WHY THIS IS A NEW MIGRATION (NOT A V2 EDIT)
 # -------------------------------------------
@@ -239,34 +239,67 @@ MIGRATION_V2_MONITORING_RUNS = Migration(
 # canonical schema (their version column says "v2" but their tables
 # look different). A separate V3 keeps the migration log honest.
 #
-# WHY DESTRUCTIVE REBUILD IS SAFE HERE
-# ------------------------------------
-# PR #119 has not merged yet -- ``monitoring_runs`` exists only on this
-# branch and on contributor laptops. There is no production audit data
-# to preserve. The migration drops the table (CASCADE removes
-# ``monitoring_papers`` rows via the existing FK) and recreates it with:
+# WHY THE TABLE-SWAP PATTERN (NOT DROP-AND-RECREATE)
+# --------------------------------------------------
+# An earlier draft used ``DROP TABLE IF EXISTS monitoring_runs;`` then
+# ``CREATE TABLE monitoring_runs (...)``. That was destructive: any V2
+# row inserted between the PR #119 merge and a contributor's first run
+# of this V3 migration would be silently wiped, plus any
+# ``monitoring_papers`` rows would CASCADE away too. PR #119 *did*
+# merge before this hardening pass landed, so the "no production data"
+# justification no longer holds.
 #
+# We now follow the standard SQLite table-swap pattern (the only safe
+# way to add constraints to an existing table; SQLite's ``ALTER TABLE``
+# cannot add CHECK or FOREIGN KEY constraints in place):
+#
+#   1. CREATE TABLE monitoring_runs_new (...)  -- new shape
+#   2. INSERT INTO monitoring_runs_new SELECT * FROM monitoring_runs
+#      -- copy V2 rows; CHECK rejects any pre-existing bad status,
+#      which is the correct failure mode (loud, not silent)
+#   3. DROP TABLE monitoring_runs                -- old table gone
+#   4. ALTER TABLE monitoring_runs_new RENAME TO monitoring_runs
+#      -- new table takes the canonical name
+#   5. (Re)create the indexes on the now-renamed table.
+#
+# Atomicity: this migration relies on apply_migration's outer
+# BEGIN/COMMIT envelope (see migrations.py:455). Do NOT add another
+# BEGIN here -- nested transactions are not supported by SQLite and
+# would cause the inner COMMIT to silently no-op. (PR #123 #N6.)
+#
+# WHAT THE NEW SCHEMA ADDS
+# ------------------------
 # - FOREIGN KEY (subscription_id) REFERENCES subscriptions(subscription_id)
 #   ON DELETE CASCADE  -- review #C1
+#   NOTE: ON DELETE CASCADE here, combined with monitoring_papers' own
+#   CASCADE on run_id (V2), means deleting a subscription destroys its
+#   entire audit trail (runs + papers). This is intentional for the
+#   single-user MVP -- the subscription IS the trail. Multi-user phase
+#   (Phase 10+) should reconsider: regulatory / forensic retention may
+#   require RESTRICT or soft-delete on subscriptions. (PR #123 #N1.)
 # - CHECK (status IN ('success','partial','failed')) -- review #S8;
-#   values mirror MonitoringRunStatus enum exactly
+#   values mirror MonitoringRunStatus enum exactly. The
+#   test_migrate_v3_check_constraint_matches_monitoring_run_status_enum
+#   guard pins the enum-vs-CHECK pairing so a future enum addition
+#   that forgets a corresponding V4 widening fails at import-time.
 # - CREATE INDEX idx_monitoring_runs_subscription on (subscription_id)
-#   -- review #C1 supplemental, accelerates FK enforcement
-#
-# The original (subscription_id, started_at DESC) composite index from
-# V2 is also re-created because dropping the table dropped its indexes.
+#   -- review #C1 supplemental, accelerates FK enforcement.
+# - The original (subscription_id, started_at DESC) composite index
+#   from V2 is also re-created on the renamed table.
 MIGRATION_V3_MONITORING_RUNS_FK = Migration(
     version=3,
     name="monitoring_runs_fk_and_status_check",
     description=(
         "Rebuild monitoring_runs with FK to subscriptions(ON DELETE CASCADE)"
-        " and CHECK constraint on status. Drops/recreates the table; safe"
-        " because PR #119 has not merged so no production data exists."
+        " and CHECK constraint on status, preserving any V2 rows via the"
+        " standard SQLite table-swap pattern."
     ),
     up="""
-    DROP TABLE IF EXISTS monitoring_runs;
-
-    CREATE TABLE monitoring_runs (
+    -- Atomicity: this migration relies on apply_migration's outer
+    -- BEGIN/COMMIT envelope (see migrations.py:455). Do NOT add another
+    -- BEGIN here -- nested transactions are not supported by SQLite and
+    -- would cause the inner COMMIT to silently no-op.
+    CREATE TABLE monitoring_runs_new (
         run_id TEXT PRIMARY KEY,
         subscription_id TEXT NOT NULL,
         user_id TEXT NOT NULL,
@@ -281,6 +314,28 @@ MIGRATION_V3_MONITORING_RUNS_FK = Migration(
             REFERENCES subscriptions(subscription_id)
             ON DELETE CASCADE
     );
+
+    -- Copy every V2 row into the new shape. Column order is explicit
+    -- (rather than SELECT *) so a future V2 column addition does not
+    -- silently shift positions. The CHECK constraint will reject any
+    -- pre-existing row whose status is outside the enum -- that is
+    -- the desired loud-failure behavior, not silent data loss.
+    INSERT INTO monitoring_runs_new (
+        run_id, subscription_id, user_id, started_at,
+        finished_at, status, error, papers_found, papers_new
+    )
+    SELECT
+        run_id, subscription_id, user_id, started_at,
+        finished_at, status, error, papers_found, papers_new
+    FROM monitoring_runs;
+
+    -- Drop the old table. The monitoring_papers FK on run_id is
+    -- preserved because new run_ids are identical (we copied the
+    -- column verbatim) -- the CASCADE only fires if a referenced
+    -- row vanishes, which it does not in this swap.
+    DROP TABLE monitoring_runs;
+
+    ALTER TABLE monitoring_runs_new RENAME TO monitoring_runs;
 
     CREATE INDEX IF NOT EXISTS idx_monitoring_runs_sub_started
         ON monitoring_runs(subscription_id, started_at DESC);

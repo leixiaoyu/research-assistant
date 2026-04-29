@@ -147,6 +147,19 @@ class MonitoringRunRepository:
     _RECORD_RUN_MAX_ATTEMPTS = 3
     _RECORD_RUN_RETRY_BACKOFF_SECONDS = 0.05  # 50ms, 100ms (linear)
 
+    # SQLite extended result codes for the lock contention family. Python
+    # 3.11+ exposes ``OperationalError.sqlite_errorcode`` so we can
+    # distinguish lock contention from semantically-distinct
+    # OperationalErrors (disk full, schema drift, ...) without grepping
+    # the message. The numeric values mirror sqlite3.h:
+    #   SQLITE_BUSY   = 5  (another process holds an incompatible lock)
+    #   SQLITE_LOCKED = 6  (a table in the same connection is locked)
+    # Substring fallback covers older sqlite builds whose binding does
+    # not populate ``sqlite_errorcode`` (PR #123 review #S1).
+    _SQLITE_BUSY = 5
+    _SQLITE_LOCKED = 6
+    _RETRYABLE_SQLITE_CODES = frozenset({_SQLITE_BUSY, _SQLITE_LOCKED})
+
     def record_run(
         self,
         run: MonitoringRun,
@@ -195,11 +208,25 @@ class MonitoringRunRepository:
                 self._record_run_once(run, owner, finished)
                 break  # success
             except sqlite3.OperationalError as exc:
-                # Only retry the specific "database is locked" race; any
-                # other OperationalError (corrupt db, disk full, schema
-                # drift) propagates immediately. After exhausting all
-                # attempts, re-raise so the caller sees the failure.
-                is_lock_error = "locked" in str(exc).lower()
+                # Only retry the specific "database is locked" / "busy"
+                # race; any other OperationalError (corrupt db, disk full,
+                # schema drift) propagates immediately. After exhausting
+                # all attempts, re-raise so the caller sees the failure.
+                #
+                # Prefer ``sqlite_errorcode`` (Python 3.11+, set by the
+                # C binding) to message substring matching: it is
+                # locale-independent, immune to upstream wording changes,
+                # and covers both SQLITE_BUSY and SQLITE_LOCKED variants.
+                # Fall back to the substring check when the code is
+                # unavailable (older bindings, synthesized exceptions in
+                # tests) -- matches both "locked" and "busy" wording
+                # SQLite has used historically. (PR #123 review #S1.)
+                sqlite_code = getattr(exc, "sqlite_errorcode", None)
+                if sqlite_code is not None:
+                    is_lock_error = sqlite_code in self._RETRYABLE_SQLITE_CODES
+                else:
+                    msg = str(exc).lower()
+                    is_lock_error = "locked" in msg or "busy" in msg
                 is_last_attempt = attempt >= self._RECORD_RUN_MAX_ATTEMPTS - 1
                 if not is_lock_error or is_last_attempt:
                     raise

@@ -508,7 +508,6 @@ class TestOperationalErrorRetry:
         self,
         repo: MonitoringRunRepository,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """If the lock contention persists past all retries, the final
         OperationalError must propagate so the runner can log + skip.
@@ -562,6 +561,82 @@ class TestOperationalErrorRetry:
                 == MonitoringRunRepository._RECORD_RUN_MAX_ATTEMPTS
             )
             assert "locked" in entry["error"].lower()
+
+    def test_record_run_retries_on_busy_error_code(
+        self, repo: MonitoringRunRepository, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SQLITE_BUSY (errorcode 5) is retried even when the message
+        does not contain "locked" -- exercises the new errorcode-based
+        retry path (PR #123 #S1). Older substring-only logic would
+        miss this because SQLite's English wording for code 5 is
+        "database is busy", not "locked".
+        """
+        from src.services.intelligence.monitoring import run_repository as rr_mod
+
+        max_failures = 1  # one BUSY then succeed
+        fake_open, attempts = _make_begin_immediate_failure_open(
+            error_message="database is busy",
+            sqlite_errorcode=MonitoringRunRepository._SQLITE_BUSY,
+            max_failures=max_failures,
+        )
+        monkeypatch.setattr(rr_mod, "open_connection", fake_open)
+        # Skip real backoff sleep.
+        monkeypatch.setattr(
+            "src.services.intelligence.monitoring.run_repository.time.sleep",
+            lambda _s: None,
+        )
+
+        run = _make_run(run_id="run-busy-retry")
+        repo.record_run(run)
+
+        # The retry actually fired before success.
+        assert attempts["failures"] == max_failures
+        assert repo.get_run(run.run_id) is not None
+
+    def test_record_run_retries_on_locked_error_code(
+        self, repo: MonitoringRunRepository, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SQLITE_LOCKED (errorcode 6) -- same retry contract as
+        SQLITE_BUSY. Pinned separately so a future refactor that
+        accidentally drops one of the two codes fails loudly.
+        """
+        from src.services.intelligence.monitoring import run_repository as rr_mod
+
+        fake_open, attempts = _make_begin_immediate_failure_open(
+            error_message="some locked-table message",
+            sqlite_errorcode=MonitoringRunRepository._SQLITE_LOCKED,
+            max_failures=1,
+        )
+        monkeypatch.setattr(rr_mod, "open_connection", fake_open)
+        monkeypatch.setattr(
+            "src.services.intelligence.monitoring.run_repository.time.sleep",
+            lambda _s: None,
+        )
+
+        run = _make_run(run_id="run-locked-code")
+        repo.record_run(run)
+        assert attempts["failures"] == 1
+
+    def test_record_run_propagates_unrelated_operational_error_with_no_errorcode(
+        self, repo: MonitoringRunRepository, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OperationalError with no sqlite_errorcode and a non-lock
+        message must surface immediately -- we must not retry "syntax
+        error" or any other non-contention failure mode (PR #123 #S1).
+        """
+        import sqlite3 as _sqlite3
+
+        from src.services.intelligence.monitoring import run_repository as rr_mod
+
+        fake_open, attempts = _make_begin_immediate_failure_open(
+            error_message="syntax error near 'BEGIN'",
+            sqlite_errorcode=None,  # explicit -- no errorcode attached
+        )
+        monkeypatch.setattr(rr_mod, "open_connection", fake_open)
+        run = _make_run(run_id="run-no-retry-syntax")
+        with pytest.raises(_sqlite3.OperationalError, match="syntax error"):
+            repo.record_run(run)
+        assert attempts["n"] == 1
 
 
 class TestCascadeDelete:

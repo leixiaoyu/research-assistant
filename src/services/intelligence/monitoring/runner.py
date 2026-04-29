@@ -42,6 +42,7 @@ required.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 import structlog
@@ -163,8 +164,17 @@ class MonitoringRunner:
         # persistence failures so a SQLite hiccup on one row doesn't
         # break the rest of the cycle -- the in-memory ``run`` is still
         # returned to the caller for observability.
+        #
+        # ``record_run`` is synchronous and -- on lock contention --
+        # spends up to ``_RECORD_RUN_MAX_ATTEMPTS * backoff`` seconds
+        # in ``time.sleep`` (PR #119 #S9 retry loop). Running that in
+        # the event loop would starve every concurrent task in the
+        # interim. ``asyncio.to_thread`` parks it on the default thread
+        # executor so the loop stays responsive (PR #123 review #H1).
         try:
-            self._run_repo.record_run(run, user_id=subscription.user_id)
+            await asyncio.to_thread(
+                self._run_repo.record_run, run, user_id=subscription.user_id
+            )
         except Exception as exc:
             logger.error(
                 "monitoring_runner_record_failed",

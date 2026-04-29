@@ -167,6 +167,13 @@ class MonitoringRunRepository:
             retried up to ``_RECORD_RUN_MAX_ATTEMPTS`` times with linear
             backoff so a colliding writer doesn't drop the audit row.
 
+            **Async callers MUST wrap this call in
+            ``asyncio.to_thread(...)``** -- the retry loop uses
+            ``time.sleep`` which would block the event loop for the
+            full backoff budget on every contended write. The runner
+            already does this (see ``runner._run_one``); any new async
+            caller must do the same. (PR #123 review #H1.)
+
         Args:
             run: ``MonitoringRun`` to persist.
             user_id: Owner user. When ``None`` the repository's

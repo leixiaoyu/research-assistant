@@ -318,3 +318,81 @@ class TestPersistenceFailures:
         runs = await runner.run_once()
         assert len(runs) == 2
         assert all(r.status is not MonitoringRunStatus.FAILED for r in runs)
+
+
+# ---------------------------------------------------------------------------
+# Event loop responsiveness during record_run sleep (PR #123 #H1)
+# ---------------------------------------------------------------------------
+
+
+class TestEventLoopResponsiveness:
+    """Pin the ``asyncio.to_thread`` wrap around ``record_run``.
+
+    ``record_run``'s retry loop uses ``time.sleep`` which would block
+    the event loop if called inline. The runner now wraps it in
+    ``asyncio.to_thread`` so the sleep happens on a worker thread.
+    """
+
+    @pytest.mark.asyncio
+    async def test_runner_does_not_block_event_loop_during_record_retry(
+        self,
+    ) -> None:
+        """A concurrent ticker must keep ticking while record_run sleeps.
+
+        We swap ``record_run`` for a sync function that blocks on
+        ``time.sleep(0.1)``. A concurrent task ticks every 10 ms; if
+        the loop is blocked the ticker would record at most 1 tick.
+        With ``asyncio.to_thread`` parking the sleep on a worker
+        thread, the ticker should fire many times during the 100 ms
+        record window.
+        """
+        import asyncio
+        import time
+
+        sub = _make_subscription(subscription_id="sub-block-test")
+        runner, _, _, repo = _build_runner(
+            subscriptions=[sub],
+            check_results=[_result_for(sub)],
+        )
+
+        # Synchronous, sleep-based record_run -- the worst case the
+        # retry loop can produce in production.
+        def slow_record(run: MonitoringRun, **_kwargs: object) -> None:
+            time.sleep(0.1)
+
+        repo.record_run = MagicMock(side_effect=slow_record)
+
+        ticks = 0
+        ticker_done = asyncio.Event()
+
+        async def ticker() -> None:
+            nonlocal ticks
+            try:
+                while not ticker_done.is_set():
+                    await asyncio.sleep(0.01)
+                    ticks += 1
+            except asyncio.CancelledError:
+                pass
+
+        ticker_task = asyncio.create_task(ticker())
+        try:
+            await runner.run_once()
+        finally:
+            ticker_done.set()
+            ticker_task.cancel()
+            try:
+                await ticker_task
+            except asyncio.CancelledError:
+                pass
+
+        # Without ``asyncio.to_thread`` ticks would be 0 or 1 (the loop
+        # is pinned for the full sleep). With it, the ticker fires
+        # roughly every 10 ms over a 100 ms window. Allow generous
+        # slack for slow CI runners but still detect a fully-blocked
+        # loop.
+        assert ticks >= 5, (
+            f"Event loop appears blocked during record_run; ticker fired "
+            f"only {ticks} times in 100 ms (expected >= 5). "
+            "asyncio.to_thread wrap regression?"
+        )
+        repo.record_run.assert_called_once()

@@ -120,6 +120,9 @@ def _make_record(
 
 def _make_begin_immediate_failure_open(  # type: ignore[no-untyped-def]
     error_message: str,
+    *,
+    sqlite_errorcode: int | None = None,
+    max_failures: int | None = None,
 ):
     """Return a fake ``open_connection`` plus an attempt counter dict.
 
@@ -128,6 +131,21 @@ def _make_begin_immediate_failure_open(  # type: ignore[no-untyped-def]
     exactly ``"BEGIN IMMEDIATE"``. Every other call is delegated to the
     real connection so PRAGMA setup, queries, and rollback all behave
     normally.
+
+    Args:
+        error_message: Message to attach to the synthetic
+            ``OperationalError``.
+        sqlite_errorcode: When provided, attached to the raised
+            ``OperationalError`` via ``sqlite_errorcode`` so tests can
+            exercise the broadened error-code retry path (Python 3.11+
+            attribute, see :pep:`630` history). ``None`` leaves the
+            attribute unset, mirroring the substring-fallback path.
+        max_failures: When set, the proxy fails the first
+            ``max_failures`` ``BEGIN IMMEDIATE`` calls and then
+            transparently succeeds, simulating transient lock contention
+            that resolves before the retry budget is exhausted. ``None``
+            (default) fails every attempt -- mirrors the legacy
+            "always fail" behavior used by the give-up test.
 
     sqlite3.Connection methods are read-only (C-implemented), so we
     cannot monkeypatch them directly -- a proxy is necessary.
@@ -139,7 +157,7 @@ def _make_begin_immediate_failure_open(  # type: ignore[no-untyped-def]
         open_connection as real_open,
     )
 
-    attempts = {"n": 0}
+    attempts = {"n": 0, "failures": 0}
 
     class _ConnProxy:
         def __init__(self, real_conn: _sqlite3.Connection) -> None:
@@ -147,7 +165,18 @@ def _make_begin_immediate_failure_open(  # type: ignore[no-untyped-def]
 
         def execute(self, sql: str, *args: object, **kwargs: object) -> object:
             if sql == "BEGIN IMMEDIATE":
-                raise _sqlite3.OperationalError(error_message)
+                # Fail forever, or only the first ``max_failures`` calls
+                # when ``max_failures`` is set.
+                if max_failures is None or attempts["failures"] < max_failures:
+                    attempts["failures"] += 1
+                    exc = _sqlite3.OperationalError(error_message)
+                    if sqlite_errorcode is not None:
+                        # ``sqlite_errorcode`` is set by the C layer
+                        # when sqlite emits a real error. Tests must
+                        # set it explicitly to exercise the
+                        # error-code retry branch.
+                        exc.sqlite_errorcode = sqlite_errorcode
+                    raise exc
             return self._real.execute(sql, *args, **kwargs)
 
         def executemany(self, sql: str, *args: object, **kwargs: object) -> object:
@@ -398,58 +427,59 @@ class TestListRuns:
 
 class TestOperationalErrorRetry:
     """Tests for ``record_run`` retry on transient ``database is locked``
-    (PR #119 review #S9). Uses real threading + a long-held BEGIN
-    IMMEDIATE on a second connection to force lock contention -- not
-    a mock.
+    (PR #119 review #S9, hardened in PR #123 #C1).
+
+    History
+    -------
+    The original success-path test used ``threading.Timer(0.08, ...)``
+    to release a real lock holder mid-retry. That was timing-dependent:
+    on a slow CI runner the window could close before the first retry
+    even fired, masking real bugs. We now use the same in-process
+    ``_make_begin_immediate_failure_open`` proxy already used by the
+    give-up test, with ``max_failures=N`` so the first N attempts raise
+    and the (N+1)th transparently succeeds. This makes the retry
+    counter deterministic without losing semantic coverage -- the
+    proxy raises the exact ``OperationalError`` the runner would see.
     """
 
-    def test_record_run_retries_on_locked_then_succeeds(self, db_path: Path) -> None:
-        """A short-lived blocking writer should be tolerated by the
-        retry loop -- the second writer eventually wins and persists.
-        """
-        import threading
+    def test_record_run_retries_on_locked_then_succeeds(
+        self,
+        repo: MonitoringRunRepository,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Two transient lock failures, then success on attempt 3."""
+        from src.services.intelligence.monitoring import run_repository as rr_mod
 
-        from src.storage.intelligence_graph.connection import open_connection
+        max_failures = MonitoringRunRepository._RECORD_RUN_MAX_ATTEMPTS - 1
+        fake_open, attempts = _make_begin_immediate_failure_open(
+            error_message="database is locked",
+            max_failures=max_failures,
+        )
+        monkeypatch.setattr(rr_mod, "open_connection", fake_open)
 
-        repo = MonitoringRunRepository(db_path)
-        repo.initialize()
-        _seed_subscription(db_path, "sub-test001")
+        # Capture every sleep so we can assert the backoff schedule
+        # without actually waiting.
+        sleep_calls: list[float] = []
+        monkeypatch.setattr(
+            "src.services.intelligence.monitoring.run_repository.time.sleep",
+            lambda s: sleep_calls.append(s),
+        )
 
-        # Hold an EXCLUSIVE write lock on a separate connection for a
-        # short window, then release. The repository's retry loop
-        # (50ms, 100ms backoff) should cover the gap.
-        release_event = threading.Event()
-        holder_started = threading.Event()
+        run = _make_run(run_id="run-eventual-success")
+        repo.record_run(run)  # eventually succeeds on attempt N+1
 
-        def hold_lock() -> None:
-            with open_connection(db_path) as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                holder_started.set()
-                # Use shorter than total retry budget so the second
-                # attempt has a chance to succeed.
-                release_event.wait(timeout=1.0)
-                conn.rollback()
-
-        holder = threading.Thread(target=hold_lock)
-        holder.start()
-        try:
-            assert holder_started.wait(timeout=1.0), "holder failed to start"
-            # Tighten the busy_timeout-bypass window: release the
-            # blocker after the first attempt should have failed.
-            timer = threading.Timer(0.08, release_event.set)
-            timer.start()
-            try:
-                run = _make_run()
-                repo.record_run(run)
-            finally:
-                timer.cancel()
-            release_event.set()
-        finally:
-            holder.join(timeout=5.0)
-
-        fetched = repo.get_run(run.run_id)
-        assert fetched is not None
-        assert fetched.run_id == run.run_id
+        # Exactly ``max_failures`` retries fired, then the success path.
+        assert attempts["failures"] == max_failures
+        assert attempts["n"] == max_failures + 1
+        # One sleep per failed attempt -- linear backoff (50ms, 100ms).
+        assert len(sleep_calls) == max_failures
+        assert sleep_calls == [
+            MonitoringRunRepository._RECORD_RUN_RETRY_BACKOFF_SECONDS * (i + 1)
+            for i in range(max_failures)
+        ]
+        # Run actually persisted -- the proxy passes through to the
+        # real connection on the success attempt.
+        assert repo.get_run(run.run_id) is not None
 
     def test_record_run_propagates_non_lock_operational_error(
         self, repo: MonitoringRunRepository, monkeypatch: pytest.MonkeyPatch
@@ -475,12 +505,21 @@ class TestOperationalErrorRetry:
         assert attempts["n"] == 1
 
     def test_record_run_gives_up_after_max_attempts(
-        self, repo: MonitoringRunRepository, monkeypatch: pytest.MonkeyPatch
+        self,
+        repo: MonitoringRunRepository,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """If the lock contention persists past all retries, the final
         OperationalError must propagate so the runner can log + skip.
+
+        Also asserts the structured ``monitoring_run_record_retry``
+        warning fires exactly ``_RECORD_RUN_MAX_ATTEMPTS - 1`` times --
+        the final attempt does not warn because it raises (see #S3).
         """
         import sqlite3 as _sqlite3
+
+        import structlog.testing
 
         from src.services.intelligence.monitoring import run_repository as rr_mod
 
@@ -494,10 +533,35 @@ class TestOperationalErrorRetry:
             "_RECORD_RUN_RETRY_BACKOFF_SECONDS",
             0.001,
         )
+
         run = _make_run(run_id="run-give-up")
-        with pytest.raises(_sqlite3.OperationalError, match="database is locked"):
-            repo.record_run(run)
+        # ``structlog.testing.capture_logs`` is the project-default
+        # capture facility -- the codebase does not configure structlog
+        # against the stdlib root logger, so plain ``caplog`` would not
+        # see structlog events. ``capture_logs`` swaps in a recording
+        # processor for the duration of the block.
+        with structlog.testing.capture_logs() as logs:
+            with pytest.raises(_sqlite3.OperationalError, match="database is locked"):
+                repo.record_run(run)
         assert attempts["n"] == MonitoringRunRepository._RECORD_RUN_MAX_ATTEMPTS
+
+        retry_logs = [
+            entry for entry in logs if entry["event"] == "monitoring_run_record_retry"
+        ]
+        # Exactly N-1 retries warn; the final attempt raises before
+        # logging. This pins the "log on retry, raise on give-up"
+        # semantics so a future refactor that double-logs (or skips
+        # the warn) fails loudly.
+        assert len(retry_logs) == MonitoringRunRepository._RECORD_RUN_MAX_ATTEMPTS - 1
+        for idx, entry in enumerate(retry_logs):
+            assert entry["log_level"] == "warning"
+            assert entry["run_id"] == "run-give-up"
+            assert entry["attempt"] == idx + 1
+            assert (
+                entry["max_attempts"]
+                == MonitoringRunRepository._RECORD_RUN_MAX_ATTEMPTS
+            )
+            assert "locked" in entry["error"].lower()
 
 
 class TestCascadeDelete:

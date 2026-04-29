@@ -21,8 +21,10 @@ from src.services.intelligence.models.monitoring import (
 from src.services.intelligence.monitoring.models import (
     MAX_KEYWORDS_PER_SUBSCRIPTION,
     MAX_PAPERS_PER_CYCLE,
+    MonitoringPaperAudit,
     MonitoringPaperRecord,
     MonitoringRun,
+    MonitoringRunAudit,
     MonitoringRunStatus,
     ResearchSubscription,
     SubscriptionStatus,
@@ -364,3 +366,204 @@ class TestSubscriptionLimitErrorIntegration:
     def test_subscription_limit_error_is_value_error(self) -> None:
         # ValueError ancestry is what lets Pydantic wrap it cleanly.
         assert issubclass(SubscriptionLimitError, ValueError)
+
+
+# ---------------------------------------------------------------------------
+# MonitoringPaperAudit (PR #124 #C5)
+# ---------------------------------------------------------------------------
+#
+# CLAUDE.md requires Pydantic validators to be behaviorally tested. The
+# audit DTOs were added in PR #124 with field caps + ``extra="forbid"``
+# but no per-field validator coverage; this block adds happy/reject
+# cases that pin every constraint on ``MonitoringPaperAudit`` and
+# ``MonitoringRunAudit``.
+
+
+class TestMonitoringPaperAudit:
+    """Validator + boundary coverage for ``MonitoringPaperAudit``.
+
+    Pinned constraints:
+    - ``paper_id``: min_length=1, max_length=512 (post-#S6 alignment)
+    - ``relevance_score``: range [0.0, 1.0], Optional, default None
+    - ``relevance_reasoning``: max_length=4096 (post-#S7 alignment),
+      Optional, default None
+    - ``registered``: bool, default False
+    - ``extra="forbid"``: unknown fields rejected
+    """
+
+    def test_audit_minimal_defaults(self) -> None:
+        rec = MonitoringPaperAudit(paper_id="2301.12345")
+        assert rec.paper_id == "2301.12345"
+        assert rec.registered is False
+        assert rec.relevance_score is None
+        assert rec.relevance_reasoning is None
+
+    def test_audit_full_construction(self) -> None:
+        rec = MonitoringPaperAudit(
+            paper_id="2301.12345",
+            registered=True,
+            relevance_score=0.9,
+            relevance_reasoning="strong match",
+        )
+        assert rec.paper_id == "2301.12345"
+        assert rec.registered is True
+        assert rec.relevance_score == 0.9
+        assert rec.relevance_reasoning == "strong match"
+
+    def test_audit_paper_id_rejects_empty(self) -> None:
+        with pytest.raises(ValidationError, match="at least 1 character"):
+            MonitoringPaperAudit(paper_id="")
+
+    def test_audit_paper_id_at_boundary_accepted(self) -> None:
+        # 512 chars exactly -- the post-#S6 cap.
+        rec = MonitoringPaperAudit(paper_id="x" * 512)
+        assert len(rec.paper_id) == 512
+
+    def test_audit_paper_id_above_boundary_rejected(self) -> None:
+        # 513 chars -- one over the max_length boundary.
+        with pytest.raises(ValidationError, match="at most 512 character"):
+            MonitoringPaperAudit(paper_id="x" * 513)
+
+    def test_audit_relevance_score_below_range_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            MonitoringPaperAudit(paper_id="x", relevance_score=-0.01)
+
+    def test_audit_relevance_score_above_range_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            MonitoringPaperAudit(paper_id="x", relevance_score=1.01)
+
+    def test_audit_relevance_reasoning_at_boundary_accepted(self) -> None:
+        rec = MonitoringPaperAudit(paper_id="x", relevance_reasoning="r" * 4096)
+        assert len(rec.relevance_reasoning or "") == 4096
+
+    def test_audit_relevance_reasoning_above_boundary_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="at most 4096 character"):
+            MonitoringPaperAudit(paper_id="x", relevance_reasoning="r" * 4097)
+
+    def test_audit_extra_field_forbidden(self) -> None:
+        # Pinning ``extra="forbid"`` -- unknown fields like ``unknown=...``
+        # must raise so callers can't silently smuggle data the audit
+        # table cannot store.
+        with pytest.raises(ValidationError):
+            MonitoringPaperAudit(paper_id="x", unknown="y")  # type: ignore[call-arg]
+
+
+class TestMonitoringRunAudit:
+    """Validator + composition coverage for ``MonitoringRunAudit``.
+
+    Pinned constraints:
+    - String fields capped at 64 chars; ``error`` capped at 2000.
+    - ``papers``: list of ``MonitoringPaperAudit`` only, defaults to [].
+    - ``papers_seen`` / ``papers_new``: ge=0.
+    - ``extra="forbid"``: unknown fields rejected.
+    - Round-trip via ``model_dump`` / ``model_validate``.
+    """
+
+    def _audit(
+        self, *, papers: list[MonitoringPaperAudit] | None = None
+    ) -> MonitoringRunAudit:
+        return MonitoringRunAudit(
+            run_id="run-001",
+            subscription_id="sub-001",
+            user_id="alice",
+            started_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            status=MonitoringRunStatus.SUCCESS,
+            papers=papers or [],
+        )
+
+    def test_audit_run_minimal_no_papers(self) -> None:
+        run = self._audit()
+        assert run.papers == []
+        assert run.papers_seen == 0
+        assert run.papers_new == 0
+        assert run.finished_at is None
+        assert run.error is None
+
+    def test_audit_run_with_one_paper(self) -> None:
+        papers = [MonitoringPaperAudit(paper_id="2301.0001", registered=True)]
+        run = self._audit(papers=papers)
+        assert len(run.papers) == 1
+        assert run.papers[0].paper_id == "2301.0001"
+
+    def test_audit_run_with_many_papers(self) -> None:
+        papers = [MonitoringPaperAudit(paper_id=f"p-{i}") for i in range(5)]
+        run = self._audit(papers=papers)
+        assert len(run.papers) == 5
+
+    def test_audit_run_papers_must_be_audit_instances(self) -> None:
+        # Composition guard: passing a MonitoringPaperRecord (the rich
+        # in-memory type) must fail. Pydantic will try to coerce dict
+        # values, but a record carries fields like ``title`` that the
+        # audit type forbids -- so the coercion fails.
+        record = MonitoringPaperRecord(
+            paper_id="2301.0001", title="Some Paper", is_new=True
+        )
+        with pytest.raises(ValidationError):
+            MonitoringRunAudit(
+                run_id="run-001",
+                subscription_id="sub-001",
+                user_id="alice",
+                started_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                status=MonitoringRunStatus.SUCCESS,
+                papers=[record.model_dump()],  # type: ignore[list-item]
+            )
+
+    def test_audit_run_negative_paper_counts_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            MonitoringRunAudit(
+                run_id="run-001",
+                subscription_id="sub-001",
+                user_id="alice",
+                started_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                status=MonitoringRunStatus.SUCCESS,
+                papers_seen=-1,
+            )
+
+    def test_audit_run_extra_field_forbidden(self) -> None:
+        with pytest.raises(ValidationError):
+            MonitoringRunAudit(
+                run_id="run-001",
+                subscription_id="sub-001",
+                user_id="alice",
+                started_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                status=MonitoringRunStatus.SUCCESS,
+                junk="bad",  # type: ignore[call-arg]
+            )
+
+    def test_audit_run_round_trip_via_model_dump(self) -> None:
+        original = self._audit(
+            papers=[
+                MonitoringPaperAudit(paper_id="p-1", registered=True),
+                MonitoringPaperAudit(
+                    paper_id="p-2",
+                    relevance_score=0.5,
+                    relevance_reasoning="ok",
+                ),
+            ]
+        )
+        rebuilt = MonitoringRunAudit.model_validate(original.model_dump())
+        assert rebuilt == original
+        assert isinstance(rebuilt, MonitoringRunAudit)
+        for p in rebuilt.papers:
+            assert isinstance(p, MonitoringPaperAudit)
+
+    def test_audit_run_run_id_rejects_empty(self) -> None:
+        with pytest.raises(ValidationError):
+            MonitoringRunAudit(
+                run_id="",
+                subscription_id="sub-001",
+                user_id="alice",
+                started_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                status=MonitoringRunStatus.SUCCESS,
+            )
+
+    def test_audit_run_status_must_be_enum_member(self) -> None:
+        # Strict mode -- arbitrary string is not coerced.
+        with pytest.raises(ValidationError):
+            MonitoringRunAudit(
+                run_id="run-001",
+                subscription_id="sub-001",
+                user_id="alice",
+                started_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                status="bogus",  # type: ignore[arg-type]
+            )

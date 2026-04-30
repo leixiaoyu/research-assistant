@@ -329,6 +329,42 @@ class TestRoundTrip:
     def test_get_returns_none_for_missing(self, repo: MonitoringRunRepository) -> None:
         assert repo.get_run("run-missing") is None
 
+    def test_fetch_papers_returns_only_validated_audit_dtos(
+        self, repo: MonitoringRunRepository
+    ) -> None:
+        """PR #124 team review: pin the read-path type contract.
+
+        ``_fetch_papers`` must return ``list[MonitoringPaperAudit]`` --
+        never raw rows / dicts. The source-side assertion in the
+        method enforces this at runtime; this test pins the contract
+        from the consumer's perspective.
+        """
+        records = [
+            _make_record(paper_id="2301.0001", is_new=True),
+            _make_record(
+                paper_id="2301.0002",
+                is_new=False,
+                relevance_score=0.5,
+                relevance_reasoning="ok",
+            ),
+        ]
+        run = _make_run(papers_seen=2, papers_new=1, papers=records)
+        repo.record_run(run)
+
+        # Use the public read path (which delegates to _fetch_papers).
+        fetched = repo.get_run(run.run_id)
+        assert fetched is not None
+        # Every element must be the audit DTO type -- not a dict, not
+        # the rich MonitoringPaperRecord, not a sqlite3.Row.
+        # Strict identity check (``type(...) is ...``, not ``isinstance``):
+        # a future MonitoringPaperRecord-style subclass that bypasses
+        # audit-DTO validation would still satisfy ``isinstance``; only
+        # ``is`` catches the type-leak we're guarding against.
+        for paper in fetched.papers:
+            assert (
+                type(paper) is MonitoringPaperAudit
+            ), f"_fetch_papers leaked non-audit type: {type(paper).__name__}"
+
 
 # ---------------------------------------------------------------------------
 # user_id handling

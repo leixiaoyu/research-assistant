@@ -415,6 +415,18 @@ class MonitoringRunRepository:
     def _fetch_papers(
         conn: sqlite3.Connection, run_id: str
     ) -> list[MonitoringPaperAudit]:
+        """Fetch all paper-audit rows for ``run_id``.
+
+        Returns:
+            A list of validated :class:`MonitoringPaperAudit` Pydantic
+            models -- never raw rows / dicts. The defensive
+            ``isinstance`` assertion below pins this contract for
+            future refactors of the repository read-path (PR #124 team
+            review): if anyone ever short-circuits the constructor and
+            returns sqlite3.Row / dict objects, the assertion fails
+            loudly during tests rather than silently corrupting the
+            digest generator's expectations downstream.
+        """
         cursor = conn.execute(
             """
             SELECT paper_id, registered, relevance_score, relevance_reasoning
@@ -424,7 +436,7 @@ class MonitoringRunRepository:
             """,
             (run_id,),
         )
-        return [
+        result: list[MonitoringPaperAudit] = [
             MonitoringPaperAudit(
                 paper_id=row["paper_id"],
                 registered=bool(row["registered"]),
@@ -433,6 +445,13 @@ class MonitoringRunRepository:
             )
             for row in cursor.fetchall()
         ]
+        # Defense-in-depth: pin the typed-DTO contract so a future
+        # refactor (e.g., introducing a "fast path" that returns rows
+        # directly) cannot silently leak dicts to the caller.
+        assert all(
+            isinstance(paper, MonitoringPaperAudit) for paper in result
+        ), "_fetch_papers must return list[MonitoringPaperAudit]"
+        return result
 
     @staticmethod
     def _row_to_audit(

@@ -457,6 +457,84 @@ class TestPersistenceFailures:
         assert len(runs) == 2
 
     @pytest.mark.asyncio
+    async def test_record_run_failure_skips_mark_checked(self) -> None:
+        """Atomic-state-transition guarantee (PR #124 team review).
+
+        If ``record_run`` raises (persistence outage), the runner MUST
+        NOT call ``mark_checked``. Otherwise the subscription's
+        ``last_checked_at`` advances past the polling window while the
+        audit row of papers found in that window is lost -- the Week-2
+        digest generator would silently miss research updates for that
+        interval.
+
+        Rebound: the next cycle re-polls the same window and re-records
+        the audit row.
+        """
+        sub_a = _make_subscription(subscription_id="sub-a")
+        sub_b = _make_subscription(subscription_id="sub-b")
+        runner, sub_mgr, _, _ = _build_runner(
+            subscriptions=[sub_a, sub_b],
+            check_results=[
+                _result_for(sub_a),
+                _result_for(sub_b),
+            ],
+            record_side_effect=RuntimeError("disk full"),
+        )
+        runs = await runner.run_once()
+
+        # Cycle continues -- both runs returned for observability.
+        assert len(runs) == 2
+        # Critical: NEITHER subscription gets marked-checked because
+        # both record_run calls raised. Mark-checked must be strictly
+        # downstream of audit-trail durability.
+        sub_mgr.mark_checked.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_record_run_failure_logs_skipping_mark_checked_event(
+        self,
+    ) -> None:
+        """The skip is observable -- ops can grep for the structured
+        event when investigating why a subscription's audit trail has
+        gaps.
+
+        Uses ``structlog.testing.capture_logs`` (project convention --
+        see test_run_repository.py:608) since structlog is not wired
+        through stdlib's root logger, so plain ``caplog`` would not
+        see the events.
+        """
+        import structlog.testing
+
+        sub = _make_subscription(subscription_id="sub-a")
+        runner, _, _, _ = _build_runner(
+            subscriptions=[sub],
+            check_results=[_result_for(sub)],
+            record_side_effect=RuntimeError("disk full"),
+        )
+        with structlog.testing.capture_logs() as logs:
+            runs = await runner.run_once()
+
+        skip_logs = [
+            entry
+            for entry in logs
+            if entry.get("event")
+            == "monitoring_persistence_failed_skipping_mark_checked"
+        ]
+        assert len(skip_logs) == 1, (
+            f"expected one persistence-skip log, got "
+            f"{[entry.get('event') for entry in logs]}"
+        )
+        # Pin all three bound fields the production call emits so a
+        # future refactor that drops one (e.g., run_id) trips the test.
+        skip = skip_logs[0]
+        assert skip.get("subscription_id") == "sub-a"
+        assert skip.get("error") == "disk full"
+        # run_id is auto-generated UUID4 on the in-memory MonitoringRun;
+        # we don't assert its value, just its presence + match to the
+        # in-memory run returned to the caller.
+        assert skip.get("run_id") is not None
+        assert skip.get("run_id") == runs[0].run_id
+
+    @pytest.mark.asyncio
     async def test_mark_checked_failure_does_not_abort_cycle(self) -> None:
         sub_a = _make_subscription(subscription_id="sub-a")
         sub_b = _make_subscription(subscription_id="sub-b")

@@ -14,11 +14,14 @@ from pathlib import Path
 
 import pytest
 
+from src.storage.intelligence_graph.connection import open_connection
 from src.storage.intelligence_graph.migrations import (
     MigrationManager,
     Migration,
     ALL_MIGRATIONS,
     MIGRATION_V1_INITIAL,
+    MIGRATION_V2_MONITORING_RUNS,
+    MIGRATION_V3_MONITORING_RUNS_FK,
 )
 from src.utils.security import SecurityError
 
@@ -697,3 +700,415 @@ class TestMigrationTransactionRollback:
         # (b) The migration must NOT be recorded.
         applied_versions = {m["version"] for m in manager.get_applied_migrations()}
         assert 4242 not in applied_versions
+
+
+class TestMigrationV3MonitoringRunsFk:
+    """Tests for MIGRATION_V3_MONITORING_RUNS_FK (PR #119 review #C1, #S8;
+    PR #123 review #S2, #N2--#N5).
+
+    Naming convention (#N5): every test name follows
+    ``test_migrate_v3_<scenario>`` so the function under test
+    (``migrate`` applied through V3) and the scenario being pinned are
+    both visible at first glance.
+    """
+
+    def _open(self, db_path: Path) -> sqlite3.Connection:
+        """Open a connection with foreign keys enforced (V3 needs them)."""
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def test_migrate_v3_cascade_deletes_run_on_subscription_delete(
+        self, temp_db: Path
+    ) -> None:
+        """After V3, deleting a subscription must cascade-delete its runs."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+
+        conn = self._open(temp_db)
+        try:
+            # Insert a subscription so we can reference it.
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-fk-test", "alice", "Sub", "{}"),
+            )
+            # Insert a run referencing the subscription.
+            conn.execute(
+                """
+                INSERT INTO monitoring_runs (
+                    run_id, subscription_id, user_id,
+                    started_at, status
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "run-fk-test",
+                    "sub-fk-test",
+                    "alice",
+                    "2024-01-01T00:00:00+00:00",
+                    "success",
+                ),
+            )
+            conn.commit()
+
+            # Sanity: row exists.
+            cnt = conn.execute(
+                "SELECT COUNT(*) FROM monitoring_runs WHERE run_id = ?",
+                ("run-fk-test",),
+            ).fetchone()[0]
+            assert cnt == 1
+
+            # Delete the subscription -- FK CASCADE must remove the run.
+            conn.execute(
+                "DELETE FROM subscriptions WHERE subscription_id = ?",
+                ("sub-fk-test",),
+            )
+            conn.commit()
+
+            cnt = conn.execute(
+                "SELECT COUNT(*) FROM monitoring_runs WHERE run_id = ?",
+                ("run-fk-test",),
+            ).fetchone()[0]
+            assert cnt == 0, "run should have been cascade-deleted"
+        finally:
+            conn.close()
+
+    def test_migrate_v3_rejects_invalid_status_via_check(self, temp_db: Path) -> None:
+        """Inserting an unknown status string must raise IntegrityError."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+
+        conn = self._open(temp_db)
+        try:
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-check", "alice", "Sub", "{}"),
+            )
+            conn.commit()
+
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    """
+                    INSERT INTO monitoring_runs (
+                        run_id, subscription_id, user_id,
+                        started_at, status
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "run-bad-status",
+                        "sub-check",
+                        "alice",
+                        "2024-01-01T00:00:00+00:00",
+                        "BOGUS_STATUS",
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def test_migrate_v3_rejects_empty_status_via_check(self, temp_db: Path) -> None:
+        """Empty-string status must fail the CHECK constraint (PR #123 #N3).
+
+        ``""`` is technically a non-NULL string so NOT NULL would let
+        it through; the CHECK is the second line of defense and is
+        what catches this case in practice.
+        """
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+
+        conn = self._open(temp_db)
+        try:
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-empty", "alice", "Sub", "{}"),
+            )
+            conn.commit()
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    """
+                    INSERT INTO monitoring_runs (
+                        run_id, subscription_id, user_id,
+                        started_at, status
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "run-empty-status",
+                        "sub-empty",
+                        "alice",
+                        "2024-01-01T00:00:00+00:00",
+                        "",
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def test_migrate_v3_rejects_null_status_via_not_null(self, temp_db: Path) -> None:
+        """A literal NULL status must fail NOT NULL (PR #123 #N3).
+
+        NOT NULL is the first line of defense -- it stops the insert
+        before the CHECK runs. We pass Python ``None`` which the
+        sqlite3 binding maps to SQL NULL.
+        """
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+
+        conn = self._open(temp_db)
+        try:
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-null", "alice", "Sub", "{}"),
+            )
+            conn.commit()
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    """
+                    INSERT INTO monitoring_runs (
+                        run_id, subscription_id, user_id,
+                        started_at, status
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "run-null-status",
+                        "sub-null",
+                        "alice",
+                        "2024-01-01T00:00:00+00:00",
+                        None,
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def test_migrate_v3_rejects_omitted_status_via_not_null(
+        self, temp_db: Path
+    ) -> None:
+        """Omitting the status column entirely must fail NOT NULL
+        (PR #123 #N3). There is no DEFAULT on status, so the implicit
+        NULL trips the NOT NULL constraint before the CHECK.
+        """
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+
+        conn = self._open(temp_db)
+        try:
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-omit", "alice", "Sub", "{}"),
+            )
+            conn.commit()
+            with pytest.raises(sqlite3.IntegrityError):
+                # Note: status column is omitted from the column list.
+                conn.execute(
+                    """
+                    INSERT INTO monitoring_runs (
+                        run_id, subscription_id, user_id, started_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        "run-omit-status",
+                        "sub-omit",
+                        "alice",
+                        "2024-01-01T00:00:00+00:00",
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def test_migrate_v3_accepts_all_known_status_values(self, temp_db: Path) -> None:
+        """Each MonitoringRunStatus enum value must be accepted by the CHECK."""
+        from src.services.intelligence.monitoring.models import (
+            MonitoringRunStatus,
+        )
+
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+
+        conn = self._open(temp_db)
+        try:
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-status", "alice", "Sub", "{}"),
+            )
+            for i, status in enumerate(MonitoringRunStatus):
+                conn.execute(
+                    """
+                    INSERT INTO monitoring_runs (
+                        run_id, subscription_id, user_id,
+                        started_at, status
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"run-status-{i}",
+                        "sub-status",
+                        "alice",
+                        "2024-01-01T00:00:00+00:00",
+                        status.value,
+                    ),
+                )
+            conn.commit()
+
+            cnt = conn.execute("SELECT COUNT(*) FROM monitoring_runs").fetchone()[0]
+            assert cnt == len(list(MonitoringRunStatus))
+        finally:
+            conn.close()
+
+    def test_migrate_v3_creates_subscription_index(self, temp_db: Path) -> None:
+        """Both indexes (composite + single-column) must be present after V3."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+
+        conn = sqlite3.connect(str(temp_db))
+        try:
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='index' AND tbl_name='monitoring_runs'"
+            )
+            indexes = {row[0] for row in cursor.fetchall()}
+            assert "idx_monitoring_runs_subscription" in indexes
+            assert "idx_monitoring_runs_sub_started" in indexes
+        finally:
+            conn.close()
+
+    def test_migrate_v3_preserves_data_inserted_under_v2_schema(
+        self, temp_db: Path
+    ) -> None:
+        """V3 swaps the table; existing V2 rows must survive the swap.
+
+        This is the regression guard for PR #123 #S2: an earlier draft
+        of V3 used ``DROP TABLE IF EXISTS monitoring_runs`` followed by
+        ``CREATE TABLE monitoring_runs`` -- destructive, would silently
+        wipe any V2 audit row a contributor (or live deployment) had
+        inserted between PR #119 merge and a fresh V3 migration. The
+        rewrite uses the standard SQLite table-swap pattern (CREATE
+        new -> INSERT FROM old -> DROP old -> ALTER RENAME). If anyone
+        reverts back to DROP-and-CREATE, this test fails immediately
+        because the V2 row is gone after V3 applies.
+        """
+        manager = MigrationManager(temp_db)
+        # Apply only V1 + V2 -- stop short of V3 so we can write a
+        # row that survives (or doesn't) the V3 swap.
+        conn = manager._get_connection()
+        try:
+            manager._ensure_migrations_table(conn)
+            manager.apply_migration(conn, MIGRATION_V1_INITIAL)
+            manager.apply_migration(conn, MIGRATION_V2_MONITORING_RUNS)
+        finally:
+            conn.close()
+
+        # Insert a subscription + a monitoring_runs row under V2 shape.
+        with open_connection(temp_db) as conn:
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-v2-1", "alice", "V2 Sub", "{}"),
+            )
+            conn.execute(
+                """
+                INSERT INTO monitoring_runs (
+                    run_id, subscription_id, user_id,
+                    started_at, finished_at, status, error,
+                    papers_found, papers_new
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "run-v2-1",
+                    "sub-v2-1",
+                    "alice",
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:01:00+00:00",
+                    "success",
+                    None,
+                    7,
+                    3,
+                ),
+            )
+            conn.commit()
+
+        # Now apply V3 -- must preserve the V2 row.
+        conn = manager._get_connection()
+        try:
+            manager._ensure_migrations_table(conn)
+            manager.apply_migration(conn, MIGRATION_V3_MONITORING_RUNS_FK)
+        finally:
+            conn.close()
+
+        with open_connection(temp_db) as conn:
+            row = conn.execute(
+                """
+                SELECT run_id, subscription_id, user_id, started_at,
+                       finished_at, status, error, papers_found, papers_new
+                FROM monitoring_runs WHERE run_id = ?
+                """,
+                ("run-v2-1",),
+            ).fetchone()
+        assert row is not None, "V2 row was destroyed by V3 -- migration is destructive"
+        assert row["status"] == "success"
+        assert row["papers_found"] == 7
+        assert row["papers_new"] == 3
+        assert row["subscription_id"] == "sub-v2-1"
+        assert row["finished_at"] == "2024-01-01T00:01:00+00:00"
+
+    def test_migrate_v3_check_constraint_matches_monitoring_run_status_enum(
+        self,
+    ) -> None:
+        """Enum-vs-CHECK exhaustive guard (PR #123 #N2).
+
+        If MonitoringRunStatus gains a new member, the V3 CHECK
+        constraint must also widen -- otherwise ``record_run`` would
+        produce IntegrityError on the new value at runtime. This test
+        catches the drift at import-time so the missing migration
+        (V4 widening the CHECK) is obvious before any live insert
+        fails. Pure SQL-string scan, no DB needed.
+        """
+        from src.services.intelligence.monitoring.models import (
+            MonitoringRunStatus,
+        )
+
+        sql = MIGRATION_V3_MONITORING_RUNS_FK.up
+        assert isinstance(sql, str)
+        for member in MonitoringRunStatus:
+            assert f"'{member.value}'" in sql, (
+                f"MonitoringRunStatus.{member.name} = {member.value!r} "
+                "is not present in MIGRATION_V3 CHECK constraint. "
+                "Add MIGRATION_V4 widening the CHECK list."
+            )
+
+    def test_migrate_v3_records_version_in_schema_migrations(
+        self, temp_db: Path
+    ) -> None:
+        """Full chain through V3 must record version=3 in the
+        migration log so subsequent ``migrate()`` calls become no-ops
+        (PR #123 #N4).
+        """
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        applied_versions = {m["version"] for m in manager.get_applied_migrations()}
+        assert 3 in applied_versions, (
+            "V3 not recorded in schema_migrations -- migrate() will "
+            "redundantly re-apply on every startup"
+        )

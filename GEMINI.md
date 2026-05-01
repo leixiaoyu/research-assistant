@@ -273,11 +273,16 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
    - **API Implementation:** Verify protocol security (HTTPS), parameter accuracy, and graceful error handling.
    - **Type Safety & Validation:** Ensure robust Pydantic usage and centralized validation.
    - **Architecture Alignment:** Check for proper delegation patterns and adherence to layered design.
-5. **Security & Path Safety (Non-Negotiable):**
+5. **State Integrity & Durability (Non-Negotiable)** *(codified from PR #124's silent-data-loss incident; implementor-side guidance lives in [CLAUDE.md "Orchestration Patterns"](CLAUDE.md#code-quality-standards))***:**
+   - **Atomic State Transitions:** If Operation B (e.g., updating a timestamp) depends on the record created by Operation A (e.g., audit logging), Operation B MUST NOT execute if Operation A fails.
+   - **Durability over Progress:** Prioritize a durable audit trail over advancing the subscription's `last_checked_at` (or any equivalent "checkpoint" timestamp). It is better to fail a cycle and retry the window than to succeed and lose the record of what was processed.
+   - **No Silent Data Loss:** Audit logs are not "observability noise"; they are the primary data source for downstream services (like the Digest Generator). Treating them as optional is a design defect that MUST be treated as a blocking review finding. **Heuristic:** *if removing an audit write would not cause any test to fail, the audit is being treated as optional.*
+   - **Negative-path test required:** every atomic state transition must have a test that raises in Operation A and asserts Operation B was NOT invoked. Logging-only assertions are insufficient — pin the absence of the side effect (e.g., `mock.assert_not_called()`).
+6. **Security & Path Safety (Non-Negotiable):**
    - **Security First:** Verify all security checklist items are met. No compromises.
    - **Secrets Management:** Ensure no real keys are committed.
    - **Path Security:** Audit `.gitignore` and path sanitization logic.
-6. **Final Assessment:** A clear "Status" (APPROVED or CHANGES REQUESTED) with a recommendation for action.
+7. **Final Assessment:** A clear "Status" (APPROVED or CHANGES REQUESTED) with a recommendation for action.
 
 ---
 

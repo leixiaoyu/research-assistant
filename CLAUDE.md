@@ -814,6 +814,22 @@ The project includes a comprehensive verification script that runs all required 
 
 ### Code Quality Standards
 * **Modularity:** Separate concerns across the five main modules
+* **Orchestration Patterns** *(codified from PR #124's silent-data-loss incident; enforced in the "State Integrity & Durability" review checklist within [GEMINI.md → Pull Request Review Protocol](GEMINI.md#pull-request-review-protocol-high-standard). See `src/services/intelligence/monitoring/runner.py::_run_one` for the canonical example.)***:**
+  - **Checked Success — gate every dependent on the prior call's outcome.** When operation B (e.g., `mark_checked`) semantically depends on operation A (e.g., `record_run`), a *caught* exception in A must abort B — not just be logged. Logging-and-continuing is **not** the same as "handled." Prefer **early-return** on A's failure (the gate is then unreachable by construction) over a `success_flag = True` / `if success_flag:` shape (the flag can be forgotten or mis-toggled).
+    ```python
+    # GOOD: early-return makes mark_checked unreachable on persist failure.
+    try:
+        await asyncio.to_thread(self._run_repo.record_run, run, ...)
+    except Exception as exc:
+        logger.error("persistence_failed_skipping_mark_checked", ...)
+        return run  # gate by construction
+    if run.status is not FAILED:
+        self._subscriptions.mark_checked(...)
+    ```
+  - **Fail-Soft Boundaries — isolate independent tasks only.** Use try/except to keep a cycle going across *independent* peers (e.g., one subscription's failure must not abort the rest), **never** as a substitute for gating downstream pre-requisite work.
+  - **Audit-write the failure paths too.** Every dependent that gets skipped because a pre-requisite failed must emit a structured log event (e.g., `"persistence_failed_skipping_X"`) so ops can grep for audit-trail gaps.
+  - **Audit similar manager + repository pairs in `citation/`, `registry/`, and future intelligence services** — the same class of bug can land anywhere a workflow spans a service that mutates state and a repository that records what happened.
+* **Transactionality (SQLite):** Where multiple SQLite tables are involved in a single logical change *on the same connection*, use an explicit `BEGIN IMMEDIATE...COMMIT` block. *Note: this is a separate concern from "Orchestration Patterns" above — `BEGIN IMMEDIATE` does not help when two operations live on different connections (see PR #124).*
 * **Error Handling:** Implement robust try/except blocks and exponential backoff for API rate limits
 * **Logging:** Use `structlog` for structured JSON logging, not `print()`
 * **Type Hints:** Required for all function signatures (enforced by mypy)

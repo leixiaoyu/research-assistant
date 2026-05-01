@@ -43,7 +43,8 @@ required.
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Optional
 
 import structlog
 
@@ -59,6 +60,10 @@ from src.services.intelligence.monitoring.run_repository import (
 from src.services.intelligence.monitoring.subscription_manager import (
     SubscriptionManager,
 )
+
+if TYPE_CHECKING:
+    from src.services.providers.arxiv import ArxivProvider
+    from src.services.registry.service import RegistryService
 
 logger = structlog.get_logger()
 
@@ -92,6 +97,71 @@ class MonitoringRunner:
         self._subscriptions = subscription_manager
         self._monitor = monitor
         self._run_repo = run_repo
+
+    @classmethod
+    def from_paths(
+        cls,
+        *,
+        db_path: Path | str,
+        registry: "RegistryService",
+        arxiv_provider: "ArxivProvider",
+    ) -> "MonitoringRunner":
+        """Convenience factory wiring the standard collaborators.
+
+        The Week-2 ``MonitoringCheckJob`` (#117) and any CLI / REST
+        surface that just has a ``db_path`` plus the shared
+        infrastructure handles (registry, arxiv provider) shouldn't
+        have to instantiate ``SubscriptionManager`` + ``ArxivMonitor`` +
+        ``MonitoringRunRepository`` by hand -- the facade promises a
+        one-liner. This classmethod is that one-liner.
+
+        Both subscription manager and run repo are eagerly initialized
+        so the caller doesn't have to remember the two-phase
+        construct-then-initialize idiom.
+
+        Args:
+            db_path: SQLite database file path. Must lie under one of
+                the approved storage roots (``data/``, ``cache/``, or
+                the system temp dir) -- enforced by
+                :func:`sanitize_storage_path` inside both
+                ``SubscriptionManager`` and ``MonitoringRunRepository``.
+                Accepts ``str`` or ``Path``; coerced to ``Path``
+                upfront for downstream typing (matches
+                ``SubscriptionManager.__init__``).
+            registry: The shared global ``RegistryService`` used by the
+                monitor for paper deduplication.
+            arxiv_provider: The shared ``ArxivProvider`` used by the
+                monitor to poll ArXiv.
+
+        Returns:
+            A fully-wired, initialized ``MonitoringRunner`` ready for
+            ``run_once()``.
+
+        Lifecycle note
+        --------------
+        Intended to be constructed ONCE per process (e.g., at scheduler
+        startup) and reused across run cycles. Each construction calls
+        ``MigrationManager.migrate()`` on both repos -- migrations are
+        idempotent but still hit the DB. The future Week-2
+        ``MonitoringCheckJob`` (#117) should hold the runner instance
+        in ``__init__`` and call ``run_once()`` per tick.
+
+        Failure recovery: if either ``initialize()`` raises, simply
+        re-call ``from_paths()`` -- both subscription manager and run
+        repository migrations are idempotent, so the partial
+        construction left behind is safe to discard.
+        """
+        db_path = Path(db_path)  # accept str | Path; coerce for downstream typing
+        sub_mgr = SubscriptionManager(db_path)
+        sub_mgr.initialize()
+        monitor = ArxivMonitor(provider=arxiv_provider, registry=registry)
+        repo = MonitoringRunRepository(db_path)
+        repo.initialize()
+        return cls(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+        )
 
     async def run_once(self, user_id: Optional[str] = None) -> list[MonitoringRun]:
         """Run one monitoring cycle across all active subscriptions.
@@ -160,7 +230,8 @@ class MonitoringRunner:
                 error=f"monitor_check_error: {exc}",
             )
 
-        # Persist the audit row regardless of outcome. We catch
+        # Persist the audit row regardless of provider outcome (success,
+        # partial, AND failed runs go to the audit log). We catch
         # persistence failures so a SQLite hiccup on one row doesn't
         # break the rest of the cycle -- the in-memory ``run`` is still
         # returned to the caller for observability.
@@ -171,22 +242,35 @@ class MonitoringRunner:
         # the event loop would starve every concurrent task in the
         # interim. ``asyncio.to_thread`` parks it on the default thread
         # executor so the loop stays responsive (PR #123 review #H1).
+        #
+        # Atomic-state-transition guarantee (PR #124 team review):
+        # ``mark_checked`` MUST NOT be called if persistence failed.
+        # Otherwise the subscription's ``last_checked_at`` advances
+        # past the polling window while the audit row of papers found
+        # in that window is lost -- the Week-2 digest generator would
+        # silently miss research updates for that interval. We early-
+        # return on persistence failure so the next cycle re-polls the
+        # same window and re-records the audit row.
         try:
             await asyncio.to_thread(
                 self._run_repo.record_run, run, user_id=subscription.user_id
             )
         except Exception as exc:
             logger.error(
-                "monitoring_runner_record_failed",
+                "monitoring_persistence_failed_skipping_mark_checked",
                 subscription_id=subscription.subscription_id,
                 run_id=run.run_id,
                 error=str(exc),
             )
+            # IMPORTANT: skip mark_checked so the next cycle retries
+            # the window. Returning the in-memory ``run`` preserves
+            # observability for the caller.
+            return run
 
-        # Only mark the subscription as checked on success / partial.
-        # A FAILED run means we never spoke to the provider; updating
-        # last_checked would cause us to skip the next cycle for the
-        # wrong reason.
+        # Persistence succeeded. Only mark the subscription as checked
+        # on success / partial. A FAILED run means we never spoke to
+        # the provider; updating last_checked would cause us to skip
+        # the next cycle for the wrong reason.
         if run.status is not MonitoringRunStatus.FAILED:
             try:
                 self._subscriptions.mark_checked(subscription.subscription_id)

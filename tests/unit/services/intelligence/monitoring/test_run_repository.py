@@ -27,8 +27,10 @@ import pytest
 
 from src.services.intelligence.models.monitoring import PaperSource
 from src.services.intelligence.monitoring.models import (
+    MonitoringPaperAudit,
     MonitoringPaperRecord,
     MonitoringRun,
+    MonitoringRunAudit,
     MonitoringRunStatus,
 )
 from src.services.intelligence.monitoring.run_repository import (
@@ -111,7 +113,12 @@ def _make_record(
 ) -> MonitoringPaperRecord:
     return MonitoringPaperRecord(
         paper_id=paper_id,
-        title=paper_id,  # repo stores paper_id only; title=paper_id round-trips
+        # Audit DTO has no title field; the rich ``title`` here is for
+        # in-memory MonitoringPaperRecord round-trip only -- the
+        # repository's read path returns MonitoringPaperAudit which
+        # carries only the persisted columns (paper_id, registered,
+        # relevance_score, relevance_reasoning).
+        title=paper_id,
         is_new=is_new,
         relevance_score=relevance_score,
         relevance_reasoning=relevance_reasoning,
@@ -252,6 +259,10 @@ class TestRoundTrip:
         repo.record_run(run)
         fetched = repo.get_run(run.run_id)
         assert fetched is not None
+        # Regression guard for the DTO rename (PR #124 #C3): a refactor
+        # that reverts ``_row_to_audit`` to MonitoringRun would still
+        # match all field-value asserts since the types share columns.
+        assert isinstance(fetched, MonitoringRunAudit)
         assert fetched.run_id == run.run_id
         assert fetched.subscription_id == run.subscription_id
         assert fetched.status is MonitoringRunStatus.SUCCESS
@@ -273,12 +284,27 @@ class TestRoundTrip:
         repo.record_run(run)
         fetched = repo.get_run(run.run_id)
         assert fetched is not None
+        # Regression guard for the DTO rename (PR #124 #C3).
+        assert isinstance(fetched, MonitoringRunAudit)
         assert fetched.papers_seen == 2
         assert fetched.papers_new == 1
         # Papers come back ordered by paper_id ASC.
         assert [p.paper_id for p in fetched.papers] == ["2301.0001", "2301.0002"]
-        assert fetched.papers[0].is_new is True
-        assert fetched.papers[1].is_new is False
+        for p in fetched.papers:
+            # Per-paper DTO type guard (PR #124 #C3) -- prevents a
+            # regression that smuggles MonitoringPaperRecord back onto
+            # the read path.
+            assert isinstance(p, MonitoringPaperAudit)
+        # Read path returns MonitoringPaperAudit (PR #119 #S6); the
+        # ``is_new`` flag on the rich record is persisted as
+        # ``registered`` in the audit type.
+        assert fetched.papers[0].registered is True
+        assert fetched.papers[1].registered is False
+        # Default-NULL round-trip on papers[0] -- prior tests only
+        # asserted the non-NULL papers[1] case, leaving the most likely
+        # column-mapping regression vector uncovered (PR #124 #C4).
+        assert fetched.papers[0].relevance_score is None
+        assert fetched.papers[0].relevance_reasoning is None
         assert fetched.papers[1].relevance_score == 0.85
         assert fetched.papers[1].relevance_reasoning == "strong match"
 
@@ -295,12 +321,49 @@ class TestRoundTrip:
         repo.record_run(run)
         fetched = repo.get_run(run.run_id)
         assert fetched is not None
+        assert isinstance(fetched, MonitoringRunAudit)
         assert fetched.finished_at == finished
         assert fetched.error == "boom"
         assert fetched.status is MonitoringRunStatus.FAILED
 
     def test_get_returns_none_for_missing(self, repo: MonitoringRunRepository) -> None:
         assert repo.get_run("run-missing") is None
+
+    def test_fetch_papers_returns_only_validated_audit_dtos(
+        self, repo: MonitoringRunRepository
+    ) -> None:
+        """PR #124 team review: pin the read-path type contract.
+
+        ``_fetch_papers`` must return ``list[MonitoringPaperAudit]`` --
+        never raw rows / dicts. The source-side assertion in the
+        method enforces this at runtime; this test pins the contract
+        from the consumer's perspective.
+        """
+        records = [
+            _make_record(paper_id="2301.0001", is_new=True),
+            _make_record(
+                paper_id="2301.0002",
+                is_new=False,
+                relevance_score=0.5,
+                relevance_reasoning="ok",
+            ),
+        ]
+        run = _make_run(papers_seen=2, papers_new=1, papers=records)
+        repo.record_run(run)
+
+        # Use the public read path (which delegates to _fetch_papers).
+        fetched = repo.get_run(run.run_id)
+        assert fetched is not None
+        # Every element must be the audit DTO type -- not a dict, not
+        # the rich MonitoringPaperRecord, not a sqlite3.Row.
+        # Strict identity check (``type(...) is ...``, not ``isinstance``):
+        # a future MonitoringPaperRecord-style subclass that bypasses
+        # audit-DTO validation would still satisfy ``isinstance``; only
+        # ``is`` catches the type-leak we're guarding against.
+        for paper in fetched.papers:
+            assert (
+                type(paper) is MonitoringPaperAudit
+            ), f"_fetch_papers leaked non-audit type: {type(paper).__name__}"
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +454,9 @@ class TestListRuns:
         runs = repo.list_runs()
         # Sorted DESC: 12, 11, 10
         assert [r.run_id for r in runs] == ["run-001", "run-002", "run-000"]
+        # DTO rename regression guard (PR #124 #C3).
+        for r in runs:
+            assert isinstance(r, MonitoringRunAudit)
 
     def test_list_filter_by_subscription(
         self, repo: MonitoringRunRepository, db_path: Path
@@ -401,6 +467,8 @@ class TestListRuns:
         repo.record_run(_make_run(run_id="run-b", subscription_id="sub-y"))
         result = repo.list_runs(subscription_id="sub-x")
         assert [r.run_id for r in result] == ["run-a"]
+        for r in result:
+            assert isinstance(r, MonitoringRunAudit)
 
     def test_list_respects_limit(self, repo: MonitoringRunRepository) -> None:
         for i in range(5):
@@ -412,6 +480,8 @@ class TestListRuns:
             )
         result = repo.list_runs(limit=2)
         assert len(result) == 2
+        for r in result:
+            assert isinstance(r, MonitoringRunAudit)
 
     def test_list_invalid_limit_raises(self, repo: MonitoringRunRepository) -> None:
         with pytest.raises(ValueError, match="must be positive"):

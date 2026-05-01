@@ -18,7 +18,8 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -28,6 +29,9 @@ from src.services.intelligence.monitoring.models import (
     MonitoringRunStatus,
     ResearchSubscription,
     SubscriptionStatus,
+)
+from src.services.intelligence.monitoring.run_repository import (
+    MonitoringRunRepository,
 )
 from src.services.intelligence.monitoring.runner import MonitoringRunner
 
@@ -117,6 +121,155 @@ def _result_for(
         **run_kwargs,  # type: ignore[arg-type]
     )
     return ArxivMonitorResult(run=run, new_papers=[], deduplicated_papers=[])
+
+
+# ---------------------------------------------------------------------------
+# Factory: from_paths
+# ---------------------------------------------------------------------------
+
+
+class TestFromPathsFactory:
+    """Test ``MonitoringRunner.from_paths`` (PR #119 #S7).
+
+    Verifies that the convenience factory wires SubscriptionManager,
+    ArxivMonitor, and MonitoringRunRepository correctly so the Week-2
+    job can construct + run a complete cycle in a single call.
+    """
+
+    @pytest.mark.asyncio
+    async def test_from_paths_empty_db_returns_empty_list(
+        self, tmp_path  # type: ignore[no-untyped-def]
+    ) -> None:
+        """A from_paths-constructed runner should run_once cleanly
+        against an empty database and return an empty list (no
+        subscriptions registered yet).
+
+        Renamed from ``test_from_paths_constructs_full_runner`` per
+        CLAUDE.md ``test_<function>_<scenario>`` naming convention
+        (PR #124 #N6).
+        """
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
+
+        # Use a path inside the system temp dir (one of the approved
+        # storage roots for sanitize_storage_path).
+        db_path = tmp_path / "monitoring.db"
+        registry = MagicMock()  # ArxivMonitor only touches it on .check
+        provider = MagicMock()  # ditto
+
+        runner = MonitoringRunner.from_paths(
+            db_path=db_path,
+            registry=registry,
+            arxiv_provider=provider,
+        )
+        # No subscriptions persisted -> empty cycle.
+        runs = await runner.run_once()
+        assert runs == []
+
+    def test_from_paths_returns_initialized_components(
+        self, tmp_path  # type: ignore[no-untyped-def]
+    ) -> None:
+        """Factory must initialize both the SubscriptionManager and the
+        MonitoringRunRepository so the caller doesn't have to remember
+        the construct-then-initialize idiom.
+
+        Verifies initialization via the public APIs (PR #124 #N7) so
+        the test does not couple to private ``_initialized`` flags --
+        a successful ``list_subscriptions`` / ``list_runs`` call only
+        works after both repos have applied migrations.
+        """
+        from src.services.intelligence.monitoring.run_repository import (
+            MonitoringRunRepository,
+        )
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
+        from src.services.intelligence.monitoring.subscription_manager import (
+            SubscriptionManager,
+        )
+
+        db_path = tmp_path / "init.db"
+        runner = MonitoringRunner.from_paths(
+            db_path=db_path,
+            registry=MagicMock(),
+            arxiv_provider=MagicMock(),
+        )
+        assert isinstance(runner._subscriptions, SubscriptionManager)
+        assert isinstance(runner._run_repo, MonitoringRunRepository)
+        # Behavioral check: both repos respond cleanly to a public
+        # read API. ``list_subscriptions`` and ``list_runs`` both raise
+        # RuntimeError("not initialized") if migrations did not run --
+        # so a quiet ``[]`` proves the factory completed initialize().
+        assert runner._subscriptions.list_subscriptions() == []
+        assert runner._run_repo.list_runs() == []
+
+    def test_from_paths_rejects_path_outside_approved_roots(self) -> None:
+        """Path safety must propagate through the factory (PR #124 #C1).
+
+        ``sanitize_storage_path`` is called inside both
+        ``SubscriptionManager`` and ``MonitoringRunRepository``
+        constructors; ``from_paths`` must NOT swallow the resulting
+        ``SecurityError`` -- traversal attempts have to fail loud at
+        the factory boundary so the Week-2 scheduler does not silently
+        construct a runner pointed at ``/etc/passwd``.
+        """
+        from src.utils.security import SecurityError
+
+        with pytest.raises(SecurityError):
+            MonitoringRunner.from_paths(
+                db_path=Path("/etc/passwd"),
+                registry=MagicMock(),
+                arxiv_provider=MagicMock(),
+            )
+
+    def test_from_paths_propagates_repo_initialize_failure(
+        self, tmp_path  # type: ignore[no-untyped-def]
+    ) -> None:
+        """If ``repo.initialize()`` raises after ``sub_mgr.initialize()``
+        succeeds, the failure must propagate cleanly (PR #124 #C2).
+
+        Partial construction is documented as recoverable -- migrations
+        on both repos are idempotent so re-calling ``from_paths`` is
+        safe -- but the failure itself must reach the caller, not be
+        swallowed.
+        """
+        db_path = tmp_path / "monitoring.db"
+        with patch.object(
+            MonitoringRunRepository, "initialize", side_effect=RuntimeError("boom")
+        ):
+            with pytest.raises(RuntimeError, match="boom"):
+                MonitoringRunner.from_paths(
+                    db_path=db_path,
+                    registry=MagicMock(),
+                    arxiv_provider=MagicMock(),
+                )
+
+    def test_from_paths_recovers_after_repo_initialize_failure(
+        self, tmp_path  # type: ignore[no-untyped-def]
+    ) -> None:
+        """A second call after a transient initialize() failure must
+        succeed cleanly (PR #124 #C2).
+
+        Migrations on both repos are idempotent, so the partial state
+        left behind by the first attempt does not poison the retry.
+        Pins the docstring's recovery contract.
+        """
+        db_path = tmp_path / "monitoring.db"
+        with patch.object(
+            MonitoringRunRepository,
+            "initialize",
+            side_effect=[RuntimeError("transient"), None],
+        ):
+            with pytest.raises(RuntimeError, match="transient"):
+                MonitoringRunner.from_paths(
+                    db_path=db_path,
+                    registry=MagicMock(),
+                    arxiv_provider=MagicMock(),
+                )
+            # Second call succeeds -- migrations are idempotent.
+            runner = MonitoringRunner.from_paths(
+                db_path=db_path,
+                registry=MagicMock(),
+                arxiv_provider=MagicMock(),
+            )
+        assert runner is not None
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +455,84 @@ class TestPersistenceFailures:
         # Both runs returned to caller for observability even though
         # persistence blew up.
         assert len(runs) == 2
+
+    @pytest.mark.asyncio
+    async def test_record_run_failure_skips_mark_checked(self) -> None:
+        """Atomic-state-transition guarantee (PR #124 team review).
+
+        If ``record_run`` raises (persistence outage), the runner MUST
+        NOT call ``mark_checked``. Otherwise the subscription's
+        ``last_checked_at`` advances past the polling window while the
+        audit row of papers found in that window is lost -- the Week-2
+        digest generator would silently miss research updates for that
+        interval.
+
+        Rebound: the next cycle re-polls the same window and re-records
+        the audit row.
+        """
+        sub_a = _make_subscription(subscription_id="sub-a")
+        sub_b = _make_subscription(subscription_id="sub-b")
+        runner, sub_mgr, _, _ = _build_runner(
+            subscriptions=[sub_a, sub_b],
+            check_results=[
+                _result_for(sub_a),
+                _result_for(sub_b),
+            ],
+            record_side_effect=RuntimeError("disk full"),
+        )
+        runs = await runner.run_once()
+
+        # Cycle continues -- both runs returned for observability.
+        assert len(runs) == 2
+        # Critical: NEITHER subscription gets marked-checked because
+        # both record_run calls raised. Mark-checked must be strictly
+        # downstream of audit-trail durability.
+        sub_mgr.mark_checked.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_record_run_failure_logs_skipping_mark_checked_event(
+        self,
+    ) -> None:
+        """The skip is observable -- ops can grep for the structured
+        event when investigating why a subscription's audit trail has
+        gaps.
+
+        Uses ``structlog.testing.capture_logs`` (project convention --
+        see test_run_repository.py:608) since structlog is not wired
+        through stdlib's root logger, so plain ``caplog`` would not
+        see the events.
+        """
+        import structlog.testing
+
+        sub = _make_subscription(subscription_id="sub-a")
+        runner, _, _, _ = _build_runner(
+            subscriptions=[sub],
+            check_results=[_result_for(sub)],
+            record_side_effect=RuntimeError("disk full"),
+        )
+        with structlog.testing.capture_logs() as logs:
+            runs = await runner.run_once()
+
+        skip_logs = [
+            entry
+            for entry in logs
+            if entry.get("event")
+            == "monitoring_persistence_failed_skipping_mark_checked"
+        ]
+        assert len(skip_logs) == 1, (
+            f"expected one persistence-skip log, got "
+            f"{[entry.get('event') for entry in logs]}"
+        )
+        # Pin all three bound fields the production call emits so a
+        # future refactor that drops one (e.g., run_id) trips the test.
+        skip = skip_logs[0]
+        assert skip.get("subscription_id") == "sub-a"
+        assert skip.get("error") == "disk full"
+        # run_id is auto-generated UUID4 on the in-memory MonitoringRun;
+        # we don't assert its value, just its presence + match to the
+        # in-memory run returned to the caller.
+        assert skip.get("run_id") is not None
+        assert skip.get("run_id") == runs[0].run_id
 
     @pytest.mark.asyncio
     async def test_mark_checked_failure_does_not_abort_cycle(self) -> None:

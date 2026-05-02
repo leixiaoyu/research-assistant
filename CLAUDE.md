@@ -803,6 +803,22 @@ The project includes a comprehensive verification script that runs all required 
 
 ---
 
+## Debugging Principles
+
+### Verification Before Action
+
+Before "fixing" any failure — formatting drift, lint changes, CI red, mysterious test failures — **verify the root cause first** rather than reformatting or editing files reflexively. Common false leads:
+
+- **Tool version mismatch** — the local tool may differ from CI's pinned version. Check `pyproject.toml` / CI workflow before "fixing" diff output that may simply be the local tool emitting a newer style.
+- **Config drift** — verify the config the failure is blamed on is actually the one being read at runtime. Trace the code path (e.g., grep for `os.getenv`, `Field(default=...)`, the constructor that reads it) before changing config values.
+- **Silently-skipped local checks** — `verify.sh` may skip a gate if the underlying tool isn't installed locally (e.g., `codespell` was silently absent in PR #132 reviews — local "all green" while CI flagged a real spelling error). Don't conclude "it passes locally" without confirming each gate actually ran.
+- **Side-effect interactions** — global state can make a test "fail mysteriously" when run in a different order. Example: `cache_logger_on_first_use=True` in structlog freezes the bound logger at first call, so `capture_logs()` won't see events from already-bound loggers. Investigate the interaction before patching the test.
+- **Symptom ≠ cause** — a Pydantic validation error in test setup may be flagging that production validators were tightened correctly; the right fix is updating the fixture, not loosening the validator.
+
+When in doubt: read the failing tool's actual output end-to-end, then trace the code path it indicts. Do not assume the symptom names the cause.
+
+---
+
 ## Coding Standards
 
 ### Security Standards (CRITICAL)
@@ -863,6 +879,18 @@ The project includes a comprehensive verification script that runs all required 
   - Pre-commit hook should reject commits with coverage <99%
   - CI/CD pipeline must fail on coverage <99%
   - Pull requests require coverage proof in description
+
+### Test Authoring Conventions
+
+Before writing or modifying tests, **read the target module first** to confirm:
+
+1. **Exact attribute names** — internal naming may differ from intuition (e.g., `_registry` vs `_paper_registry`, `_run_repo` vs `_runs_repository`). A test that monkey-patches the wrong attribute name silently no-ops.
+2. **Correct API signatures** — verify keyword names (e.g., `corpus_dir` vs `data_dir`), method-vs-property (`.stats` vs `.get_stats()`), and async-vs-sync.
+3. **Valid input values** — Pydantic validators reject empty strings, out-of-range numbers, malformed identifiers. Check the model's validators before passing test fixtures.
+4. **Established fixture patterns** — many shared fixtures live in `tests/conftest.py` or per-package `conftest.py`. Don't recreate them inline.
+5. **structlog event capture** — the project uses `structlog.testing.capture_logs()`, NOT pytest's `caplog`. With `cache_logger_on_first_use=True` configured in `src/utils/logging.py`, you may also need `monkeypatch.setattr(target_module, "logger", structlog.get_logger())` *before* entering `capture_logs()` — otherwise the cached production logger ignores the processor swap. See `tests/unit/test_scheduling/test_monitoring_check_job.py` for the canonical pattern.
+
+Use Read/Grep on the source before drafting patches. A test built on assumed APIs is debt that surfaces later as flaky tests or vacuous coverage (assertions that pass without exercising the production branch they target).
 
 ## Key Implementation Details
 
@@ -945,6 +973,28 @@ google-generativeai  # or anthropic
 marker-pdf
 pyyaml              # for config file parsing
 ```
+
+## Git/Repo Cleanup Workflow
+
+After PRs are merged, perform these steps in order:
+
+1. **Sync main:** `git checkout main && git pull --ff-only origin main`
+2. **Prune stale remote-tracking refs:** `git fetch --prune`
+3. **Delete merged local branches:** `git branch -d <merged-branch>` (lowercase `-d` — fails safely if not actually merged; never use `-D` without explicit user confirmation per the [Dangerous Operations](#%EF%B8%8F-dangerous-operations---user-confirmation-required) table)
+4. **Worktree removal:** follow the [Git Worktree Protection Protocol](#-git-worktree-protection-protocol-non-negotiable). Use `git wt-remove <path>` and obtain explicit user confirmation before removing each worktree. **The instruction "clean up repo" does NOT auto-authorize worktree removal.**
+
+### Files That MUST NOT Be Deleted Without Explicit User Confirmation
+
+Regardless of cleanup context (post-merge sweep, "tidy up", "remove unused"), the following files/directories are reference and governance documents whose presence elsewhere in the repo may not be obvious:
+
+- `CLAUDE.md`, `GEMINI.md` — implementer + reviewer guidance (this file and its peer)
+- `CODE_REVIEW_AGENT.md` — review-agent contract
+- `DESIGN_DOC_*.md` — architectural decision records
+- `docs/specs/PHASE_*_SPEC.md` — milestone specifications referenced by review checklists
+- `.omc/`, `.spec-workflow/` — workflow state directories used by OMC autopilot
+- `.env.template`, `.gitignore`, `.codespell-ignore` — repository configuration
+
+If a cleanup task appears to require touching any of these, **stop and ask**.
 
 ## Output Directory Management
 

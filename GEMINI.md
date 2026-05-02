@@ -256,10 +256,10 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
       ```bash
       ./verify.sh
       ```
-   5. **Cleanup:** Safely remove the worktree:
+   5. **Cleanup:** Safely remove the worktree per the [Git/Repo Cleanup Workflow in CLAUDE.md](CLAUDE.md#gitrepo-cleanup-workflow). Worktree removal requires explicit user confirmation; review worktrees that have unpushed commits (e.g., from rebased branches) trigger the safety check and must be force-removed only after verifying contents are upstream:
       ```bash
       cd ..
-      git worktree remove pr-review-ID
+      git wt-remove pr-review-ID  # safe alias; blocks if work is at risk
       ```
 
    **Environment Integrity Checks:**
@@ -282,7 +282,13 @@ Reviewers must maintain **extreme engineering rigor** and keep the bar exception
    - **Security First:** Verify all security checklist items are met. No compromises.
    - **Secrets Management:** Ensure no real keys are committed.
    - **Path Security:** Audit `.gitignore` and path sanitization logic.
-7. **Final Assessment:** A clear "Status" (APPROVED or CHANGES REQUESTED) with a recommendation for action.
+7. **Verification Before Action (Non-Negotiable)** *(implementor-side guidance lives in [CLAUDE.md "Debugging Principles"](CLAUDE.md#debugging-principles))*:
+   - **Verify the root cause before "fixing":** When a CI gate fails, do not reformat / edit / loosen-validator reflexively. Confirm the failure is real and trace the code path before recommending a fix.
+   - **Reviewer-specific failure modes to watch for:**
+     - **Local checks silently skipped:** if a reviewer's local `verify.sh` is greener than CI, suspect missing tooling (e.g., `codespell` not installed) — confirm by inspecting which gates ran, not just the final exit code.
+     - **Reviewing a stale OID:** always pin to the PR's `headRefOid` (per step 2 above). A "fix" that addresses code on an old SHA wastes the PR author's time when the branch has moved.
+     - **Symptom ≠ cause:** a fixture failure may indicate the production validator was correctly tightened; the right outcome is updating the test, not loosening the validator.
+8. **Final Assessment:** A clear "Status" (APPROVED or CHANGES REQUESTED) with a recommendation for action.
 
 ---
 
@@ -421,6 +427,8 @@ Refer to `CLAUDE.md` and `README.md` for project details, tech stack, and develo
 ## Coding Standards
 
 Adhere strictly to the coding standards, security standards, and testing standards defined in `CLAUDE.md`.
+
+When reviewing test changes specifically, verify the test author followed the [Test Authoring Conventions in CLAUDE.md](CLAUDE.md#test-authoring-conventions): tests must be built on attribute names, API signatures, and validator constraints actually present in the target module — not assumed. Tests built on wrong names are the silent failure mode (they pass but exercise nothing). Confirm the production code path the test claims to cover is actually invoked.
 
 ## Key Implementation Details
 

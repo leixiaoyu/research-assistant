@@ -27,12 +27,15 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from src.services.intelligence.citation._id_validation import (
+    CANONICAL_NODE_ID_PATTERN,
+)
 from src.services.intelligence.models import (
     EdgeType,
     GraphEdge,
@@ -103,16 +106,47 @@ def make_citation_edge_id(citing_id: str, cited_id: str) -> str:
     return f"edge:cites:{digest}"
 
 
-class CitationDirection(str, Enum):
-    """Direction of citation traversal for the graph builder.
+class LegacyCitationDirection(str, Enum):
+    """Direction of citation traversal for the graph builder (legacy).
 
     - ``OUT``: outgoing — the seed paper's *references* (what it cites).
     - ``IN``: incoming — papers that *cite* the seed.
     - ``BOTH``: both directions (one round-trip per side).
+
+    .. deprecated::
+        This enum is the legacy graph-builder direction. New code that
+        operates the BFS crawler should use :class:`CrawlDirection` which
+        uses ``FORWARD`` / ``BACKWARD`` / ``BOTH`` to match the spec
+        vocabulary (REQ-9.2.2). ``CitationDirection`` is kept as an alias
+        for backward compatibility with ``graph_builder.py`` callers.
     """
 
     OUT = "out"
     IN = "in"
+    BOTH = "both"
+
+
+# Backward-compatible alias so all existing callers (graph_builder.py,
+# tests, public __init__.py) continue to work without changes.
+CitationDirection = LegacyCitationDirection
+
+
+class CrawlDirection(str, Enum):
+    """Direction of the BFS expansion (REQ-9.2.2 §574-592) — canonical enum.
+
+    This is the single source of truth for crawler direction across the
+    citation package. The legacy :class:`LegacyCitationDirection` (aliased
+    as ``CitationDirection``) uses OUT/IN semantics for the depth=1 graph
+    builder; this enum uses FORWARD/BACKWARD per the spec vocabulary.
+
+    - ``FORWARD``: follow papers that *cite* the current paper (incoming).
+    - ``BACKWARD``: follow papers that the current paper *references*
+      (outgoing — what the paper cites).
+    - ``BOTH``: union of the two (one provider call per direction).
+    """
+
+    FORWARD = "forward"
+    BACKWARD = "backward"
     BOTH = "both"
 
 
@@ -194,6 +228,21 @@ class CitationNode(BaseModel):
         default=None,
         description="Optional precomputed influence score (e.g. PageRank).",
     )
+    influential_citation_count: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Semantic Scholar 'influentialCitationCount' metric. None when the "
+            "source does not provide it (e.g. OpenAlex)."
+        ),
+    )
+    publication_date: date | None = Field(
+        default=None,
+        description=(
+            "Full publication date when known. Optional: many providers only "
+            "report year-precision; in those cases use 'year' instead."
+        ),
+    )
     fetched_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="When this record was fetched from the source.",
@@ -206,11 +255,13 @@ class CitationNode(BaseModel):
 
         We re-validate here so callers fail at model construction time
         with a meaningful error, rather than at the SQLite boundary.
+        Uses the canonical post-normalization pattern from
+        :mod:`_id_validation` (single source of truth — H-A1).
         """
         v = v.strip()
         if not v:
             raise ValueError("paper_id cannot be empty")
-        if not re.match(r"^[A-Za-z0-9:._-]+$", v):
+        if not CANONICAL_NODE_ID_PATTERN.match(v):
             raise ValueError(
                 f"Invalid paper_id format: {v!r}. "
                 "Allowed: alphanumeric, colons, periods, hyphens, underscores."
@@ -253,6 +304,10 @@ class CitationNode(BaseModel):
             properties["year"] = self.year
         if self.influence_score is not None:
             properties["influence_score"] = self.influence_score
+        if self.influential_citation_count is not None:
+            properties["influential_citation_count"] = self.influential_citation_count
+        if self.publication_date is not None:
+            properties["publication_date"] = self.publication_date.isoformat()
 
         return GraphNode(
             node_id=self.paper_id,
@@ -315,7 +370,7 @@ class CitationEdge(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("Citation paper ids cannot be empty")
-        if not re.match(r"^[A-Za-z0-9:._-]+$", v):
+        if not CANONICAL_NODE_ID_PATTERN.match(v):
             raise ValueError(
                 f"Invalid citation paper id: {v!r}. "
                 "Allowed: alphanumeric, colons, periods, hyphens, underscores."

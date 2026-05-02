@@ -28,8 +28,7 @@ import asyncio
 import hashlib
 import json
 import os
-import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Optional, cast
@@ -39,6 +38,10 @@ import aiohttp
 import diskcache
 import structlog
 
+from src.services.intelligence.citation._id_validation import (
+    PAPER_ID_MAX_LENGTH as _PAPER_ID_MAX_LENGTH,
+    RAW_PROVIDER_ID_PATTERN as _PAPER_ID_PATTERN,
+)
 from src.services.intelligence.citation.models import (
     CitationEdge,
     CitationNode,
@@ -73,13 +76,9 @@ _DEFAULT_MAX_RESULTS = 200
 # URL construction. ``A-Za-z0-9`` matches ASCII only — unicode
 # letters/digits are deliberately rejected because S2 ids are ASCII
 # and a unicode lookalike could obscure an injection vector.
-_PAPER_ID_PATTERN = re.compile(r"^[A-Za-z0-9:./_\-]+$")
-
-# Hard cap on paper-id length. S2 ids never exceed ~70 characters in
-# practice (a SHA-256 hex is 64); 512 leaves comfortable headroom while
-# bounding worst-case URL length and rejecting payload-stuffing
-# attempts that pad otherwise-legal characters into the megabyte range.
-_PAPER_ID_MAX_LENGTH = 512
+# Imported from _id_validation.py as the canonical single source of
+# truth (H-A1); ``_PAPER_ID_PATTERN`` and ``_PAPER_ID_MAX_LENGTH`` are
+# module-private aliases that preserve the existing call-site names.
 
 # Substrings that look benign under the allow-list above (they only
 # use permitted characters) but that signal an SSRF / traversal payload
@@ -111,6 +110,7 @@ _S2_PAPER_FIELDS = ",".join(
         "citationCount",
         "influentialCitationCount",
         "referenceCount",
+        "publicationDate",
     ]
 )
 
@@ -592,6 +592,30 @@ class SemanticScholarCitationClient:
 
         title = payload.get("title") or "Unknown Title"
 
+        # ``influentialCitationCount`` is None when S2 has not computed
+        # the metric yet (very recent papers); we forward None so the
+        # crawler's ``sort_by_influence`` ranking falls back to
+        # ``citation_count`` cleanly.
+        influential_raw = payload.get("influentialCitationCount")
+        influential = int(influential_raw) if influential_raw is not None else None
+
+        # ``publicationDate`` is an ISO-8601 date string (e.g. "2023-06-01")
+        # returned by S2 when the exact publication date is known. We parse it
+        # to a ``date`` object so the crawler's ranking and the influence scorer
+        # can use it without re-parsing.  Malformed or absent values are
+        # gracefully degraded to None — the crawler falls back to year-only.
+        pub_date_raw = payload.get("publicationDate")
+        publication_date: date | None = None
+        if isinstance(pub_date_raw, str) and pub_date_raw:
+            try:
+                publication_date = date.fromisoformat(pub_date_raw)
+            except ValueError:
+                logger.warning(
+                    "s2_citation_malformed_publication_date",
+                    paper_id=str(s2_id),
+                    raw_value=pub_date_raw,
+                )
+
         return CitationNode(
             paper_id=make_paper_node_id("s2", str(s2_id)),
             external_ids=external_ids,
@@ -599,6 +623,8 @@ class SemanticScholarCitationClient:
             year=payload.get("year"),
             citation_count=int(payload.get("citationCount") or 0),
             reference_count=int(payload.get("referenceCount") or 0),
+            influential_citation_count=influential,
+            publication_date=publication_date,
         )
 
     @staticmethod

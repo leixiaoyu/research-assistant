@@ -22,6 +22,7 @@ from src.storage.intelligence_graph.migrations import (
     MIGRATION_V1_INITIAL,
     MIGRATION_V2_MONITORING_RUNS,
     MIGRATION_V3_MONITORING_RUNS_FK,
+    MIGRATION_V4_CITATION_INFLUENCE_METRICS,
 )
 from src.utils.security import SecurityError
 
@@ -1112,3 +1113,169 @@ class TestMigrationV3MonitoringRunsFk:
             "V3 not recorded in schema_migrations -- migrate() will "
             "redundantly re-apply on every startup"
         )
+
+
+class TestMigrationV4CitationInfluenceMetrics:
+    """Tests for MIGRATION_V4_CITATION_INFLUENCE_METRICS (Issue #129)."""
+
+    def test_migrate_v4_creates_citation_influence_metrics_table(
+        self, temp_db: Path
+    ) -> None:
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='citation_influence_metrics'"
+            )
+            assert cursor.fetchone() is not None
+
+    def test_migrate_v4_table_has_expected_columns(self, temp_db: Path) -> None:
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            cursor = conn.execute("PRAGMA table_info(citation_influence_metrics)")
+            cols = {row["name"] for row in cursor.fetchall()}
+        assert cols == {
+            "paper_id",
+            "citation_count",
+            "citation_velocity",
+            "pagerank_score",
+            "hub_score",
+            "authority_score",
+            "computed_at",
+            "version",
+        }
+
+    def test_migrate_v4_paper_id_is_primary_key(self, temp_db: Path) -> None:
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            cursor = conn.execute("PRAGMA table_info(citation_influence_metrics)")
+            pk_cols = [row["name"] for row in cursor.fetchall() if row["pk"] == 1]
+        assert pk_cols == ["paper_id"]
+
+    def test_migrate_v4_unique_constraint_on_paper_id(self, temp_db: Path) -> None:
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            conn.execute(
+                "INSERT INTO citation_influence_metrics "
+                "(paper_id, computed_at) VALUES (?, ?)",
+                ("paper:s2:dup", "2025-01-01T00:00:00+00:00"),
+            )
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO citation_influence_metrics "
+                    "(paper_id, computed_at) VALUES (?, ?)",
+                    ("paper:s2:dup", "2025-01-02T00:00:00+00:00"),
+                )
+
+    def test_migrate_v4_records_version(self, temp_db: Path) -> None:
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        applied_versions = {m["version"] for m in manager.get_applied_migrations()}
+        assert 4 in applied_versions
+
+    def test_migrate_v4_preserves_data_inserted_under_v3_schema(
+        self, temp_db: Path
+    ) -> None:
+        """H-T1: V4 isolation upgrade test.
+
+        Apply V1+V2+V3 only, insert known rows into ``nodes`` and
+        ``monitoring_runs``, then apply V4 in isolation. V4 must (a)
+        create the ``citation_influence_metrics`` table and (b) not
+        disturb any pre-existing rows in other tables. Mirrors the V3
+        regression guard at ``test_migrate_v3_preserves_data_inserted_under_v2_schema``.
+        """
+        manager = MigrationManager(temp_db)
+        # Apply only V1 + V2 + V3 -- stop short of V4.
+        conn = manager._get_connection()
+        try:
+            manager._ensure_migrations_table(conn)
+            manager.apply_migration(conn, MIGRATION_V1_INITIAL)
+            manager.apply_migration(conn, MIGRATION_V2_MONITORING_RUNS)
+            manager.apply_migration(conn, MIGRATION_V3_MONITORING_RUNS_FK)
+        finally:
+            conn.close()
+
+        # Insert a node + a subscription + a monitoring_runs row under V3 shape.
+        with open_connection(temp_db) as conn:
+            conn.execute(
+                """
+                INSERT INTO nodes (
+                    node_id, node_type, properties, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "paper:s2:abc",
+                    "paper",
+                    "{}",
+                    "2024-06-01T00:00:00+00:00",
+                    "2024-06-01T00:00:00+00:00",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-v3-1", "alice", "V3 Sub", "{}"),
+            )
+            conn.execute(
+                """
+                INSERT INTO monitoring_runs (
+                    run_id, subscription_id, user_id,
+                    started_at, finished_at, status, error,
+                    papers_found, papers_new
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "run-v3-1",
+                    "sub-v3-1",
+                    "alice",
+                    "2024-06-01T00:00:00+00:00",
+                    "2024-06-01T00:01:00+00:00",
+                    "success",
+                    None,
+                    5,
+                    2,
+                ),
+            )
+            conn.commit()
+
+        # Now apply V4 in isolation -- must (a) create the new table
+        # (b) not destroy anything that was already there.
+        conn = manager._get_connection()
+        try:
+            manager._ensure_migrations_table(conn)
+            manager.apply_migration(conn, MIGRATION_V4_CITATION_INFLUENCE_METRICS)
+        finally:
+            conn.close()
+
+        with open_connection(temp_db) as conn:
+            # (a) New table now exists
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='citation_influence_metrics'"
+            )
+            assert cursor.fetchone() is not None
+
+            # (b) V3 rows survive intact
+            node_row = conn.execute(
+                "SELECT node_id, node_type FROM nodes WHERE node_id = ?",
+                ("paper:s2:abc",),
+            ).fetchone()
+            assert node_row is not None
+            assert node_row["node_type"] == "paper"
+
+            run_row = conn.execute(
+                "SELECT run_id, status, papers_found, papers_new "
+                "FROM monitoring_runs WHERE run_id = ?",
+                ("run-v3-1",),
+            ).fetchone()
+            assert run_row is not None
+            assert run_row["status"] == "success"
+            assert run_row["papers_found"] == 5
+            assert run_row["papers_new"] == 2

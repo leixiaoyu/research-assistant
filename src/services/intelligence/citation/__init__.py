@@ -30,6 +30,14 @@ Wrapping them would require either widening the ABC or layering an
 adapter on top — both add coupling without saving meaningful code.
 """
 
+from src.services.intelligence.citation.crawler import (
+    MAX_API_CALLS_PER_CRAWL,
+    CitationCrawler,
+    CrawlConfig,
+    CrawlDirection,
+    CrawlResult,
+    sort_by_influence,
+)
 from src.services.intelligence.citation.graph_builder import (
     BuildForPaperRequest,
     CitationGraphBuilder,
@@ -65,4 +73,11 @@ __all__ = [
     "GraphBuildResult",
     "ProviderTag",
     "BuildForPaperRequest",
+    # Crawler (Issue #127)
+    "CitationCrawler",
+    "CrawlConfig",
+    "CrawlDirection",
+    "CrawlResult",
+    "MAX_API_CALLS_PER_CRAWL",
+    "sort_by_influence",
 ]

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -194,6 +194,21 @@ class CitationNode(BaseModel):
         default=None,
         description="Optional precomputed influence score (e.g. PageRank).",
     )
+    influential_citation_count: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Semantic Scholar 'influentialCitationCount' metric. None when the "
+            "source does not provide it (e.g. OpenAlex)."
+        ),
+    )
+    publication_date: date | None = Field(
+        default=None,
+        description=(
+            "Full publication date when known. Optional: many providers only "
+            "report year-precision; in those cases use 'year' instead."
+        ),
+    )
     fetched_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="When this record was fetched from the source.",
@@ -253,6 +268,10 @@ class CitationNode(BaseModel):
             properties["year"] = self.year
         if self.influence_score is not None:
             properties["influence_score"] = self.influence_score
+        if self.influential_citation_count is not None:
+            properties["influential_citation_count"] = self.influential_citation_count
+        if self.publication_date is not None:
+            properties["publication_date"] = self.publication_date.isoformat()
 
         return GraphNode(
             node_id=self.paper_id,

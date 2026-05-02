@@ -592,6 +592,13 @@ class SemanticScholarCitationClient:
 
         title = payload.get("title") or "Unknown Title"
 
+        # ``influentialCitationCount`` is None when S2 has not computed
+        # the metric yet (very recent papers); we forward None so the
+        # crawler's ``sort_by_influence`` ranking falls back to
+        # ``citation_count`` cleanly.
+        influential_raw = payload.get("influentialCitationCount")
+        influential = int(influential_raw) if influential_raw is not None else None
+
         return CitationNode(
             paper_id=make_paper_node_id("s2", str(s2_id)),
             external_ids=external_ids,
@@ -599,6 +606,7 @@ class SemanticScholarCitationClient:
             year=payload.get("year"),
             citation_count=int(payload.get("citationCount") or 0),
             reference_count=int(payload.get("referenceCount") or 0),
+            influential_citation_count=influential,
         )
 
     @staticmethod

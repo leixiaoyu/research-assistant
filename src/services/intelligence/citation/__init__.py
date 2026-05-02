@@ -38,6 +38,12 @@ from src.services.intelligence.citation.crawler import (
     CrawlResult,
     sort_by_influence,
 )
+from src.services.intelligence.citation.influence_scorer import (
+    DEFAULT_CACHE_TTL,
+    MAX_GRAPH_NODES_FOR_HITS,
+    InfluenceMetrics,
+    InfluenceScorer,
+)
 from src.services.intelligence.citation.graph_builder import (
     BuildForPaperRequest,
     CitationGraphBuilder,
@@ -80,4 +86,9 @@ __all__ = [
     "CrawlResult",
     "MAX_API_CALLS_PER_CRAWL",
     "sort_by_influence",
+    # Influence Scorer (Issue #129)
+    "InfluenceScorer",
+    "InfluenceMetrics",
+    "DEFAULT_CACHE_TTL",
+    "MAX_GRAPH_NODES_FOR_HITS",
 ]

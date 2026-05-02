@@ -1112,3 +1112,66 @@ class TestMigrationV3MonitoringRunsFk:
             "V3 not recorded in schema_migrations -- migrate() will "
             "redundantly re-apply on every startup"
         )
+
+
+class TestMigrationV4CitationInfluenceMetrics:
+    """Tests for MIGRATION_V4_CITATION_INFLUENCE_METRICS (Issue #129)."""
+
+    def test_migrate_v4_creates_citation_influence_metrics_table(
+        self, temp_db: Path
+    ) -> None:
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='citation_influence_metrics'"
+            )
+            assert cursor.fetchone() is not None
+
+    def test_migrate_v4_table_has_expected_columns(self, temp_db: Path) -> None:
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            cursor = conn.execute("PRAGMA table_info(citation_influence_metrics)")
+            cols = {row["name"] for row in cursor.fetchall()}
+        assert cols == {
+            "paper_id",
+            "citation_count",
+            "citation_velocity",
+            "pagerank_score",
+            "hub_score",
+            "authority_score",
+            "computed_at",
+            "version",
+        }
+
+    def test_migrate_v4_paper_id_is_primary_key(self, temp_db: Path) -> None:
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            cursor = conn.execute("PRAGMA table_info(citation_influence_metrics)")
+            pk_cols = [row["name"] for row in cursor.fetchall() if row["pk"] == 1]
+        assert pk_cols == ["paper_id"]
+
+    def test_migrate_v4_unique_constraint_on_paper_id(self, temp_db: Path) -> None:
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            conn.execute(
+                "INSERT INTO citation_influence_metrics "
+                "(paper_id, computed_at) VALUES (?, ?)",
+                ("paper:s2:dup", "2025-01-01T00:00:00+00:00"),
+            )
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO citation_influence_metrics "
+                    "(paper_id, computed_at) VALUES (?, ?)",
+                    ("paper:s2:dup", "2025-01-02T00:00:00+00:00"),
+                )
+
+    def test_migrate_v4_records_version(self, temp_db: Path) -> None:
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        applied_versions = {m["version"] for m in manager.get_applied_migrations()}
+        assert 4 in applied_versions

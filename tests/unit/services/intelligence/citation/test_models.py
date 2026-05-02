@@ -466,3 +466,49 @@ def test_citation_edge_to_graph_edge_omits_none_properties():
     assert "is_influential" not in g.properties
     assert g.properties["section"] == "Intro"
     assert g.properties["source"] == "semantic_scholar"
+
+
+# ---------------------------------------------------------------------------
+# CitationNode.to_graph_node — influential_citation_count + publication_date
+# (C-1: bring models.py to ≥99% coverage; covers lines 272 + 274)
+# ---------------------------------------------------------------------------
+
+
+def test_citation_node_to_graph_node_includes_influential_citation_count():
+    """ICC=42 must appear in graph properties."""
+    node = CitationNode(
+        paper_id="paper:s2:abc",
+        title="ICC Paper",
+        influential_citation_count=42,
+    )
+    props = node.to_graph_node().properties
+    assert props["influential_citation_count"] == 42
+
+
+def test_citation_node_to_graph_node_omits_influential_citation_count_when_none():
+    """ICC=None must NOT appear in graph properties."""
+    node = CitationNode(paper_id="paper:s2:abc", title="ICC None Paper")
+    # influential_citation_count defaults to None
+    props = node.to_graph_node().properties
+    assert "influential_citation_count" not in props
+
+
+def test_citation_node_to_graph_node_includes_publication_date_iso_string():
+    """publication_date set to date(2023, 6, 1) must appear as '2023-06-01'."""
+    from datetime import date
+
+    node = CitationNode(
+        paper_id="paper:s2:abc",
+        title="Dated Paper",
+        publication_date=date(2023, 6, 1),
+    )
+    props = node.to_graph_node().properties
+    assert props["publication_date"] == "2023-06-01"
+
+
+def test_citation_node_to_graph_node_omits_publication_date_when_none():
+    """publication_date=None must NOT appear in graph properties."""
+    node = CitationNode(paper_id="paper:s2:abc", title="Undated Paper")
+    # publication_date defaults to None
+    props = node.to_graph_node().properties
+    assert "publication_date" not in props

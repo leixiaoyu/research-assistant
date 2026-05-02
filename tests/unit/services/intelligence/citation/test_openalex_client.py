@@ -1451,3 +1451,61 @@ async def test_transient_failure_then_retry_success(client):
 
 def test_base_url_is_openalex_root():
     assert OpenAlexCitationClient.BASE_URL == "https://api.openalex.org"
+
+
+# ---------------------------------------------------------------------------
+# _payload_to_node: publication_date parsing (C-2 — OpenAlex mirror)
+# ---------------------------------------------------------------------------
+
+
+def test_payload_to_node_with_publication_date(client):
+    """publication_date ISO string is parsed to date(2023, 6, 1)."""
+    from datetime import date
+
+    payload = {
+        "id": "https://openalex.org/W999",
+        "title": "Dated Work",
+        "publication_year": 2023,
+        "publication_date": "2023-06-01",
+        "cited_by_count": 20,
+        "referenced_works_count": 5,
+        "ids": {"openalex": "https://openalex.org/W999"},
+    }
+    node = client._payload_to_node(payload)
+    assert node.publication_date == date(2023, 6, 1)
+
+
+def test_payload_to_node_without_publication_date(client):
+    """Absent publication_date field results in publication_date=None."""
+    payload = {
+        "id": "https://openalex.org/W999",
+        "title": "No Date Work",
+        "publication_year": 2022,
+        "cited_by_count": 10,
+        "referenced_works_count": 2,
+        "ids": {"openalex": "https://openalex.org/W999"},
+    }
+    node = client._payload_to_node(payload)
+    assert node.publication_date is None
+
+
+def test_payload_to_node_with_malformed_publication_date(client):
+    """Malformed publication_date string gracefully degrades to None."""
+    import structlog.testing
+
+    payload = {
+        "id": "https://openalex.org/W999",
+        "title": "Bad Date Work",
+        "publication_year": 2021,
+        "publication_date": "not-a-date",
+        "cited_by_count": 3,
+        "referenced_works_count": 0,
+        "ids": {"openalex": "https://openalex.org/W999"},
+    }
+    with structlog.testing.capture_logs() as logs:
+        node = client._payload_to_node(payload)
+    assert node.publication_date is None
+    warning_events = [e for e in logs if e.get("log_level") == "warning"]
+    assert any(
+        "malformed_publication_date" in e.get("event", "") for e in warning_events
+    )

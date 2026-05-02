@@ -29,7 +29,7 @@ import hashlib
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Optional, cast
@@ -111,6 +111,7 @@ _S2_PAPER_FIELDS = ",".join(
         "citationCount",
         "influentialCitationCount",
         "referenceCount",
+        "publicationDate",
     ]
 )
 
@@ -599,6 +600,23 @@ class SemanticScholarCitationClient:
         influential_raw = payload.get("influentialCitationCount")
         influential = int(influential_raw) if influential_raw is not None else None
 
+        # ``publicationDate`` is an ISO-8601 date string (e.g. "2023-06-01")
+        # returned by S2 when the exact publication date is known. We parse it
+        # to a ``date`` object so the crawler's ranking and the influence scorer
+        # can use it without re-parsing.  Malformed or absent values are
+        # gracefully degraded to None — the crawler falls back to year-only.
+        pub_date_raw = payload.get("publicationDate")
+        publication_date: date | None = None
+        if isinstance(pub_date_raw, str) and pub_date_raw:
+            try:
+                publication_date = date.fromisoformat(pub_date_raw)
+            except ValueError:
+                logger.warning(
+                    "s2_citation_malformed_publication_date",
+                    paper_id=str(s2_id),
+                    raw_value=pub_date_raw,
+                )
+
         return CitationNode(
             paper_id=make_paper_node_id("s2", str(s2_id)),
             external_ids=external_ids,
@@ -607,6 +625,7 @@ class SemanticScholarCitationClient:
             citation_count=int(payload.get("citationCount") or 0),
             reference_count=int(payload.get("referenceCount") or 0),
             influential_citation_count=influential,
+            publication_date=publication_date,
         )
 
     @staticmethod

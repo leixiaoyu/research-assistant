@@ -39,7 +39,6 @@ Failure semantics
 from __future__ import annotations
 
 import asyncio
-import re
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -48,6 +47,10 @@ from typing import Optional
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.services.intelligence.citation._id_validation import (
+    CANONICAL_NODE_ID_PATTERN,
+    PAPER_ID_MAX_LENGTH,
+)
 from src.services.intelligence.models import EdgeType, NodeType
 from src.storage.intelligence_graph import (
     GraphAlgorithms,
@@ -81,10 +84,12 @@ DEFAULT_CACHE_TTL = timedelta(days=7)
 _HITS_MAX_ITERATIONS = 100
 _HITS_EPSILON = 1e-6
 
-# Strict allow-list mirroring the providers' / crawler's paper_id
-# pattern. Defense-in-depth at the scorer boundary.
-_PAPER_ID_PATTERN = re.compile(r"^[A-Za-z0-9:._-]+$")
-_PAPER_ID_MAX_LENGTH = 512
+# Strict allow-list imported from the canonical single source of truth
+# in _id_validation.py (H-A1). The scorer validates the post-normalization
+# canonical node-id pattern (no slashes — those were scrubbed by
+# _normalize_id_segment when the CitationNode was built).
+_PAPER_ID_PATTERN = CANONICAL_NODE_ID_PATTERN
+_PAPER_ID_MAX_LENGTH = PAPER_ID_MAX_LENGTH
 
 
 class InfluenceMetrics(BaseModel):

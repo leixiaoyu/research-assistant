@@ -33,6 +33,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from src.services.intelligence.citation._id_validation import (
+    CANONICAL_NODE_ID_PATTERN,
+)
 from src.services.intelligence.models import (
     EdgeType,
     GraphEdge,
@@ -103,16 +106,47 @@ def make_citation_edge_id(citing_id: str, cited_id: str) -> str:
     return f"edge:cites:{digest}"
 
 
-class CitationDirection(str, Enum):
-    """Direction of citation traversal for the graph builder.
+class LegacyCitationDirection(str, Enum):
+    """Direction of citation traversal for the graph builder (legacy).
 
     - ``OUT``: outgoing — the seed paper's *references* (what it cites).
     - ``IN``: incoming — papers that *cite* the seed.
     - ``BOTH``: both directions (one round-trip per side).
+
+    .. deprecated::
+        This enum is the legacy graph-builder direction. New code that
+        operates the BFS crawler should use :class:`CrawlDirection` which
+        uses ``FORWARD`` / ``BACKWARD`` / ``BOTH`` to match the spec
+        vocabulary (REQ-9.2.2). ``CitationDirection`` is kept as an alias
+        for backward compatibility with ``graph_builder.py`` callers.
     """
 
     OUT = "out"
     IN = "in"
+    BOTH = "both"
+
+
+# Backward-compatible alias so all existing callers (graph_builder.py,
+# tests, public __init__.py) continue to work without changes.
+CitationDirection = LegacyCitationDirection
+
+
+class CrawlDirection(str, Enum):
+    """Direction of the BFS expansion (REQ-9.2.2 §574-592) — canonical enum.
+
+    This is the single source of truth for crawler direction across the
+    citation package. The legacy :class:`LegacyCitationDirection` (aliased
+    as ``CitationDirection``) uses OUT/IN semantics for the depth=1 graph
+    builder; this enum uses FORWARD/BACKWARD per the spec vocabulary.
+
+    - ``FORWARD``: follow papers that *cite* the current paper (incoming).
+    - ``BACKWARD``: follow papers that the current paper *references*
+      (outgoing — what the paper cites).
+    - ``BOTH``: union of the two (one provider call per direction).
+    """
+
+    FORWARD = "forward"
+    BACKWARD = "backward"
     BOTH = "both"
 
 
@@ -221,11 +255,13 @@ class CitationNode(BaseModel):
 
         We re-validate here so callers fail at model construction time
         with a meaningful error, rather than at the SQLite boundary.
+        Uses the canonical post-normalization pattern from
+        :mod:`_id_validation` (single source of truth — H-A1).
         """
         v = v.strip()
         if not v:
             raise ValueError("paper_id cannot be empty")
-        if not re.match(r"^[A-Za-z0-9:._-]+$", v):
+        if not CANONICAL_NODE_ID_PATTERN.match(v):
             raise ValueError(
                 f"Invalid paper_id format: {v!r}. "
                 "Allowed: alphanumeric, colons, periods, hyphens, underscores."
@@ -334,7 +370,7 @@ class CitationEdge(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("Citation paper ids cannot be empty")
-        if not re.match(r"^[A-Za-z0-9:._-]+$", v):
+        if not CANONICAL_NODE_ID_PATTERN.match(v):
             raise ValueError(
                 f"Invalid citation paper id: {v!r}. "
                 "Allowed: alphanumeric, colons, periods, hyphens, underscores."

@@ -34,7 +34,6 @@ from src.services.intelligence.citation.crawler import (
     MAX_API_CALLS_PER_CRAWL,
     CitationCrawler,
     CrawlConfig,
-    CrawlDirection,
     CrawlResult,
     sort_by_influence,
 )
@@ -54,6 +53,8 @@ from src.services.intelligence.citation.models import (
     CitationDirection,
     CitationEdge,
     CitationNode,
+    CrawlDirection,
+    LegacyCitationDirection,
     make_citation_edge_id,
     make_paper_node_id,
 )
@@ -66,9 +67,11 @@ from src.services.intelligence.citation.semantic_scholar_client import (
 
 __all__ = [
     # Models
-    "CitationDirection",
+    "CitationDirection",  # legacy alias for LegacyCitationDirection
+    "LegacyCitationDirection",
     "CitationEdge",
     "CitationNode",
+    "CrawlDirection",  # canonical crawler direction (FORWARD/BACKWARD/BOTH)
     "make_citation_edge_id",
     "make_paper_node_id",
     # Clients

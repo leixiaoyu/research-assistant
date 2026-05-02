@@ -47,19 +47,22 @@ expansion shape.
 from __future__ import annotations
 
 import asyncio
-import re
 from collections import deque
 from datetime import date
-from enum import Enum
 from pathlib import Path
 from typing import Optional
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.services.intelligence.citation._id_validation import (
+    PAPER_ID_MAX_LENGTH as _PAPER_ID_MAX_LENGTH,
+    RAW_PROVIDER_ID_PATTERN as _PAPER_ID_PATTERN,
+)
 from src.services.intelligence.citation.models import (
     CitationEdge,
     CitationNode,
+    CrawlDirection,
 )
 from src.services.intelligence.citation.openalex_client import (
     OpenAlexCitationClient,
@@ -87,24 +90,11 @@ MAX_API_CALLS_PER_CRAWL = 1000
 _MAX_CONCURRENT_REQUESTS = 10
 
 
-# Strict allow-list mirroring the providers' own paper_id regex. We
-# re-validate at the crawler boundary so a bad seed is rejected before
-# any provider call (defense-in-depth).
-_PAPER_ID_PATTERN = re.compile(r"^[A-Za-z0-9:./_\-]+$")
-_PAPER_ID_MAX_LENGTH = 512
-
-
-class CrawlDirection(str, Enum):
-    """Direction of the BFS expansion (REQ-9.2.2).
-
-    - ``FORWARD``: follow papers that cite the current paper.
-    - ``BACKWARD``: follow papers that the current paper references.
-    - ``BOTH``: union of the two.
-    """
-
-    FORWARD = "forward"
-    BACKWARD = "backward"
-    BOTH = "both"
+# Strict allow-list and length cap imported from the canonical single
+# source of truth in _id_validation.py (H-A1).  The aliases above
+# (``_PAPER_ID_PATTERN`` and ``_PAPER_ID_MAX_LENGTH``) retain the
+# underscore-prefixed module-private names so existing call sites
+# inside this module need no further changes.
 
 
 class CrawlConfig(BaseModel):

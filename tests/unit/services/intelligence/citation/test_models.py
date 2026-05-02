@@ -12,6 +12,8 @@ from src.services.intelligence.citation.models import (
     CitationDirection,
     CitationEdge,
     CitationNode,
+    CrawlDirection,
+    LegacyCitationDirection,
     _normalize_id_segment,
     make_citation_edge_id,
     make_paper_node_id,
@@ -512,3 +514,30 @@ def test_citation_node_to_graph_node_omits_publication_date_when_none():
     # publication_date defaults to None
     props = node.to_graph_node().properties
     assert "publication_date" not in props
+
+
+# ---------------------------------------------------------------------------
+# CrawlDirection enum — canonical values (C-4)
+# ---------------------------------------------------------------------------
+
+
+def test_crawl_direction_enum_values():
+    """Pin canonical CrawlDirection enum values per spec REQ-9.2.2."""
+    assert CrawlDirection.FORWARD.value == "forward"
+    assert CrawlDirection.BACKWARD.value == "backward"
+    assert CrawlDirection.BOTH.value == "both"
+
+
+def test_crawl_direction_is_distinct_from_citation_direction():
+    """CrawlDirection and CitationDirection are different enum classes."""
+    assert CrawlDirection is not CitationDirection
+    assert CrawlDirection is not LegacyCitationDirection
+
+
+def test_citation_direction_backward_compat_alias():
+    """CitationDirection is the backward-compat alias for LegacyCitationDirection."""
+    assert CitationDirection is LegacyCitationDirection
+    # Original OUT/IN/BOTH values are intact
+    assert CitationDirection.OUT.value == "out"
+    assert CitationDirection.IN.value == "in"
+    assert CitationDirection.BOTH.value == "both"

@@ -148,6 +148,41 @@ class ResearchScheduler:
         self._update_metrics()
         return job_id
 
+    def add_monitoring_check_job(
+        self,
+        job: Any,
+        *,
+        hour: int = 6,
+        minute: int = 0,
+        job_id: str = "monitoring_check",
+    ) -> str:
+        """Register a ``MonitoringCheckJob`` on a daily cron schedule.
+
+        Convenience wrapper around :meth:`add_job` that picks the
+        Phase 9.1 default cadence (daily at 06:00 UTC, per the
+        scheduler-default decision in ``open-questions.md``). Callers
+        with custom cadences should use :meth:`add_job` directly.
+
+        Args:
+            job: A constructed :class:`MonitoringCheckJob` (or any
+                object with a ``__call__`` -- typed loosely so this
+                module doesn't take an import-time dependency on
+                ``src.scheduling.jobs``).
+            hour: Hour of day to fire (0..23). Default 6.
+            minute: Minute of hour to fire (0..59). Default 0.
+            job_id: APScheduler job id.
+
+        Returns:
+            The registered job id.
+        """
+        return self.add_job(
+            job,
+            job_id=job_id,
+            trigger="cron",
+            hour=hour,
+            minute=minute,
+        )
+
     def remove_job(self, job_id: str) -> bool:
         """Remove a job from the scheduler.
 

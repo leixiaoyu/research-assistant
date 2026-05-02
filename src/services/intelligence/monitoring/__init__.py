@@ -40,6 +40,15 @@ from src.services.intelligence.monitoring.models import (
     ResearchSubscription,
     SubscriptionStatus,
 )
+from src.services.intelligence.monitoring.digest_generator import (
+    DEFAULT_OUTPUT_ROOT,
+    DigestGenerator,
+)
+from src.services.intelligence.monitoring.relevance_scorer import (
+    LLMResponseError,
+    RelevanceScorer,
+    RelevanceScoreResult,
+)
 from src.services.intelligence.monitoring.run_repository import (
     MonitoringRunRepository,
 )
@@ -51,6 +60,9 @@ from src.services.intelligence.monitoring.subscription_manager import (
 __all__ = [
     "ArxivMonitor",
     "ArxivMonitorResult",
+    "DEFAULT_OUTPUT_ROOT",
+    "DigestGenerator",
+    "LLMResponseError",
     "MonitoringPaperAudit",
     "MonitoringPaperRecord",
     "MonitoringRun",
@@ -58,6 +70,8 @@ __all__ = [
     "MonitoringRunRepository",
     "MonitoringRunStatus",
     "MonitoringRunner",
+    "RelevanceScorer",
+    "RelevanceScoreResult",
     "ResearchSubscription",
     "SubscriptionManager",
     "SubscriptionStatus",

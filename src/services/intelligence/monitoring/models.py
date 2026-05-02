@@ -54,6 +54,11 @@ _NAME_PATTERN = re.compile(r"^[A-Za-z0-9 ._\-()]+$")
 _USER_ID_PATTERN = re.compile(r"^[A-Za-z0-9._\-]+$")
 _KEYWORD_PATTERN = re.compile(r"^[A-Za-z0-9 ._\-+:/()]+$")
 
+# Shared identifier/slug pattern: safe for filesystem names and SQL column
+# values. Exported so ``digest_generator`` can import it rather than
+# duplicating the definition (H-C2 DRY).
+IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9._\-]+$")
+
 
 class SubscriptionStatus(str, Enum):
     """Lifecycle state of a research subscription.
@@ -224,10 +229,19 @@ class ResearchSubscription(BaseModel):
             )
         cleaned: list[str] = []
         seen: set[str] = set()
+        cumulative_len = 0
         for kw in v:
             kw_stripped = kw.strip()
             if not kw_stripped:
                 raise ValueError("Keywords cannot be empty strings")
+            # H-S2: Cap individual keyword length to prevent DoS via enormous
+            # keywords that bloat the LLM prompt.
+            if len(kw_stripped) > 200:
+                raise ValueError(
+                    f"Keyword too long ({len(kw_stripped)} chars): "
+                    f"{kw_stripped[:40]!r}... "
+                    "Maximum 200 characters per keyword."
+                )
             if not _KEYWORD_PATTERN.match(kw_stripped):
                 raise ValueError(
                     f"Invalid keyword: {kw_stripped!r}. "
@@ -239,6 +253,15 @@ class ResearchSubscription(BaseModel):
                 # ergonomic when callers concat keyword lists.
                 continue
             seen.add(lowered)
+            # H-S2: Cap cumulative keyword length to prevent prompt DoS.
+            # Adding 2 for the ", " separator between keywords.
+            cumulative_len += len(kw_stripped) + (2 if cleaned else 0)
+            if cumulative_len > 4096:
+                raise ValueError(
+                    f"Cumulative keyword list exceeds 4096 bytes "
+                    f"(got {cumulative_len}). Reduce the number or length "
+                    "of keywords."
+                )
             cleaned.append(kw_stripped)
         return cleaned
 

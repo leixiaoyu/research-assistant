@@ -7,6 +7,7 @@ This module handles:
 - Daily and total spending limit enforcement
 - Automatic daily reset logic
 - Usage summary generation
+- Model-specific pricing (single source of truth for all model costs)
 """
 
 from dataclasses import dataclass, field
@@ -21,6 +22,54 @@ from src.utils.exceptions import CostLimitExceeded
 from src.observability.metrics import DAILY_COST_USD
 
 logger = structlog.get_logger()
+
+# ---------------------------------------------------------------------------
+# Model pricing table (H-A2: single source of truth for all LLM costs).
+# Source: https://ai.google.dev/pricing (Jan 2025 for Gemini Flash).
+# Units: USD per million tokens.
+# ---------------------------------------------------------------------------
+# fmt: off
+MODEL_PRICING: Dict[str, Dict[str, float]] = {
+    # Gemini 2.0 Flash (lightweight, scoring-optimised)
+    "gemini-2.0-flash":           {"input": 0.075, "output": 0.30},
+    "gemini-2.0-flash-exp":       {"input": 0.075, "output": 0.30},
+    # Gemini 1.5 Flash
+    "gemini-1.5-flash":           {"input": 0.075, "output": 0.30},
+    "gemini-1.5-flash-latest":    {"input": 0.075, "output": 0.30},
+    "gemini-1.5-flash-001":       {"input": 0.075, "output": 0.30},
+    # Gemini 1.5 Pro
+    "gemini-1.5-pro":             {"input": 3.50,  "output": 10.50},
+    "gemini-1.5-pro-latest":      {"input": 3.50,  "output": 10.50},
+    # Claude 3.5 Sonnet
+    "claude-3-5-sonnet-20250122": {"input": 3.00,  "output": 15.00},
+    "claude-3-5-sonnet-20241022": {"input": 3.00,  "output": 15.00},
+    # Claude 3.5 Haiku
+    "claude-3-5-haiku-20241022":  {"input": 0.80,  "output": 4.00},
+    # Fallback unknown model (conservative estimate)
+    "__default__":                {"input": 3.00,  "output": 15.00},
+}
+# fmt: on
+
+
+def compute_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Compute the USD cost for a single LLM call using the pricing table.
+
+    This is the **single source of truth** for all LLM cost calculations
+    in the project (H-A2). The ``relevance_scorer`` module uses this
+    instead of maintaining its own Flash pricing constants.
+
+    Args:
+        model: Model identifier string (e.g. ``"gemini-1.5-flash"``).
+        input_tokens: Number of input tokens consumed.
+        output_tokens: Number of output tokens generated.
+
+    Returns:
+        Estimated cost in USD (non-negative float).
+    """
+    pricing = MODEL_PRICING.get(model) or MODEL_PRICING["__default__"]
+    input_cost = (input_tokens / 1_000_000.0) * pricing["input"]
+    output_cost = (output_tokens / 1_000_000.0) * pricing["output"]
+    return input_cost + output_cost
 
 
 @dataclass

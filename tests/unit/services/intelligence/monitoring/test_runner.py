@@ -627,3 +627,291 @@ class TestEventLoopResponsiveness:
             "asyncio.to_thread wrap regression?"
         )
         repo.record_run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# C-1: RelevanceScorer wired into runner + per-paper scoring tests
+# ---------------------------------------------------------------------------
+
+
+class TestScorerIntegration:
+    """C-1: RelevanceScorer is called per paper, scores written to records."""
+
+    @pytest.mark.asyncio
+    async def test_scorer_called_per_paper(self) -> None:
+        """When a scorer is wired, it is called once per paper in the run."""
+        from unittest.mock import AsyncMock as _AsyncMock, MagicMock as _MagicMock
+
+        from src.services.intelligence.monitoring.models import MonitoringPaperRecord
+        from src.services.intelligence.monitoring.relevance_scorer import (
+            RelevanceScoreResult,
+        )
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
+
+        sub = _make_subscription(subscription_id="sub-scorer")
+        paper1 = MonitoringPaperRecord(paper_id="p1", title="Paper 1", is_new=True)
+        paper2 = MonitoringPaperRecord(paper_id="p2", title="Paper 2", is_new=True)
+        run_obj = _make_run(subscription_id="sub-scorer")
+        run_obj = run_obj.model_copy(update={"papers": [paper1, paper2]})
+
+        result = ArxivMonitorResult(run=run_obj, new_papers=[], deduplicated_papers=[])
+
+        scorer = _MagicMock()
+        score_result = RelevanceScoreResult(
+            score=0.8,
+            reasoning="Good match indeed",
+            model_used="gemini-1.5-flash",
+            cost_usd=0.0001,
+        )
+        scorer.score = _AsyncMock(return_value=score_result)
+
+        sub_mgr = _MagicMock()
+        sub_mgr.list_subscriptions = _MagicMock(return_value=[sub])
+        sub_mgr.mark_checked = _MagicMock()
+        monitor = _MagicMock()
+        monitor.check = _AsyncMock(return_value=result)
+        repo = _MagicMock()
+        repo.record_run = _MagicMock()
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+            scorer=scorer,
+        )
+        runs = await runner.run_once()
+
+        # Scorer must be called once per paper.
+        assert scorer.score.await_count == 2
+        # Scores must be written back to the paper records.
+        assert runs[0].papers[0].relevance_score == pytest.approx(0.8)
+        assert runs[0].papers[1].relevance_score == pytest.approx(0.8)
+        assert runs[0].papers[0].relevance_reasoning == "Good match indeed"
+
+    @pytest.mark.asyncio
+    async def test_scorer_raises_does_not_abort_run(self) -> None:
+        """A scorer exception on one paper must not abort the whole run."""
+        from unittest.mock import AsyncMock as _AsyncMock, MagicMock as _MagicMock
+
+        from src.services.intelligence.monitoring.models import MonitoringPaperRecord
+        from src.services.intelligence.monitoring.relevance_scorer import (
+            LLMResponseError,
+            RelevanceScoreResult,
+        )
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
+
+        sub = _make_subscription(subscription_id="sub-scorer2")
+        paper1 = MonitoringPaperRecord(paper_id="p1", title="Paper 1", is_new=True)
+        paper2 = MonitoringPaperRecord(paper_id="p2", title="Paper 2", is_new=True)
+        run_obj = _make_run(subscription_id="sub-scorer2")
+        run_obj = run_obj.model_copy(update={"papers": [paper1, paper2]})
+        result = ArxivMonitorResult(run=run_obj, new_papers=[], deduplicated_papers=[])
+
+        # First paper raises; second succeeds.
+        ok_result = RelevanceScoreResult(
+            score=0.6,
+            reasoning="Moderate relevance here",
+            model_used="gemini-1.5-flash",
+            cost_usd=0.0,
+        )
+        scorer = _MagicMock()
+        scorer.score = _AsyncMock(
+            side_effect=[LLMResponseError("malformed"), ok_result]
+        )
+
+        sub_mgr = _MagicMock()
+        sub_mgr.list_subscriptions = _MagicMock(return_value=[sub])
+        sub_mgr.mark_checked = _MagicMock()
+        monitor = _MagicMock()
+        monitor.check = _AsyncMock(return_value=result)
+        repo = _MagicMock()
+        repo.record_run = _MagicMock()
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+            scorer=scorer,
+        )
+        runs = await runner.run_once()
+
+        assert len(runs) == 1
+        # First paper: no score (scorer raised).
+        assert runs[0].papers[0].relevance_score is None
+        # Second paper: scored successfully.
+        assert runs[0].papers[1].relevance_score == pytest.approx(0.6)
+
+    @pytest.mark.asyncio
+    async def test_no_scorer_returns_unscored_papers(self) -> None:
+        """Without a scorer, papers remain unscored (backward compatible)."""
+        from unittest.mock import AsyncMock as _AsyncMock, MagicMock as _MagicMock
+
+        from src.services.intelligence.monitoring.models import MonitoringPaperRecord
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
+
+        sub = _make_subscription(subscription_id="sub-no-scorer")
+        paper = MonitoringPaperRecord(paper_id="p1", title="Paper 1", is_new=True)
+        run_obj = _make_run(subscription_id="sub-no-scorer")
+        run_obj = run_obj.model_copy(update={"papers": [paper]})
+        result = ArxivMonitorResult(run=run_obj, new_papers=[], deduplicated_papers=[])
+
+        sub_mgr = _MagicMock()
+        sub_mgr.list_subscriptions = _MagicMock(return_value=[sub])
+        sub_mgr.mark_checked = _MagicMock()
+        monitor = _MagicMock()
+        monitor.check = _AsyncMock(return_value=result)
+        repo = _MagicMock()
+        repo.record_run = _MagicMock()
+
+        # No scorer injected.
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+        )
+        runs = await runner.run_once()
+
+        assert runs[0].papers[0].relevance_score is None
+
+
+# ---------------------------------------------------------------------------
+# H-C1: Public delegation methods
+# ---------------------------------------------------------------------------
+
+
+class TestPublicDelegationMethods:
+    """H-C1: MonitoringRunner.list_subscriptions() and get_audit_run() delegate
+    to their private collaborators without exposing private attributes.
+    """
+
+    def test_list_subscriptions_delegates(self) -> None:
+        sub_mgr = MagicMock()
+        sub_mgr.list_subscriptions = MagicMock(return_value=["sub1", "sub2"])
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=MagicMock(),
+            run_repo=MagicMock(),
+        )
+        result = runner.list_subscriptions(user_id="alice", active_only=True)
+        assert result == ["sub1", "sub2"]
+        sub_mgr.list_subscriptions.assert_called_once_with(
+            user_id="alice", active_only=True
+        )
+
+    def test_get_audit_run_delegates(self) -> None:
+        run_repo = MagicMock()
+        run_repo.get_run = MagicMock(return_value="audit_row")
+        runner = MonitoringRunner(
+            subscription_manager=MagicMock(),
+            monitor=MagicMock(),
+            run_repo=run_repo,
+        )
+        result = runner.get_audit_run("run-abc")
+        assert result == "audit_row"
+        run_repo.get_run.assert_called_once_with("run-abc")
+
+
+# ---------------------------------------------------------------------------
+# H-T4: _build_runner / from_paths strong assertions
+# ---------------------------------------------------------------------------
+
+
+class TestFromPathsStrong:
+    """H-T4: Assert from_paths returns a fully-functional MonitoringRunner
+    with working public delegation methods.
+    """
+
+    def test_from_paths_returns_monitoring_runner_instance(
+        self, tmp_path: Path
+    ) -> None:
+        """from_paths must return a MonitoringRunner instance."""
+        runner = MonitoringRunner.from_paths(
+            db_path=tmp_path / "monitoring.db",
+            registry=MagicMock(),
+            arxiv_provider=MagicMock(),
+        )
+        assert isinstance(runner, MonitoringRunner)
+
+    def test_from_paths_list_subscriptions_works(self, tmp_path: Path) -> None:
+        """list_subscriptions() works after from_paths (proves initialization)."""
+        runner = MonitoringRunner.from_paths(
+            db_path=tmp_path / "monitoring.db",
+            registry=MagicMock(),
+            arxiv_provider=MagicMock(),
+        )
+        assert runner.list_subscriptions() == []
+
+
+# ---------------------------------------------------------------------------
+# H-S5: LLM budget cap + semaphore concurrency
+# ---------------------------------------------------------------------------
+
+
+class TestLLMBudgetCap:
+    """H-S5: MAX_LLM_CALLS_PER_CYCLE is enforced; exhaustion emits structured log."""
+
+    @pytest.mark.asyncio
+    async def test_budget_cap_stops_scoring_and_logs_event(self) -> None:
+        """When budget is exhausted, remaining papers are left unscored and
+        ``monitoring_llm_budget_exhausted`` is logged.
+        """
+        import structlog.testing
+
+        from unittest.mock import AsyncMock as _AsyncMock, MagicMock as _MagicMock
+
+        from src.services.intelligence.monitoring.models import MonitoringPaperRecord
+        from src.services.intelligence.monitoring.relevance_scorer import (
+            RelevanceScoreResult,
+        )
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
+
+        sub = _make_subscription(subscription_id="sub-budget")
+        # Create 3 papers but set the budget cap to 1 so only 1 gets scored.
+        papers = [
+            MonitoringPaperRecord(paper_id=f"p{i}", title=f"Paper {i}", is_new=True)
+            for i in range(3)
+        ]
+        run_obj = _make_run(subscription_id="sub-budget")
+        run_obj = run_obj.model_copy(update={"papers": papers})
+        result = ArxivMonitorResult(run=run_obj, new_papers=[], deduplicated_papers=[])
+
+        scorer = _MagicMock()
+        ok_result = RelevanceScoreResult(
+            score=0.5,
+            reasoning="Some match found here",
+            model_used="gemini-1.5-flash",
+            cost_usd=0.0,
+        )
+        scorer.score = _AsyncMock(return_value=ok_result)
+
+        sub_mgr = _MagicMock()
+        sub_mgr.list_subscriptions = _MagicMock(return_value=[sub])
+        sub_mgr.mark_checked = _MagicMock()
+        monitor = _MagicMock()
+        monitor.check = _AsyncMock(return_value=result)
+        repo = _MagicMock()
+        repo.record_run = _MagicMock()
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+            scorer=scorer,
+        )
+
+        # Patch MAX_LLM_CALLS_PER_CYCLE to 1 so we hit the cap after 1 paper.
+        with patch(
+            "src.services.intelligence.monitoring.runner.MAX_LLM_CALLS_PER_CYCLE", 1
+        ):
+            with structlog.testing.capture_logs() as logs:
+                runs = await runner.run_once()
+
+        # Only 1 paper should be scored (the cap is 1).
+        scored = [p for p in runs[0].papers if p.relevance_score is not None]
+        assert len(scored) == 1
+
+        # Budget exhaustion events should be logged for the remaining papers.
+        exhausted_events = [
+            e for e in logs if e.get("event") == "monitoring_llm_budget_exhausted"
+        ]
+        assert len(exhausted_events) >= 1

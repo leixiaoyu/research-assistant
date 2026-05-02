@@ -4,6 +4,7 @@ Provides pre-configured jobs:
 - DailyResearchJob: Run research pipeline daily
 - CacheCleanupJob: Clean up expired cache entries
 - CostReportJob: Generate and log cost reports
+- MonitoringCheckJob: Phase 9.1 -- run monitoring cycles + write digests
 
 Usage:
     from src.scheduling.jobs import DailyResearchJob
@@ -677,4 +678,238 @@ class DRACorpusRefreshJob(BaseJob):
                 exc_info=True,
             )
 
+        return result
+
+
+class MonitoringCheckJob(BaseJob):
+    """Run one monitoring cycle + write per-run digests (Phase 9.1, Week 2).
+
+    Atomic-state-transition semantics (CLAUDE.md "Orchestration Patterns")
+    -------------------------------------------------------------------
+    The monitoring runner already gates ``mark_checked`` on
+    ``record_run`` success via early-return (see
+    ``MonitoringRunner._run_one``). This job adds **a second gate** at
+    the digest-generation step:
+
+    - **Digests are written ONLY for runs where**
+      ``run.status is not MonitoringRunStatus.FAILED``. A FAILED run
+      means we never spoke to the upstream provider -- writing a
+      digest would publish empty / misleading content.
+    - **A digest write failure for one run does not abort the cycle.**
+      The next run gets its own try/except envelope (Fail-Soft Boundary
+      between independent peers, per CLAUDE.md). The pre-requisite
+      (the run record itself) was already persisted by the runner.
+    - **Each skipped digest emits a structured log event**
+      (``monitoring_digest_skipped_failed_run`` /
+      ``monitoring_digest_write_failed``) so ops can grep the audit
+      trail for missing digests.
+
+    Lifecycle (mirrors ``DRACorpusRefreshJob``):
+    - ``MonitoringRunner.from_paths(...)`` is constructed ONCE in
+      ``__init__`` and reused across ticks. Per the factory's
+      docstring, it eagerly initializes both the subscription manager
+      and the run repository.
+    - ``DigestGenerator`` is constructed once in ``__init__`` and
+      reused too (its only state is the output directory).
+    - ``run()`` per tick: ``await self._runner.run_once()``, then
+      iterate the runs and write digests for the non-FAILED ones.
+
+    Failure recovery: any exception inside ``run()`` propagates to
+    ``BaseJob.__call__`` which logs ``job_failed`` and re-raises so
+    APScheduler records a JobError event. The next tick reconstructs
+    the run from a fresh subscription set -- there is no in-memory
+    state that needs reset.
+    """
+
+    def __init__(
+        self,
+        *,
+        db_path: Optional[Path] = None,
+        registry: Optional[Any] = None,
+        arxiv_provider: Optional[Any] = None,
+        digest_output_root: Optional[Path] = None,
+        runner: Optional[Any] = None,
+        digest_generator: Optional[Any] = None,
+    ):
+        """Initialize the monitoring check job.
+
+        Args:
+            db_path: SQLite DB path for the monitoring tables. Default
+                ``./data/monitoring.db``. Must lie under one of the
+                approved storage roots -- enforced by
+                ``sanitize_storage_path``.
+            registry: ``RegistryService`` for paper deduplication and
+                title lookup. If omitted, a default
+                ``RegistryService()`` is constructed.
+            arxiv_provider: ``ArxivProvider`` for upstream polling. If
+                omitted, a default ``ArxivProvider()`` is constructed.
+            digest_output_root: Directory for digest files. Defaults
+                to ``DigestGenerator``'s ``./output/digests`` default.
+            runner: Pre-built ``MonitoringRunner`` (testing seam).
+                When provided, the constructor skips
+                ``from_paths(...)`` -- callers must ensure the runner
+                is fully initialized.
+            digest_generator: Pre-built ``DigestGenerator`` (testing
+                seam). When provided, the constructor skips
+                generator construction.
+        """
+        super().__init__("monitoring_check")
+        # Imports lazy at construction time so test environments that
+        # don't need APScheduler / monitoring deps can import this
+        # module just to introspect ``BaseJob`` -- the runner
+        # construction below is the only side-effecting line.
+        from src.services.intelligence.monitoring import (
+            DigestGenerator,
+            MonitoringRunner,
+        )
+        from src.services.llm.service import LLMService
+        from src.services.providers.arxiv import ArxivProvider
+        from src.services.registry.service import RegistryService
+
+        self._db_path = db_path or Path("./data/monitoring.db")
+        if runner is not None:
+            self._runner = runner
+        else:
+            # Build LLMService for the RelevanceScorer. Read the API key
+            # from the environment (never hardcoded). If missing, the
+            # runner is constructed without a scorer so scoring is skipped
+            # gracefully rather than crashing at job startup.
+            import os
+
+            from src.models.llm import CostLimits, LLMConfig
+
+            llm_svc = None
+            llm_api_key = os.environ.get("LLM_API_KEY") or os.environ.get(
+                "GEMINI_API_KEY"
+            )
+            if llm_api_key:
+                try:
+                    llm_config = LLMConfig(api_key=llm_api_key)
+                    llm_cost_limits = CostLimits()
+                    llm_svc = LLMService(config=llm_config, cost_limits=llm_cost_limits)
+                except Exception as exc:
+                    logger.warning(
+                        "monitoring_check_job_llm_init_failed",
+                        error=str(exc),
+                        reason="scoring_will_be_skipped",
+                    )
+            else:
+                logger.info(
+                    "monitoring_check_job_no_llm_api_key",
+                    reason="scoring_will_be_skipped",
+                )
+            self._runner = MonitoringRunner.from_paths(
+                db_path=self._db_path,
+                registry=registry or RegistryService(),
+                arxiv_provider=arxiv_provider or ArxivProvider(),
+                llm_service=llm_svc,
+            )
+        self._digest_generator = digest_generator or DigestGenerator(
+            output_root=digest_output_root,
+            registry=registry,
+        )
+
+    async def run(self) -> Dict[str, Any]:
+        """Run one monitoring cycle and write digests for non-FAILED runs.
+
+        Returns:
+            Dictionary summarizing the cycle: per-run counts +
+            digest paths written.
+        """
+        # Lazy import to keep module import cost low.
+        from src.services.intelligence.monitoring.models import (
+            MonitoringRunStatus,
+        )
+
+        runs = await self._runner.run_once()
+
+        result: Dict[str, Any] = {
+            "runs": len(runs),
+            "succeeded": 0,
+            "failed": 0,
+            "digests_written": 0,
+            "digest_paths": [],
+        }
+
+        if not runs:
+            logger.info("monitoring_check_job_no_subscriptions")
+            return result
+
+        # Look up the subscription each run belongs to. Pull the full
+        # set once per tick rather than per-run -- typical cycle has
+        # < 50 subs so a list scan is cheaper than 50 SELECTs.
+        # Use the public delegation method (H-C1) instead of private attr.
+        subs_by_id = {
+            sub.subscription_id: sub for sub in self._runner.list_subscriptions()
+        }
+
+        for run in runs:
+            if run.status is MonitoringRunStatus.FAILED:
+                result["failed"] += 1
+                # Audit-write the failure path per CLAUDE.md so ops
+                # can grep for skipped digests.
+                logger.info(
+                    "monitoring_digest_skipped_failed_run",
+                    run_id=run.run_id,
+                    subscription_id=run.subscription_id,
+                    error=run.error,
+                )
+                continue
+            result["succeeded"] += 1
+
+            sub = subs_by_id.get(run.subscription_id)
+            if sub is None:
+                # Subscription was deleted between the cycle and the
+                # digest pass. Skip -- there is nothing user-friendly
+                # to render in the header. Log so the gap is visible.
+                logger.warning(
+                    "monitoring_digest_skipped_missing_subscription",
+                    run_id=run.run_id,
+                    subscription_id=run.subscription_id,
+                )
+                continue
+
+            # Look the audit row back up so the digest reads from the
+            # persisted shape (MonitoringRunAudit), not the in-memory
+            # MonitoringRun -- keeps the digest aligned with what the
+            # CLI digest command would produce.
+            # Use the public delegation method (H-C1) instead of private attr.
+            audit_run = self._runner.get_audit_run(run.run_id)
+            if audit_run is None:
+                logger.warning(
+                    "monitoring_digest_skipped_missing_audit_row",
+                    run_id=run.run_id,
+                    subscription_id=run.subscription_id,
+                )
+                continue
+
+            try:
+                path = self._digest_generator.generate(audit_run, sub)
+            except Exception as exc:
+                # Digest writes are independent peers across runs --
+                # one failure must not abort the cycle.
+                logger.error(
+                    "monitoring_digest_write_failed",
+                    run_id=run.run_id,
+                    subscription_id=run.subscription_id,
+                    error=str(exc),
+                )
+                continue
+
+            result["digests_written"] += 1
+            result["digest_paths"].append(str(path))
+            logger.info(
+                "monitoring_digest_written_via_job",
+                run_id=run.run_id,
+                subscription_id=run.subscription_id,
+                path=str(path),
+            )
+
+        logger.info(
+            "monitoring_check_job_complete",
+            runs=result["runs"],
+            succeeded=result["succeeded"],
+            failed=result["failed"],
+            digests_written=result["digests_written"],
+        )
         return result

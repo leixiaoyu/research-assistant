@@ -27,6 +27,7 @@ from src.cli.validate import validate_command
 from src.cli.catalog import catalog_app, catalog_command
 from src.cli.schedule import schedule_app, schedule_command
 from src.cli.health import health_command
+from src.cli.monitor import monitor_app
 from src.cli.synthesize import synthesize_command
 from src.cli.feedback import app as feedback_app
 from src.cli.research import research_app
@@ -45,6 +46,7 @@ app.command(name="synthesize")(synthesize_command)
 app.add_typer(catalog_app, name="catalog")
 app.add_typer(schedule_app, name="schedule")
 app.add_typer(feedback_app, name="feedback")
+app.add_typer(monitor_app, name="monitor")
 app.add_typer(research_app, name="research")
 app.add_typer(trajectories_app, name="trajectories")
 
@@ -66,6 +68,7 @@ __all__ = [
     "health_command",
     "synthesize_command",
     "feedback_app",
+    "monitor_app",
     "research_app",
     "trajectories_app",
 ]

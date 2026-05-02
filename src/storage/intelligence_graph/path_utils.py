@@ -27,9 +27,27 @@ logger = structlog.get_logger()
 
 
 def _project_root() -> Path:
-    """Return the repository root (3 levels up from this file)."""
-    # path_utils.py -> storage -> intelligence -> services -> src -> repo
-    return Path(__file__).resolve().parents[4]
+    """Return the repository root.
+
+    File location: ``src/storage/intelligence_graph/path_utils.py``
+
+    Ancestor walk (verified by ``test_project_root_resolves_to_repo``):
+    - ``parents[0]`` = ``src/storage/intelligence_graph``
+    - ``parents[1]`` = ``src/storage``
+    - ``parents[2]`` = ``src``
+    - ``parents[3]`` = repository root  ← what we want
+
+    Previously used ``parents[4]`` from when this file lived under
+    ``src/services/intelligence/storage/``. PR #105's architectural
+    relocation moved it to ``src/storage/intelligence_graph/`` but
+    missed updating this parent count, causing ``_allowed_bases`` to
+    resolve ``data/``/``cache/`` against the wrong directory and
+    rejecting every production Phase 9.1 monitoring CLI invocation
+    with ``SecurityError: Database path is outside approved storage
+    roots``. Tests masked the regression because they exclusively use
+    ``tempfile.gettempdir()`` (also an approved base).
+    """
+    return Path(__file__).resolve().parents[3]
 
 
 def _allowed_bases() -> list[Path]:

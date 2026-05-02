@@ -7,7 +7,12 @@ import pytest
 from datetime import date, datetime, timezone
 from unittest.mock import patch
 
-from src.services.llm.cost_tracker import CostTracker, ProviderUsage
+from src.services.llm.cost_tracker import (
+    MODEL_PRICING,
+    CostTracker,
+    ProviderUsage,
+    compute_cost_usd,
+)
 from src.models.llm import CostLimits
 from src.utils.exceptions import CostLimitExceeded
 
@@ -296,3 +301,41 @@ class TestCostTrackerBehavioralEquivalence:
         summary = tracker.get_summary()
         assert abs(summary["daily_budget_remaining"] - 6.5) < 0.01
         assert abs(summary["total_budget_remaining"] - 96.5) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# H-A2: compute_cost_usd pricing table (single source of truth)
+# ---------------------------------------------------------------------------
+
+
+class TestComputeCostUsd:
+    """compute_cost_usd uses the MODEL_PRICING table as single source of truth."""
+
+    def test_gemini_flash_input_pricing(self) -> None:
+        # 1M input tokens at $0.075/MTok = $0.075
+        cost = compute_cost_usd("gemini-1.5-flash", 1_000_000, 0)
+        assert abs(cost - 0.075) < 1e-9
+
+    def test_gemini_flash_output_pricing(self) -> None:
+        # 1M output tokens at $0.30/MTok = $0.30
+        cost = compute_cost_usd("gemini-1.5-flash", 0, 1_000_000)
+        assert abs(cost - 0.30) < 1e-9
+
+    def test_gemini_20_flash_pricing(self) -> None:
+        # gemini-2.0-flash has same pricing
+        cost = compute_cost_usd("gemini-2.0-flash", 1_000_000, 1_000_000)
+        assert abs(cost - 0.375) < 1e-9
+
+    def test_unknown_model_falls_back_to_default(self) -> None:
+        # Unknown model uses __default__ pricing (conservative estimate)
+        cost = compute_cost_usd("unknown-model-xyz", 0, 0)
+        assert cost == 0.0
+
+    def test_zero_tokens_zero_cost(self) -> None:
+        assert compute_cost_usd("gemini-1.5-flash", 0, 0) == 0.0
+
+    def test_model_pricing_table_has_flash_entry(self) -> None:
+        assert "gemini-2.0-flash" in MODEL_PRICING
+        assert "gemini-1.5-flash" in MODEL_PRICING
+        assert MODEL_PRICING["gemini-2.0-flash"]["input"] == pytest.approx(0.075)
+        assert MODEL_PRICING["gemini-2.0-flash"]["output"] == pytest.approx(0.30)

@@ -31,8 +31,12 @@ from src.services.intelligence.monitoring.relevance_scorer import (
     RelevanceScorer,
     RelevanceScoreResult,
     TITLE_CAP_CHARS,
+    _SENTINEL_END,
+    _SENTINEL_START,
     _estimate_flash_cost,
     _extract_json,
+    _extract_last_json_object,
+    _sanitize_untrusted_text,
     _truncate,
 )
 from src.services.llm.providers.base import LLMResponse
@@ -161,8 +165,9 @@ class TestExtractJson:
             _extract_json("just some prose, no JSON here")
 
     def test_malformed_json_after_extraction_raises(self) -> None:
-        # Regex extracts "{not valid}" but it doesn't parse.
-        with pytest.raises(LLMResponseError, match="Failed to parse JSON"):
+        # The last-balanced-object extractor cannot parse "{not valid}",
+        # so extraction returns None and we raise "did not contain".
+        with pytest.raises(LLMResponseError, match="did not contain a JSON object"):
             _extract_json("Here: {not valid}")
 
     def test_array_json_rejected(self) -> None:
@@ -419,3 +424,125 @@ class TestRelevanceScorerScore:
 
         expected = _estimate_flash_cost(100, 20)
         assert result.cost_usd == pytest.approx(expected)
+
+    @pytest.mark.asyncio
+    async def test_llm_raises_propagates_to_caller(self) -> None:
+        """H-T2: LLM timeout / network errors propagate uncaught from score().
+
+        The scorer must NOT swallow non-LLMResponseError exceptions (e.g.
+        network timeouts, rate limits) -- callers decide how to handle them.
+        """
+        llm = MagicMock()
+        llm.complete = AsyncMock(side_effect=TimeoutError("LLM timed out"))
+        scorer = RelevanceScorer(llm)
+
+        with pytest.raises(TimeoutError, match="LLM timed out"):
+            await scorer.score(_make_subscription(), _make_paper())
+
+    @pytest.mark.asyncio
+    async def test_structlog_relevance_scored_event_emitted(self) -> None:
+        """H-T1: ``relevance_scored`` structlog event is emitted on success."""
+        import structlog.testing
+
+        llm = _make_llm('{"score": 0.75, "reasoning": "Good match"}')
+        scorer = RelevanceScorer(llm)
+
+        with structlog.testing.capture_logs() as logs:
+            result = await scorer.score(_make_subscription(), _make_paper())
+
+        scored_events = [e for e in logs if e.get("event") == "relevance_scored"]
+        assert len(scored_events) == 1
+        ev = scored_events[0]
+        assert ev.get("score") == pytest.approx(0.75)
+        assert ev.get("subscription_id") is not None
+        assert ev.get("paper_id") is not None
+        assert ev.get("cost_usd") >= 0.0
+        _ = result  # used for the fixture but asserted via structlog
+
+    @pytest.mark.asyncio
+    async def test_score_exactly_zero_accepted(self) -> None:
+        """H-T5: Score of exactly 0.0 is within the valid range."""
+        llm = _make_llm('{"score": 0.0, "reasoning": "Completely irrelevant"}')
+        scorer = RelevanceScorer(llm)
+        result = await scorer.score(_make_subscription(), _make_paper())
+        assert result.score == 0.0
+
+    @pytest.mark.asyncio
+    async def test_score_exactly_one_accepted(self) -> None:
+        """H-T5: Score of exactly 1.0 is within the valid range (not rejected
+        by the sanity guard because reasoning is long enough).
+        """
+        llm = _make_llm(
+            '{"score": 1.0, "reasoning": "Perfectly matches all subscription criteria"}'
+        )
+        scorer = RelevanceScorer(llm)
+        result = await scorer.score(_make_subscription(), _make_paper())
+        assert result.score == 1.0
+
+    @pytest.mark.asyncio
+    async def test_prompt_uses_sentinel_delimiters(self) -> None:
+        """H-S1: Paper content is wrapped in sentinel delimiters in the prompt."""
+        llm = _make_llm('{"score": 0.5, "reasoning": "ok"}')
+        scorer = RelevanceScorer(llm)
+        await scorer.score(_make_subscription(), _make_paper())
+
+        prompt = llm.complete.await_args.kwargs["prompt"]
+        assert _SENTINEL_START in prompt
+        assert _SENTINEL_END in prompt
+        # Title and abstract must appear BETWEEN the sentinels.
+        start_idx = prompt.index(_SENTINEL_START)
+        end_idx = prompt.index(_SENTINEL_END)
+        assert start_idx < end_idx
+
+    @pytest.mark.asyncio
+    async def test_control_chars_stripped_from_title(self) -> None:
+        """H-S3: Control characters in paper title are stripped before interpolation."""
+        malicious_title = "Good Title\x01\x02\x03 with controls"
+        llm = _make_llm('{"score": 0.5, "reasoning": "ok"}')
+        scorer = RelevanceScorer(llm)
+        await scorer.score(_make_subscription(), _make_paper(title=malicious_title))
+
+        prompt = llm.complete.await_args.kwargs["prompt"]
+        assert "\x01" not in prompt
+        assert "\x02" not in prompt
+        assert "Good Title" in prompt
+
+
+class TestExtractLastJsonObject:
+    """Tests for the LAST-balanced-object extractor (H-S3)."""
+
+    def test_single_object_returned(self) -> None:
+        assert _extract_last_json_object('{"score": 0.5}') == {"score": 0.5}
+
+    def test_last_of_multiple_objects_returned(self) -> None:
+        # Injection attack: early fake JSON + real answer at end.
+        text = 'ignore {"score": 0.99} this and use {"score": 0.5, "real": true}'
+        result = _extract_last_json_object(text)
+        assert result is not None
+        assert result.get("score") == 0.5
+        assert result.get("real") is True
+
+    def test_no_json_returns_none(self) -> None:
+        assert _extract_last_json_object("no json here") is None
+
+    def test_malformed_json_returns_none(self) -> None:
+        assert _extract_last_json_object("{not valid}") is None
+
+
+class TestSanitizeUntrustedText:
+    """Tests for control-character sanitization (H-S3)."""
+
+    def test_clean_text_unchanged(self) -> None:
+        assert _sanitize_untrusted_text("hello world") == "hello world"
+
+    def test_none_returns_empty(self) -> None:
+        assert _sanitize_untrusted_text(None) == ""
+
+    def test_control_chars_stripped(self) -> None:
+        assert _sanitize_untrusted_text("a\x00b\x01c") == "abc"
+
+    def test_tab_preserved(self) -> None:
+        assert "\t" in _sanitize_untrusted_text("a\tb")
+
+    def test_newline_preserved(self) -> None:
+        assert "\n" in _sanitize_untrusted_text("a\nb")

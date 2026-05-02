@@ -22,14 +22,19 @@ Behavior contract
    resulting ``MonitoringRun``. **Failures on individual subs do not
    abort the cycle** -- they're logged, captured as a ``FAILED`` run
    record, and the loop continues.
-3. Persist every run (success + failure) through
+3. Score each paper via ``RelevanceScorer`` (LLM-based). Scorer
+   errors on individual papers are logged but do not abort the sub's
+   run. A scorer result of ``None`` (scored but skipped) is silently
+   dropped. Budget is capped at ``MAX_LLM_CALLS_PER_CYCLE`` total
+   calls across the whole cycle.
+4. Persist every run (success + failure) through
    ``MonitoringRunRepository.record_run`` so the audit log is complete
    regardless of outcome.
-4. Call ``SubscriptionManager.mark_checked`` only on **non-FAILED**
+5. Call ``SubscriptionManager.mark_checked`` only on **non-FAILED**
    runs. A FAILED run means the upstream provider was unavailable; we
    don't want the next cycle to skip the sub because we updated the
    timestamp on a failure.
-5. Return the list of runs (in subscription order) so the caller can
+6. Return the list of runs (in subscription order) so the caller can
    feed them into the digest generator (Week 2) or log per-cycle
    metrics.
 
@@ -50,9 +55,14 @@ import structlog
 
 from src.services.intelligence.monitoring.arxiv_monitor import ArxivMonitor
 from src.services.intelligence.monitoring.models import (
+    MonitoringPaperRecord,
     MonitoringRun,
     MonitoringRunStatus,
     ResearchSubscription,
+)
+from src.services.intelligence.monitoring.relevance_scorer import (
+    LLMResponseError,
+    RelevanceScorer,
 )
 from src.services.intelligence.monitoring.run_repository import (
     MonitoringRunRepository,
@@ -62,10 +72,28 @@ from src.services.intelligence.monitoring.subscription_manager import (
 )
 
 if TYPE_CHECKING:
+    from src.services.llm.service import LLMService
     from src.services.providers.arxiv import ArxivProvider
     from src.services.registry.service import RegistryService
 
 logger = structlog.get_logger()
+
+# LLM budget cap per cycle -- prevents runaway cost on large sub lists.
+# At ~$0.000015/call (Gemini Flash, ~200 in / 50 out tokens), 5000 calls
+# is ~$0.075 per cycle -- well within operational limits while protecting
+# against pathological subscription counts.
+MAX_LLM_CALLS_PER_CYCLE = 5000
+
+# Concurrent LLM calls are capped to avoid saturating the upstream API.
+# Flash's documented QPS limit is 300/min; 10 concurrent with asyncio
+# gives headroom for the ArXiv round-trips happening in parallel.
+_LLM_CONCURRENCY = 10
+
+# High-confidence low-reasoning sanity check: if a score is >= 0.95
+# but the reasoning is very short (< 30 chars), the LLM likely echoed
+# the prompt rather than producing a genuine assessment.
+_HIGH_SCORE_MIN_REASONING = 30
+_HIGH_SCORE_THRESHOLD = 0.95
 
 
 class MonitoringRunner:
@@ -82,6 +110,7 @@ class MonitoringRunner:
         subscription_manager: SubscriptionManager,
         monitor: ArxivMonitor,
         run_repo: MonitoringRunRepository,
+        scorer: Optional[RelevanceScorer] = None,
     ) -> None:
         """Initialize the runner.
 
@@ -93,10 +122,45 @@ class MonitoringRunner:
                 multi-source monitor wraps this -- the contract is
                 ``check(subscription) -> ArxivMonitorResult``.
             run_repo: Repository for the per-cycle audit record.
+            scorer: Optional ``RelevanceScorer`` for LLM-based relevance
+                scoring. When ``None``, papers are returned unscored
+                (Week-1 compatible). Production callers should inject
+                a scorer built from the project-wide ``LLMService``.
         """
         self._subscriptions = subscription_manager
         self._monitor = monitor
         self._run_repo = run_repo
+        self._scorer = scorer
+
+    # ------------------------------------------------------------------
+    # Public delegation methods (H-C1: encapsulate private attributes)
+    # ------------------------------------------------------------------
+
+    def list_subscriptions(
+        self,
+        *,
+        user_id: Optional[str] = None,
+        active_only: bool = False,
+    ) -> list[ResearchSubscription]:
+        """List subscriptions, delegating to the subscription manager.
+
+        Provides a public API so callers (e.g., ``MonitoringCheckJob``)
+        do not need to access the private ``_subscriptions`` attribute.
+        """
+        return self._subscriptions.list_subscriptions(
+            user_id=user_id, active_only=active_only
+        )
+
+    def get_audit_run(self, run_id: str) -> object:
+        """Fetch an audit run record by id, delegating to the run repo.
+
+        Provides a public API so callers (e.g., ``MonitoringCheckJob``)
+        do not need to access the private ``_run_repo`` attribute.
+
+        Returns:
+            A ``MonitoringRunAudit`` instance, or ``None`` if not found.
+        """
+        return self._run_repo.get_run(run_id)
 
     @classmethod
     def from_paths(
@@ -105,6 +169,7 @@ class MonitoringRunner:
         db_path: Path | str,
         registry: "RegistryService",
         arxiv_provider: "ArxivProvider",
+        llm_service: Optional["LLMService"] = None,
     ) -> "MonitoringRunner":
         """Convenience factory wiring the standard collaborators.
 
@@ -132,6 +197,9 @@ class MonitoringRunner:
                 monitor for paper deduplication.
             arxiv_provider: The shared ``ArxivProvider`` used by the
                 monitor to poll ArXiv.
+            llm_service: Optional ``LLMService`` used to build a
+                ``RelevanceScorer``. When ``None``, papers are returned
+                unscored (backward-compatible with Week-1 behavior).
 
         Returns:
             A fully-wired, initialized ``MonitoringRunner`` ready for
@@ -157,10 +225,12 @@ class MonitoringRunner:
         monitor = ArxivMonitor(provider=arxiv_provider, registry=registry)
         repo = MonitoringRunRepository(db_path)
         repo.initialize()
+        scorer = RelevanceScorer(llm_service) if llm_service is not None else None
         return cls(
             subscription_manager=sub_mgr,
             monitor=monitor,
             run_repo=repo,
+            scorer=scorer,
         )
 
     async def run_once(self, user_id: Optional[str] = None) -> list[MonitoringRun]:
@@ -187,9 +257,15 @@ class MonitoringRunner:
             user_id=user_id,
         )
 
+        # Shared semaphore + budget counter across ALL subs in the cycle
+        # so a single large subscription cannot starve the others of
+        # their LLM budget (H-S5 budget cap).
+        sem = asyncio.Semaphore(_LLM_CONCURRENCY)
+        llm_calls_used: list[int] = [0]  # mutable container for closure
+
         runs: list[MonitoringRun] = []
         for sub in active_subs:
-            run = await self._run_one(sub)
+            run = await self._run_one(sub, sem=sem, llm_calls_used=llm_calls_used)
             runs.append(run)
 
         succeeded = sum(1 for r in runs if r.status is not MonitoringRunStatus.FAILED)
@@ -203,7 +279,103 @@ class MonitoringRunner:
         )
         return runs
 
-    async def _run_one(self, subscription: ResearchSubscription) -> MonitoringRun:
+    async def _score_paper(
+        self,
+        subscription: ResearchSubscription,
+        paper: MonitoringPaperRecord,
+        sem: asyncio.Semaphore,
+        llm_calls_used: list[int],
+    ) -> None:
+        """Score one paper in-place, respecting the budget cap + semaphore.
+
+        On success, sets ``paper.relevance_score`` and
+        ``paper.relevance_reasoning``. On any error (LLM failure,
+        budget exhausted) the paper is left unscored -- the run is
+        not failed, only observability events are emitted.
+
+        Args:
+            subscription: The owning subscription (for prompt context).
+            paper: The ``MonitoringPaperRecord`` to score (mutated
+                in-place if successful).
+            sem: Concurrency semaphore -- limits simultaneous LLM calls.
+            llm_calls_used: Single-element list used as a mutable
+                counter shared across the cycle.
+        """
+        if self._scorer is None:
+            return
+
+        # Budget guard: if we've hit the per-cycle cap, emit an audit
+        # event and bail rather than spending more.
+        if llm_calls_used[0] >= MAX_LLM_CALLS_PER_CYCLE:
+            logger.warning(
+                "monitoring_llm_budget_exhausted",
+                subscription_id=subscription.subscription_id,
+                paper_id=paper.paper_id,
+                max_calls=MAX_LLM_CALLS_PER_CYCLE,
+                calls_used=llm_calls_used[0],
+            )
+            return
+
+        # We need a PaperMetadata-compatible object to pass to the scorer.
+        # MonitoringPaperRecord carries title + url; reconstruct a minimal
+        # PaperMetadata so the scorer can build its prompt. PaperMetadata
+        # requires a valid HttpUrl, so provide a fallback when the paper
+        # record has no URL (common for papers registered without one).
+        from src.models.paper import PaperMetadata
+
+        paper_url = paper.url or f"https://arxiv.org/abs/{paper.paper_id}"
+        paper_meta = PaperMetadata(
+            paper_id=paper.paper_id,
+            title=paper.title,
+            url=paper_url,  # type: ignore[arg-type]
+        )
+
+        async with sem:
+            llm_calls_used[0] += 1
+            try:
+                score_result = await self._scorer.score(subscription, paper_meta)
+            except LLMResponseError as exc:
+                logger.warning(
+                    "monitoring_relevance_score_failed",
+                    subscription_id=subscription.subscription_id,
+                    paper_id=paper.paper_id,
+                    error=str(exc),
+                )
+                return
+            except Exception as exc:
+                logger.error(
+                    "monitoring_relevance_score_unexpected_error",
+                    subscription_id=subscription.subscription_id,
+                    paper_id=paper.paper_id,
+                    error=str(exc),
+                )
+                return
+
+        # Sanity guard: reject suspiciously high scores with thin reasoning
+        # (prompt-injection signal -- LLM echoed the prompt, H-S1).
+        if (
+            score_result.score >= _HIGH_SCORE_THRESHOLD
+            and len(score_result.reasoning) < _HIGH_SCORE_MIN_REASONING
+        ):
+            logger.warning(
+                "monitoring_relevance_score_sanity_rejected",
+                subscription_id=subscription.subscription_id,
+                paper_id=paper.paper_id,
+                score=score_result.score,
+                reasoning_len=len(score_result.reasoning),
+            )
+            return
+
+        paper.relevance_score = score_result.score
+        paper.relevance_reasoning = score_result.reasoning
+
+    async def _run_one(
+        self,
+        subscription: ResearchSubscription,
+        *,
+        sem: Optional[asyncio.Semaphore] = None,
+        llm_calls_used: Optional[list[int]] = None,
+    ) -> MonitoringRun:
         """Run one cycle for ``subscription``, persist + mark, return run.
 
         Encapsulates the per-subscription error envelope so a single
@@ -211,6 +383,11 @@ class MonitoringRunner:
         already converts upstream provider failures into a ``FAILED``
         ``MonitoringRun``; this layer additionally guards the persist
         + mark_checked steps so persistence outages don't propagate.
+
+        After the monitor returns, each paper is relevance-scored via
+        ``_score_paper`` (if a scorer is wired). Scoring errors on
+        individual papers are logged but never propagate to the run
+        level (Fail-Soft Boundary across independent peers).
         """
         try:
             result = await self._monitor.check(subscription)
@@ -229,6 +406,23 @@ class MonitoringRunner:
                 status=MonitoringRunStatus.FAILED,
                 error=f"monitor_check_error: {exc}",
             )
+
+        # Score each paper in-place BEFORE persisting so the audit row
+        # carries the scores (C-1). Use the cycle-wide semaphore and
+        # budget counter; fall back to fresh ones if called directly
+        # (e.g., from tests that call _run_one directly without the
+        # cycle context).
+        if sem is None:
+            sem = asyncio.Semaphore(_LLM_CONCURRENCY)
+        if llm_calls_used is None:
+            llm_calls_used = [0]
+
+        if self._scorer is not None and run.status is not MonitoringRunStatus.FAILED:
+            scoring_tasks = [
+                self._score_paper(subscription, paper, sem, llm_calls_used)
+                for paper in run.papers
+            ]
+            await asyncio.gather(*scoring_tasks)
 
         # Persist the audit row regardless of provider outcome (success,
         # partial, AND failed runs go to the audit log). We catch

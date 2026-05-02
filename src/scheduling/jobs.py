@@ -762,6 +762,7 @@ class MonitoringCheckJob(BaseJob):
             DigestGenerator,
             MonitoringRunner,
         )
+        from src.services.llm.service import LLMService
         from src.services.providers.arxiv import ArxivProvider
         from src.services.registry.service import RegistryService
 
@@ -769,10 +770,39 @@ class MonitoringCheckJob(BaseJob):
         if runner is not None:
             self._runner = runner
         else:
+            # Build LLMService for the RelevanceScorer. Read the API key
+            # from the environment (never hardcoded). If missing, the
+            # runner is constructed without a scorer so scoring is skipped
+            # gracefully rather than crashing at job startup.
+            import os
+
+            from src.models.llm import CostLimits, LLMConfig
+
+            llm_svc = None
+            llm_api_key = os.environ.get("LLM_API_KEY") or os.environ.get(
+                "GEMINI_API_KEY"
+            )
+            if llm_api_key:
+                try:
+                    llm_config = LLMConfig(api_key=llm_api_key)
+                    llm_cost_limits = CostLimits()
+                    llm_svc = LLMService(config=llm_config, cost_limits=llm_cost_limits)
+                except Exception as exc:
+                    logger.warning(
+                        "monitoring_check_job_llm_init_failed",
+                        error=str(exc),
+                        reason="scoring_will_be_skipped",
+                    )
+            else:
+                logger.info(
+                    "monitoring_check_job_no_llm_api_key",
+                    reason="scoring_will_be_skipped",
+                )
             self._runner = MonitoringRunner.from_paths(
                 db_path=self._db_path,
                 registry=registry or RegistryService(),
                 arxiv_provider=arxiv_provider or ArxivProvider(),
+                llm_service=llm_svc,
             )
         self._digest_generator = digest_generator or DigestGenerator(
             output_root=digest_output_root,
@@ -808,9 +838,9 @@ class MonitoringCheckJob(BaseJob):
         # Look up the subscription each run belongs to. Pull the full
         # set once per tick rather than per-run -- typical cycle has
         # < 50 subs so a list scan is cheaper than 50 SELECTs.
+        # Use the public delegation method (H-C1) instead of private attr.
         subs_by_id = {
-            sub.subscription_id: sub
-            for sub in self._runner._subscriptions.list_subscriptions()
+            sub.subscription_id: sub for sub in self._runner.list_subscriptions()
         }
 
         for run in runs:
@@ -843,7 +873,8 @@ class MonitoringCheckJob(BaseJob):
             # persisted shape (MonitoringRunAudit), not the in-memory
             # MonitoringRun -- keeps the digest aligned with what the
             # CLI digest command would produce.
-            audit_run = self._runner._run_repo.get_run(run.run_id)
+            # Use the public delegation method (H-C1) instead of private attr.
+            audit_run = self._runner.get_audit_run(run.run_id)
             if audit_run is None:
                 logger.warning(
                     "monitoring_digest_skipped_missing_audit_row",

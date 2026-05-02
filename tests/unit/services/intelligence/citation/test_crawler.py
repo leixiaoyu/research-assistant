@@ -499,7 +499,8 @@ async def test_crawl_filter_min_citations(crawler, s2_client, store):
     result = await crawler.crawl("seed", config)
 
     assert result.papers_visited == 2
-    assert result.dropped_by_filter["min_citations"] == 2
+    # C-3: dropped counters are now per-direction (backward here)
+    assert result.dropped_by_filter["min_citations_backward"] == 2
     for k in keepers:
         assert store.get_node(k.paper_id) is not None
     for d in droppers:
@@ -521,7 +522,8 @@ async def test_crawl_filter_year_min(crawler, s2_client, store):
     result = await crawler.crawl("seed", config)
 
     assert result.papers_visited == 1
-    assert result.dropped_by_filter["year_min"] == 2
+    # C-3: dropped counters are now per-direction (backward here)
+    assert result.dropped_by_filter["year_min_backward"] == 2
     assert store.get_node(new_paper.paper_id) is not None
     assert store.get_node(old_paper.paper_id) is None
     assert store.get_node(no_year.paper_id) is None
@@ -807,3 +809,81 @@ async def test_crawl_persist_layer_no_op_when_empty(crawler):
     )
     assert ok is True
     assert persisted == set()
+
+
+# ---------------------------------------------------------------------------
+# C-3: Per-direction top_k (spec REQ-9.2.2 §574-592)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_crawl_both_direction_applies_top_k_per_direction(store, s2_client):
+    """Each direction gets its own top_k cap, not a shared cap on the union.
+
+    100 refs + 100 cites per expansion, max_papers_per_level=50 → exactly
+    50 backward nodes AND 50 forward nodes should be visited (100 total),
+    not 50 total split across both directions.
+    """
+    crawler = CitationCrawler(store=store, s2_client=s2_client)
+
+    bw_nodes = [_node(f"bw{i}", citation_count=i) for i in range(100)]
+    fw_nodes = [_node(f"fw{i}", citation_count=i) for i in range(100)]
+
+    async def fake_get_references(paper_id, *args, **kwargs):
+        seed = _node("seed")
+        return seed, bw_nodes, [_edge(seed, n) for n in bw_nodes]
+
+    async def fake_get_citations(paper_id, *args, **kwargs):
+        seed = _node("seed")
+        return seed, fw_nodes, [_edge(n, seed) for n in fw_nodes]
+
+    s2_client.get_references.side_effect = fake_get_references
+    s2_client.get_citations.side_effect = fake_get_citations
+
+    config = CrawlConfig(
+        max_depth=1,
+        max_papers_per_level=50,
+        direction=CrawlDirection.BOTH,
+    )
+    result = await crawler.crawl("seed", config)
+
+    # 50 backward + 50 forward = 100 papers visited (not 50 total)
+    assert result.papers_visited == 100
+
+
+@pytest.mark.asyncio
+async def test_crawl_both_direction_starvation_regression(store, s2_client):
+    """Backward direction must not be starved when forward has many candidates.
+
+    backward=5 candidates, forward=200 candidates, max_papers_per_level=50.
+    Under the old union-then-cap logic all 5 backward candidates would be
+    dropped (the top-50 from the 205-paper union would all be forward).
+    Under the per-direction cap, all 5 backward candidates are preserved.
+    """
+    crawler = CitationCrawler(store=store, s2_client=s2_client)
+
+    # 5 backward nodes with high citation counts so they'd normally rank well
+    bw_nodes = [_node(f"bw{i}", citation_count=1000 + i) for i in range(5)]
+    # 200 forward nodes with even higher citation counts to starve backward
+    fw_nodes = [_node(f"fw{i}", citation_count=2000 + i) for i in range(200)]
+
+    async def fake_get_references(paper_id, *args, **kwargs):
+        seed = _node("seed")
+        return seed, bw_nodes, [_edge(seed, n) for n in bw_nodes]
+
+    async def fake_get_citations(paper_id, *args, **kwargs):
+        seed = _node("seed")
+        return seed, fw_nodes, [_edge(n, seed) for n in fw_nodes]
+
+    s2_client.get_references.side_effect = fake_get_references
+    s2_client.get_citations.side_effect = fake_get_citations
+
+    config = CrawlConfig(
+        max_depth=1,
+        max_papers_per_level=50,
+        direction=CrawlDirection.BOTH,
+    )
+    result = await crawler.crawl("seed", config)
+
+    # All 5 backward nodes must have been visited; 50 forward nodes
+    assert result.papers_visited == 55  # 5 backward + 50 forward

@@ -137,6 +137,37 @@ class CrawlResult(BaseModel):
     persistence_aborted: bool = Field(default=False)
 
 
+class _ExpandResult:
+    """Internal DTO from ``_expand_paper``.
+
+    Keeps backward (references) and forward (citations) candidates
+    separate so the BFS loop can apply ``top_k`` per direction
+    independently (spec REQ-9.2.2 §574-592 — C-3 fix).
+    """
+
+    __slots__ = (
+        "parent_node",
+        "backward_nodes",
+        "backward_edges",
+        "forward_nodes",
+        "forward_edges",
+    )
+
+    def __init__(
+        self,
+        parent_node: Optional[CitationNode],
+        backward_nodes: list[CitationNode],
+        backward_edges: list[CitationEdge],
+        forward_nodes: list[CitationNode],
+        forward_edges: list[CitationEdge],
+    ) -> None:
+        self.parent_node = parent_node
+        self.backward_nodes = backward_nodes
+        self.backward_edges = backward_edges
+        self.forward_nodes = forward_nodes
+        self.forward_edges = forward_edges
+
+
 def sort_by_influence(papers: list[CitationNode]) -> list[CitationNode]:
     """Deterministic ranking for top-k selection within a BFS level.
 
@@ -249,8 +280,15 @@ class CitationCrawler:
 
         semaphore = asyncio.Semaphore(_MAX_CONCURRENT_REQUESTS)
         # Per-filter drop counters are surfaced in the result so ops can
-        # tell at a glance whether the filter was too aggressive.
-        dropped: dict[str, int] = {"min_citations": 0, "year_min": 0}
+        # tell at a glance whether the filter was too aggressive. We
+        # track separately for each direction so the ops team can see
+        # backward vs. forward attrition (C-3 fix).
+        dropped: dict[str, int] = {
+            "min_citations_backward": 0,
+            "year_min_backward": 0,
+            "min_citations_forward": 0,
+            "year_min_forward": 0,
+        }
 
         while queue:
             paper_id, depth = queue.popleft()
@@ -302,32 +340,53 @@ class CitationCrawler:
                     "citation_crawl_provider_failed_skipping_node",
                     seed_paper_id=seed_paper_id,
                     paper_id=paper_id,
-                    error=str(exc),
+                    error=repr(str(exc)[:512]),
                 )
                 continue
 
-            parent_node, related_nodes, edges = expanded
+            parent_node = expanded.parent_node
 
-            # Apply filters BEFORE ranking + capping. Per spec the
-            # min_citations / year_min filters are about culling
-            # low-signal candidates, not about influencing the top-k
-            # ordering of the survivors.
-            kept_nodes, kept_edges = self._apply_filters(
-                related_nodes, edges, config, dropped
-            )
+            # Apply filters + rank + cap INDEPENDENTLY per direction
+            # (spec REQ-9.2.2 §574-592, C-3 fix). Doing it on the union
+            # would let a direction with many candidates starve the other.
+            top_k: list[CitationNode] = []
+            top_k_edges: list[CitationEdge] = []
 
-            # Rank survivors deterministically and cap to the level
-            # budget. Edges are filtered to the kept set so we never
-            # persist an edge whose target was dropped — that would
-            # produce an orphan reference at the storage layer.
-            ranked = sort_by_influence(kept_nodes)
-            top_k = ranked[: config.max_papers_per_level]
-            top_k_ids = {n.paper_id for n in top_k}
-            top_k_edges = [
-                e
-                for e in kept_edges
-                if (e.citing_paper_id in top_k_ids or e.cited_paper_id in top_k_ids)
-            ]
+            if expanded.backward_nodes:
+                bw_kept, bw_kept_edges = self._apply_filters_directional(
+                    expanded.backward_nodes,
+                    expanded.backward_edges,
+                    config,
+                    dropped,
+                    prefix="backward",
+                )
+                bw_ranked = sort_by_influence(bw_kept)
+                bw_top = bw_ranked[: config.max_papers_per_level]
+                bw_ids = {n.paper_id for n in bw_top}
+                top_k.extend(bw_top)
+                top_k_edges.extend(
+                    e
+                    for e in bw_kept_edges
+                    if e.citing_paper_id in bw_ids or e.cited_paper_id in bw_ids
+                )
+
+            if expanded.forward_nodes:
+                fw_kept, fw_kept_edges = self._apply_filters_directional(
+                    expanded.forward_nodes,
+                    expanded.forward_edges,
+                    config,
+                    dropped,
+                    prefix="forward",
+                )
+                fw_ranked = sort_by_influence(fw_kept)
+                fw_top = fw_ranked[: config.max_papers_per_level]
+                fw_ids = {n.paper_id for n in fw_top}
+                top_k.extend(fw_top)
+                top_k_edges.extend(
+                    e
+                    for e in fw_kept_edges
+                    if e.citing_paper_id in fw_ids or e.cited_paper_id in fw_ids
+                )
 
             # Persist this layer. CHECKED SUCCESS: if persistence fails
             # we MUST abort the whole crawl, not just skip the layer —
@@ -411,7 +470,7 @@ class CitationCrawler:
         direction: CrawlDirection,
         semaphore: asyncio.Semaphore,
         counter: CrawlResult,
-    ) -> tuple[Optional[CitationNode], list[CitationNode], list[CitationEdge]]:
+    ) -> _ExpandResult:
         """Fetch references / citations for one paper, applying budget.
 
         Honors the BFS direction:
@@ -422,7 +481,12 @@ class CitationCrawler:
         Each provider call is wrapped in the shared semaphore so the
         in-flight count never exceeds ``_MAX_CONCURRENT_REQUESTS``.
 
-        Returns ``(parent_node, related_nodes, edges)`` where
+        Returns an :class:`_ExpandResult` that keeps BACKWARD (references)
+        and FORWARD (citations) candidates separate so the BFS loop can
+        apply ``top_k`` per direction independently (C-3 fix: spec
+        REQ-9.2.2 §574-592). Combining them before capping would allow
+        a direction with many high-quality candidates to starve the other.
+
         ``parent_node`` is the canonical :class:`CitationNode` the
         provider returned for ``paper_id``. The crawler must persist it
         so outgoing edges have a valid FK target. ``parent_node`` is
@@ -430,8 +494,10 @@ class CitationCrawler:
         ``CrawlDirection`` value, defensive).
         """
         parent: Optional[CitationNode] = None
-        related: list[CitationNode] = []
-        edges: list[CitationEdge] = []
+        backward_nodes: list[CitationNode] = []
+        backward_edges: list[CitationEdge] = []
+        forward_nodes: list[CitationNode] = []
+        forward_edges: list[CitationEdge] = []
 
         if direction in (CrawlDirection.BACKWARD, CrawlDirection.BOTH):
             if counter.api_calls_made >= MAX_API_CALLS_PER_CRAWL:
@@ -440,8 +506,8 @@ class CitationCrawler:
             async with semaphore:
                 seed, refs, ref_edges = await self._call_references(paper_id)
             parent = seed
-            related.extend(refs)
-            edges.extend(ref_edges)
+            backward_nodes.extend(refs)
+            backward_edges.extend(ref_edges)
 
         if direction in (CrawlDirection.FORWARD, CrawlDirection.BOTH):
             if counter.api_calls_made >= MAX_API_CALLS_PER_CRAWL:
@@ -454,10 +520,16 @@ class CitationCrawler:
             # fine — the persistence layer will dedupe by node_id).
             if parent is None:
                 parent = seed
-            related.extend(cites)
-            edges.extend(cite_edges)
+            forward_nodes.extend(cites)
+            forward_edges.extend(cite_edges)
 
-        return parent, related, edges
+        return _ExpandResult(
+            parent_node=parent,
+            backward_nodes=backward_nodes,
+            backward_edges=backward_edges,
+            forward_nodes=forward_nodes,
+            forward_edges=forward_edges,
+        )
 
     async def _call_references(
         self, paper_id: str
@@ -477,27 +549,75 @@ class CitationCrawler:
         return await client.get_citations(paper_id)
 
     @staticmethod
+    def _apply_filters_directional(
+        nodes: list[CitationNode],
+        edges: list[CitationEdge],
+        config: CrawlConfig,
+        dropped: dict[str, int],
+        prefix: str,
+    ) -> tuple[list[CitationNode], list[CitationEdge]]:
+        """Drop nodes that fail min_citations / year_min; mirror to edges.
+
+        Per-filter drop counts are accumulated into ``dropped`` under
+        direction-specific keys (``{prefix}_min_citations`` /
+        ``{prefix}_year_min``) so ops can diagnose backward vs. forward
+        attrition independently (C-3 fix).
+
+        Args:
+            nodes: Candidate nodes for this direction.
+            edges: All edges associated with this direction's candidates.
+            config: Crawl configuration (filters).
+            dropped: Running drop counters dict (mutated in-place).
+            prefix: ``"backward"`` or ``"forward"``.
+        """
+        min_cit_key = f"min_citations_{prefix}"
+        year_min_key = f"year_min_{prefix}"
+        kept_nodes: list[CitationNode] = []
+        for n in nodes:
+            if n.citation_count < config.filter_min_citations:
+                dropped[min_cit_key] = dropped.get(min_cit_key, 0) + 1
+                continue
+            if config.filter_year_min is not None:
+                # Papers without a known year are dropped when the
+                # filter is set, otherwise we can't honor the contract.
+                if n.year is None or n.year < config.filter_year_min:
+                    dropped[year_min_key] = dropped.get(year_min_key, 0) + 1
+                    continue
+            kept_nodes.append(n)
+
+        kept_ids = {n.paper_id for n in kept_nodes}
+        kept_edges = [
+            e
+            for e in edges
+            if e.cited_paper_id in kept_ids or e.citing_paper_id in kept_ids
+        ]
+        return kept_nodes, kept_edges
+
+    @staticmethod
     def _apply_filters(
         nodes: list[CitationNode],
         edges: list[CitationEdge],
         config: CrawlConfig,
         dropped: dict[str, int],
     ) -> tuple[list[CitationNode], list[CitationEdge]]:
-        """Drop nodes that fail min_citations / year_min; mirror to edges.
+        """Legacy single-direction filter (kept for backward compatibility).
 
-        Per-filter drop counts are accumulated into ``dropped`` so the
-        crawl result can surface them.
+        Delegates to ``_apply_filters_directional`` with prefix ``""``.
+        ``dropped`` keys will be ``"min_citations_"`` / ``"year_min_"``
+        which are not standard; call sites inside ``crawl()`` use the
+        directional variant directly. This shim exists so any test or
+        caller that patches ``_apply_filters`` still works.
         """
+        min_cit_key = "min_citations"
+        year_min_key = "year_min"
         kept_nodes: list[CitationNode] = []
         for n in nodes:
             if n.citation_count < config.filter_min_citations:
-                dropped["min_citations"] += 1
+                dropped[min_cit_key] = dropped.get(min_cit_key, 0) + 1
                 continue
             if config.filter_year_min is not None:
-                # Papers without a known year are dropped when the
-                # filter is set, otherwise we can't honor the contract.
                 if n.year is None or n.year < config.filter_year_min:
-                    dropped["year_min"] += 1
+                    dropped[year_min_key] = dropped.get(year_min_key, 0) + 1
                     continue
             kept_nodes.append(n)
 

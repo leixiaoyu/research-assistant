@@ -323,7 +323,7 @@ async def test_citation_velocity_missing_publication_date_returns_zero_with_even
     store, monkeypatch
 ):
     monkeypatch.setattr(scorer_module, "logger", structlog.get_logger())
-    n = _node("nd", citation_count=10)  # no year, no publication_date
+    n = _node("no_date", citation_count=10)  # no year, no publication_date
     _persist_chain(store, n)
 
     s = InfluenceScorer(store=store)

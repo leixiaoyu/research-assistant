@@ -1450,3 +1450,85 @@ def test_rate_limit_error_accepts_retry_after():
     """
     err = RateLimitError("slow down", retry_after=42.5)
     assert err.retry_after == 42.5
+
+
+# ---------------------------------------------------------------------------
+# _payload_to_node: publication_date parsing (C-2) + ICC assertions (H-T5)
+# ---------------------------------------------------------------------------
+
+
+def test_payload_to_node_with_publication_date(client):
+    """publicationDate ISO string is parsed to date(2023, 6, 1)."""
+    from datetime import date
+
+    payload = {
+        "paperId": "s2abc",
+        "title": "Dated Paper",
+        "year": 2023,
+        "citationCount": 10,
+        "referenceCount": 2,
+        "publicationDate": "2023-06-01",
+    }
+    node = client._payload_to_node(payload)
+    assert node.publication_date == date(2023, 6, 1)
+
+
+def test_payload_to_node_without_publication_date(client):
+    """Absent publicationDate field results in publication_date=None."""
+    payload = {
+        "paperId": "s2abc",
+        "title": "No Date Paper",
+        "year": 2022,
+        "citationCount": 5,
+        "referenceCount": 1,
+    }
+    node = client._payload_to_node(payload)
+    assert node.publication_date is None
+
+
+def test_payload_to_node_with_malformed_publication_date(client, caplog):
+    """Malformed publicationDate string gracefully degrades to None."""
+    import structlog.testing
+
+    payload = {
+        "paperId": "s2abc",
+        "title": "Bad Date Paper",
+        "year": 2021,
+        "citationCount": 3,
+        "referenceCount": 0,
+        "publicationDate": "not-a-date",
+    }
+    with structlog.testing.capture_logs() as logs:
+        node = client._payload_to_node(payload)
+    assert node.publication_date is None
+    warning_events = [e for e in logs if e.get("log_level") == "warning"]
+    assert any(
+        "malformed_publication_date" in e.get("event", "") for e in warning_events
+    )
+
+
+def test_payload_to_node_with_influential_citation_count(client):
+    """influentialCitationCount=42 is forwarded to CitationNode."""
+    payload = {
+        "paperId": "s2icc",
+        "title": "ICC Paper",
+        "year": 2020,
+        "citationCount": 100,
+        "referenceCount": 5,
+        "influentialCitationCount": 42,
+    }
+    node = client._payload_to_node(payload)
+    assert node.influential_citation_count == 42
+
+
+def test_payload_to_node_without_influential_citation_count(client):
+    """Absent influentialCitationCount results in None."""
+    payload = {
+        "paperId": "s2icc",
+        "title": "No ICC Paper",
+        "year": 2019,
+        "citationCount": 50,
+        "referenceCount": 3,
+    }
+    node = client._payload_to_node(payload)
+    assert node.influential_citation_count is None

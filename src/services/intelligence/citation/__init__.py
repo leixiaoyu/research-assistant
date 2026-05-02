@@ -30,6 +30,20 @@ Wrapping them would require either widening the ABC or layering an
 adapter on top — both add coupling without saving meaningful code.
 """
 
+from src.services.intelligence.citation.crawler import (
+    MAX_API_CALLS_PER_CRAWL,
+    CitationCrawler,
+    CrawlConfig,
+    CrawlResult,
+    sort_by_influence,
+)
+from src.services.intelligence.citation.influence_scorer import (
+    DEFAULT_CACHE_TTL,
+    MAX_GRAPH_NODES_FOR_HITS,
+    MAX_GRAPH_NODES_FOR_PAGERANK,
+    InfluenceMetrics,
+    InfluenceScorer,
+)
 from src.services.intelligence.citation.graph_builder import (
     BuildForPaperRequest,
     CitationGraphBuilder,
@@ -40,6 +54,8 @@ from src.services.intelligence.citation.models import (
     CitationDirection,
     CitationEdge,
     CitationNode,
+    CrawlDirection,
+    LegacyCitationDirection,
     make_citation_edge_id,
     make_paper_node_id,
 )
@@ -52,9 +68,11 @@ from src.services.intelligence.citation.semantic_scholar_client import (
 
 __all__ = [
     # Models
-    "CitationDirection",
+    "CitationDirection",  # legacy alias for LegacyCitationDirection
+    "LegacyCitationDirection",
     "CitationEdge",
     "CitationNode",
+    "CrawlDirection",  # canonical crawler direction (FORWARD/BACKWARD/BOTH)
     "make_citation_edge_id",
     "make_paper_node_id",
     # Clients
@@ -65,4 +83,17 @@ __all__ = [
     "GraphBuildResult",
     "ProviderTag",
     "BuildForPaperRequest",
+    # Crawler (Issue #127)
+    "CitationCrawler",
+    "CrawlConfig",
+    "CrawlDirection",
+    "CrawlResult",
+    "MAX_API_CALLS_PER_CRAWL",
+    "sort_by_influence",
+    # Influence Scorer (Issue #129)
+    "InfluenceScorer",
+    "InfluenceMetrics",
+    "DEFAULT_CACHE_TTL",
+    "MAX_GRAPH_NODES_FOR_HITS",
+    "MAX_GRAPH_NODES_FOR_PAGERANK",
 ]

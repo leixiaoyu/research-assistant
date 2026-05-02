@@ -353,11 +353,70 @@ MIGRATION_V3_MONITORING_RUNS_FK = Migration(
 )
 
 
+# Schema version 4: Citation influence metrics cache.
+# Phase 9.2 — REQ-9.2.4 / Issue #129.
+#
+# Stores the result of one InfluenceScorer.compute_for_paper() call
+# keyed by paper_id. The 7-day TTL enforced by InfluenceScorer reads
+# the ``computed_at`` column on lookup; this migration provides only
+# the persistence shape, no expiration logic.
+#
+# Schema notes
+# ------------
+# - ``paper_id`` PRIMARY KEY: each paper has at most one current score
+#   row. Recompute UPSERTs (INSERT ... ON CONFLICT REPLACE) so the row
+#   reflects the latest snapshot, never a stale one.
+# - All score columns are REAL and nullable. PageRank always populates;
+#   HITS may be skipped on oversize graphs (returns 0.0 / 0.0). We
+#   store the actual zero rather than NULL so downstream consumers
+#   don't need to disambiguate "skipped" vs "not yet computed".
+# - ``citation_count`` is INTEGER and required (it is the input to
+#   PageRank, not a derived metric, so a missing value would be a bug).
+# - ``computed_at`` ISO-8601 string consistent with the rest of the
+#   intelligence schema (V1-V3 all use ISO-8601 TEXT). The 7-day TTL
+#   is enforced in Python — the DB merely persists the value.
+# - ``version`` defaults to 1 and is reserved for forward-compatible
+#   schema evolution (future hub/authority variants, weighted
+#   PageRank, etc.) without forcing a V5 migration on day one.
+#
+# Indexes: ``computed_at`` to accelerate TTL sweeps the future cleanup
+# job (Phase 10) will need; ``pagerank_score DESC`` for the "top
+# influential papers" query patterns the recommender (#REQ-9.2.5)
+# will issue.
+MIGRATION_V4_CITATION_INFLUENCE_METRICS = Migration(
+    version=4,
+    name="citation_influence_metrics",
+    description=(
+        "Add citation_influence_metrics table for InfluenceScorer cache "
+        "(REQ-9.2.4 / Issue #129)."
+    ),
+    up="""
+    CREATE TABLE IF NOT EXISTS citation_influence_metrics (
+        paper_id TEXT PRIMARY KEY,
+        citation_count INTEGER NOT NULL DEFAULT 0,
+        citation_velocity REAL NOT NULL DEFAULT 0.0,
+        pagerank_score REAL NOT NULL DEFAULT 0.0,
+        hub_score REAL NOT NULL DEFAULT 0.0,
+        authority_score REAL NOT NULL DEFAULT 0.0,
+        computed_at TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_citation_influence_metrics_computed
+        ON citation_influence_metrics(computed_at);
+
+    CREATE INDEX IF NOT EXISTS idx_citation_influence_metrics_pagerank
+        ON citation_influence_metrics(pagerank_score DESC);
+    """,
+)
+
+
 # All migrations in order
 ALL_MIGRATIONS: list[Migration] = [
     MIGRATION_V1_INITIAL,
     MIGRATION_V2_MONITORING_RUNS,
     MIGRATION_V3_MONITORING_RUNS_FK,
+    MIGRATION_V4_CITATION_INFLUENCE_METRICS,
 ]
 
 

@@ -34,7 +34,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Optional, cast
@@ -84,6 +84,7 @@ _OPENALEX_WORK_SELECT = ",".join(
         "doi",
         "title",
         "publication_year",
+        "publication_date",
         "cited_by_count",
         "referenced_works",
         "referenced_works_count",
@@ -770,6 +771,22 @@ class OpenAlexCitationClient:
 
         title = payload.get("title") or "Unknown Title"
 
+        # ``publication_date`` is an ISO-8601 date string (e.g. "2023-06-01")
+        # returned by OpenAlex when the exact date is known. Parse to ``date``
+        # so downstream consumers (crawler ranking, influence scorer) avoid
+        # re-parsing. Malformed or absent values degrade gracefully to None.
+        pub_date_raw = payload.get("publication_date")
+        publication_date: date | None = None
+        if isinstance(pub_date_raw, str) and pub_date_raw:
+            try:
+                publication_date = date.fromisoformat(pub_date_raw)
+            except ValueError:
+                logger.warning(
+                    "openalex_citation_malformed_publication_date",
+                    paper_id=oa_id,
+                    raw_value=pub_date_raw,
+                )
+
         return CitationNode(
             paper_id=make_paper_node_id("openalex", oa_id),
             external_ids=external_ids,
@@ -777,6 +794,7 @@ class OpenAlexCitationClient:
             year=payload.get("publication_year"),
             citation_count=int(payload.get("cited_by_count") or 0),
             reference_count=int(payload.get("referenced_works_count") or 0),
+            publication_date=publication_date,
         )
 
     @staticmethod

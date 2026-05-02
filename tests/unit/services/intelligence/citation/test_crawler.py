@@ -387,6 +387,26 @@ def test_sort_by_influence_handles_none_influential_as_zero():
     assert ranked[0].paper_id.endswith("a")
 
 
+def test_sort_by_influence_all_keys_equal_is_stable():
+    """H-T4: when ALL three sort keys are identical, ordering is stable.
+
+    Python's ``sorted`` is documented as stable; pin the contract here so a
+    future migration to an unstable backend (e.g. NumPy) trips this test.
+    """
+    inputs = [
+        _node(
+            f"id{i}",
+            influential_citation_count=10,
+            citation_count=50,
+            publication_date=date(2022, 6, 1),
+        )
+        for i in range(5)
+    ]
+    ranked = sort_by_influence(inputs)
+    # Stable sort preserves input order when all keys match.
+    assert [n.paper_id for n in ranked] == [n.paper_id for n in inputs]
+
+
 # ---------------------------------------------------------------------------
 # Visited dedupe
 # ---------------------------------------------------------------------------
@@ -428,8 +448,7 @@ async def test_crawl_visited_dedupe(crawler, s2_client, store):
 
 @pytest.mark.asyncio
 async def test_crawl_budget_cap_emits_event_and_stops(crawler, s2_client, monkeypatch):
-    """Cap MAX_API_CALLS_PER_CRAWL=2 → crawl stops after 2 calls + emits event."""
-    monkeypatch.setattr(crawler_module, "MAX_API_CALLS_PER_CRAWL", 2)
+    """Cap max_api_calls=2 → crawl stops after 2 calls + emits event."""
     # Ensure the production logger picks up the patched processor swap
     # used by capture_logs (see CLAUDE.md: cache_logger_on_first_use=True).
     monkeypatch.setattr(crawler_module, "logger", structlog.get_logger())
@@ -446,7 +465,9 @@ async def test_crawl_budget_cap_emits_event_and_stops(crawler, s2_client, monkey
     }
     _wire_references(s2_client, mapping)
 
-    config = CrawlConfig(max_depth=3, direction=CrawlDirection.BACKWARD)
+    config = CrawlConfig(
+        max_depth=3, direction=CrawlDirection.BACKWARD, max_api_calls=2
+    )
     with structlog.testing.capture_logs() as logs:
         result = await crawler.crawl("seed", config)
 
@@ -459,16 +480,50 @@ async def test_crawl_budget_cap_emits_event_and_stops(crawler, s2_client, monkey
 
 
 @pytest.mark.asyncio
+async def test_crawl_per_call_max_api_calls_overrides_module_default(
+    store, s2_client, monkeypatch
+):
+    """H-A4/H-A5: ``CrawlConfig.max_api_calls`` overrides the module
+    default per crawl. A caller can tighten the budget without mutating
+    the global constant.
+    """
+    # Module default stays at the production value of 1000; we override
+    # via the config field, not via monkeypatch.
+    monkeypatch.setattr(crawler_module, "logger", structlog.get_logger())
+
+    children = [_node(f"L1_{i}") for i in range(5)]
+    _wire_references(s2_client, {"seed": children})
+
+    crawler = CitationCrawler(store=store, s2_client=s2_client)
+    config = CrawlConfig(
+        max_depth=2,
+        direction=CrawlDirection.BACKWARD,
+        max_api_calls=1,  # tight per-call budget; module default is 1000
+    )
+    with structlog.testing.capture_logs() as logs:
+        result = await crawler.crawl("seed", config)
+
+    # One call (the seed expansion) consumes the entire budget.
+    assert result.budget_exhausted is True
+    assert result.api_calls_made == 1
+    budget_events = [
+        e for e in logs if e.get("event") == "citation_crawl_budget_exhausted"
+    ]
+    assert len(budget_events) == 1
+    # Audit field reflects the per-call budget, not the module default.
+    assert budget_events[0]["budget"] == 1
+
+
+@pytest.mark.asyncio
 async def test_crawl_budget_cap_mid_both_direction(store, s2_client, monkeypatch):
     """BOTH direction: budget hit between BACKWARD and FORWARD on same paper."""
-    monkeypatch.setattr(crawler_module, "MAX_API_CALLS_PER_CRAWL", 1)
     monkeypatch.setattr(crawler_module, "logger", structlog.get_logger())
 
     _wire_references(s2_client, {"seed": [_node("a")]})
     _wire_citations(s2_client, {"seed": [_node("b")]})
 
     crawler = CitationCrawler(store=store, s2_client=s2_client)
-    config = CrawlConfig(max_depth=1, direction=CrawlDirection.BOTH)
+    config = CrawlConfig(max_depth=1, direction=CrawlDirection.BOTH, max_api_calls=1)
     with structlog.testing.capture_logs() as logs:
         result = await crawler.crawl("seed", config)
 
@@ -753,14 +808,25 @@ def test_crawl_result_defaults():
 
 @pytest.mark.asyncio
 async def test_crawl_budget_zero_blocks_first_call(crawler, monkeypatch):
-    """MAX=0 → budget check fires before the first BACKWARD call too."""
-    monkeypatch.setattr(crawler_module, "MAX_API_CALLS_PER_CRAWL", 0)
+    """max_api_calls=1 → budget check fires before the second BACKWARD call too.
+
+    NOTE: ``max_api_calls`` has Field(ge=1) so the minimum bound we can pass
+    is 1, not 0. With max_api_calls=1 and BACKWARD direction, the first call
+    succeeds and consumes the budget; any subsequent expansion is blocked.
+    """
     monkeypatch.setattr(crawler_module, "logger", structlog.get_logger())
-    config = CrawlConfig(max_depth=1, direction=CrawlDirection.BACKWARD)
+    # Wire seed → 3 children; with max_api_calls=1 we expand the seed
+    # (1 call) then hit budget on the first L1 child.
+    children = [_node(f"L1_{i}") for i in range(3)]
+    s2 = crawler.s2_client
+    _wire_references(s2, {"seed": children})
+    config = CrawlConfig(
+        max_depth=2, direction=CrawlDirection.BACKWARD, max_api_calls=1
+    )
     with structlog.testing.capture_logs() as logs:
         result = await crawler.crawl("seed", config)
     assert result.budget_exhausted is True
-    assert result.api_calls_made == 0
+    assert result.api_calls_made == 1
     assert any(e.get("event") == "citation_crawl_budget_exhausted" for e in logs)
 
 
@@ -780,11 +846,14 @@ async def test_crawl_both_dedupes_node_appearing_in_refs_and_cites(
 
 
 @pytest.mark.asyncio
-async def test_expand_paper_backward_branch_budget_exhausted(crawler, monkeypatch):
-    """Direct test: budget hit on the BACKWARD-only entry to _expand_paper."""
+async def test_expand_paper_backward_branch_budget_exhausted(crawler):
+    """Direct test: budget hit on the BACKWARD-only entry to _expand_paper.
+
+    Pass ``max_api_calls=0`` directly to the helper (it's a parameter, not
+    a global anymore — see H-A4/H-A5).
+    """
     from src.services.intelligence.citation.crawler import _BudgetExhausted
 
-    monkeypatch.setattr(crawler_module, "MAX_API_CALLS_PER_CRAWL", 0)
     counter = CrawlResult()
     sem = asyncio.Semaphore(1)
     with pytest.raises(_BudgetExhausted):
@@ -793,6 +862,7 @@ async def test_expand_paper_backward_branch_budget_exhausted(crawler, monkeypatc
             direction=CrawlDirection.BACKWARD,
             semaphore=sem,
             counter=counter,
+            max_api_calls=0,
         )
 
 

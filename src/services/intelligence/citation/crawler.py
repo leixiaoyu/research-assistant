@@ -77,10 +77,22 @@ from src.storage.intelligence_graph import GraphStore, SQLiteGraphStore
 logger = structlog.get_logger(__name__)
 
 
-# Hard cap on the total number of provider calls a single ``crawl()`` may
-# issue. Defends against runaway expansion when the per-level cap and
-# depth cap are both set high. When this is hit the crawler emits a
-# single ``citation_crawl_budget_exhausted`` event and stops.
+# Default cap on the total number of provider calls a single ``crawl()``
+# may issue. Defends against runaway expansion when the per-level cap
+# and depth cap are both set high. When the cap is hit the crawler emits
+# a ``citation_crawl_budget_exhausted`` event and stops.
+#
+# The actual per-call value is read from ``CrawlConfig.max_api_calls``,
+# which defaults to this constant. Callers can pass a tighter (or wider,
+# up to 10_000) bound per crawl. (H-A4/H-A5)
+#
+# NOTE on metric semantics: the counter increments once per logical
+# direction of a paper expansion (one for backward refs, one for forward
+# cites). Each "logical call" may map to multiple HTTP requests inside
+# the provider client because S2/OpenAlex paginate references and
+# citations server-side. Budget granularity is coarse on purpose; for
+# tighter rate control rely on the provider client's built-in
+# ``RateLimiter``. (H-A4)
 MAX_API_CALLS_PER_CRAWL = 1000
 
 # Concurrency bound on in-flight provider requests within a single
@@ -111,6 +123,11 @@ class CrawlConfig(BaseModel):
     direction: CrawlDirection = Field(default=CrawlDirection.BOTH)
     filter_min_citations: int = Field(default=0, ge=0)
     filter_year_min: Optional[int] = Field(default=None, ge=1800, le=2100)
+    # Per-crawl override of the global ``MAX_API_CALLS_PER_CRAWL``
+    # default. Lets callers tighten (e.g., 50 for unit tests) or widen
+    # (up to 10_000 for one-off batch jobs) the budget without changing
+    # the module-level constant. (H-A4/H-A5)
+    max_api_calls: int = Field(default=MAX_API_CALLS_PER_CRAWL, ge=1, le=10_000)
 
 
 class CrawlResult(BaseModel):
@@ -292,13 +309,13 @@ class CitationCrawler:
             # paper. We may need 1 (single direction) or 2 (BOTH) calls;
             # check conservatively against 1 so we never make a partial
             # set of calls beyond the budget — see issue #127 acceptance.
-            if result.api_calls_made >= MAX_API_CALLS_PER_CRAWL:
+            if result.api_calls_made >= config.max_api_calls:
                 result.budget_exhausted = True
                 logger.warning(
                     "citation_crawl_budget_exhausted",
                     seed_paper_id=seed_paper_id,
                     api_calls_made=result.api_calls_made,
-                    budget=MAX_API_CALLS_PER_CRAWL,
+                    budget=config.max_api_calls,
                 )
                 break
 
@@ -308,6 +325,7 @@ class CitationCrawler:
                     direction=config.direction,
                     semaphore=semaphore,
                     counter=result,
+                    max_api_calls=config.max_api_calls,
                 )
             except _BudgetExhausted:
                 # Budget hit mid-expansion (BOTH directions). Mark and
@@ -319,7 +337,7 @@ class CitationCrawler:
                     "citation_crawl_budget_exhausted",
                     seed_paper_id=seed_paper_id,
                     api_calls_made=result.api_calls_made,
-                    budget=MAX_API_CALLS_PER_CRAWL,
+                    budget=config.max_api_calls,
                 )
                 break
             except APIError as exc:
@@ -460,6 +478,7 @@ class CitationCrawler:
         direction: CrawlDirection,
         semaphore: asyncio.Semaphore,
         counter: CrawlResult,
+        max_api_calls: int = MAX_API_CALLS_PER_CRAWL,
     ) -> _ExpandResult:
         """Fetch references / citations for one paper, applying budget.
 
@@ -490,7 +509,7 @@ class CitationCrawler:
         forward_edges: list[CitationEdge] = []
 
         if direction in (CrawlDirection.BACKWARD, CrawlDirection.BOTH):
-            if counter.api_calls_made >= MAX_API_CALLS_PER_CRAWL:
+            if counter.api_calls_made >= max_api_calls:
                 raise _BudgetExhausted()
             counter.api_calls_made += 1
             async with semaphore:
@@ -500,7 +519,7 @@ class CitationCrawler:
             backward_edges.extend(ref_edges)
 
         if direction in (CrawlDirection.FORWARD, CrawlDirection.BOTH):
-            if counter.api_calls_made >= MAX_API_CALLS_PER_CRAWL:
+            if counter.api_calls_made >= max_api_calls:
                 raise _BudgetExhausted()
             counter.api_calls_made += 1
             async with semaphore:

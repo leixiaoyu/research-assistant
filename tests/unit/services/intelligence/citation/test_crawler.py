@@ -573,6 +573,7 @@ async def test_crawl_provider_failure_skips_node(
     ]
     assert len(skip_events) == 1
     assert skip_events[0].get("paper_id") == b.paper_id
+    # H-S1: error is repr(str(exc)[:512]) — check message content is present
     assert "boom on b" in skip_events[0].get("error", "")
 
 
@@ -809,6 +810,38 @@ async def test_crawl_persist_layer_no_op_when_empty(crawler):
     )
     assert ok is True
     assert persisted == set()
+
+
+# ---------------------------------------------------------------------------
+# H-S1: Error message truncation in fail-soft provider path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_crawl_provider_error_is_truncated_in_log(crawler, s2_client):
+    """A long provider error string must be truncated to ≤512 chars in the log."""
+    long_error = "X" * 10_000  # way over 512 chars
+
+    async def refs_fail(paper_id, *args, **kwargs):
+        raise APIError(long_error)
+
+    s2_client.get_references.side_effect = refs_fail
+
+    config = CrawlConfig(max_depth=1, direction=CrawlDirection.BACKWARD)
+    with structlog.testing.capture_logs() as logs:
+        await crawler.crawl("seed", config)
+
+    fail_events = [
+        e
+        for e in logs
+        if e.get("event") == "citation_crawl_provider_failed_skipping_node"
+    ]
+    assert len(fail_events) == 1
+    # repr(str(exc)[:512]) is at most repr("X"*512) = "'XXX...'" (514 chars)
+    # but the inner str slice is guaranteed ≤512 chars.
+    logged_error = fail_events[0].get("error", "")
+    # The repr wrapper adds surrounding quotes, but the inner content is ≤512
+    assert len(logged_error) <= 520  # repr overhead is at most ~8 chars
 
 
 # ---------------------------------------------------------------------------

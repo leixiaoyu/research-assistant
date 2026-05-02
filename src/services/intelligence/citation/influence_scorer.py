@@ -71,6 +71,14 @@ logger = structlog.get_logger(__name__)
 # Phase-9 corpora.
 MAX_GRAPH_NODES_FOR_HITS = 10_000
 
+# Hard cap on the graph size for which PageRank is computed (H-S2).
+# PageRank is O(N × iterations) and fast in practice, but an
+# attacker-controlled corpus could insert thousands of nodes to cause
+# a CPU-stall. 50K is intentionally generous — 5× the HITS cap and
+# well above realistic Phase-9 corpora — but still provides a
+# safety bound against runaway expansion.
+MAX_GRAPH_NODES_FOR_PAGERANK = 50_000
+
 # Cached InfluenceMetrics rows are returned without recomputation if
 # their ``computed_at`` is within this window. Spec REQ-9.2.4 calls for
 # 7 days; tests pass smaller values via the constructor.
@@ -255,17 +263,29 @@ class InfluenceScorer:
         is wrapped in ``asyncio.to_thread`` so its O(N*iter) inner loop
         does not stall the event loop.
         """
-        # PageRank delegation. Single source of truth.
-        pagerank = await asyncio.to_thread(
-            GraphAlgorithms.pagerank,
-            self.store,
-            edge_types=[EdgeType.CITES.value],
-            damping=0.85,
-            node_type=NodeType.PAPER,
-        )
+        # Query node count once; shared by both the PageRank and HITS gates
+        # so we only pay for the COUNT(*) query once per invocation.
+        node_count = self.store.get_node_count(node_type=NodeType.PAPER)
+
+        # PageRank gate (H-S2): skip on oversize graphs to bound CPU.
+        if node_count > MAX_GRAPH_NODES_FOR_PAGERANK:
+            logger.warning(
+                "influence_scorer_pagerank_skipped_oversize_graph",
+                node_count=node_count,
+                limit=MAX_GRAPH_NODES_FOR_PAGERANK,
+            )
+            pagerank: dict[str, float] = {}
+        else:
+            # PageRank delegation. Single source of truth.
+            pagerank = await asyncio.to_thread(
+                GraphAlgorithms.pagerank,
+                self.store,
+                edge_types=[EdgeType.CITES.value],
+                damping=0.85,
+                node_type=NodeType.PAPER,
+            )
 
         # HITS — skipped on oversize graphs.
-        node_count = self.store.get_node_count(node_type=NodeType.PAPER)
         if node_count > MAX_GRAPH_NODES_FOR_HITS:
             logger.warning(
                 "influence_scorer_hits_skipped_oversize_graph",

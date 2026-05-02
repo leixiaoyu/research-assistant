@@ -661,3 +661,45 @@ def test_hits_runs_all_iterations_without_convergence(store, monkeypatch):
     # still return well-formed score vectors.
     assert set(hubs.keys()) == {a.paper_id, b.paper_id}
     assert set(authorities.keys()) == {a.paper_id, b.paper_id}
+
+
+# ---------------------------------------------------------------------------
+# H-S2: PageRank node-count gate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pagerank_skipped_when_graph_exceeds_limit(store, monkeypatch):
+    """PageRank must be skipped and an audit event emitted when graph is too large.
+
+    Monkeypatch MAX_GRAPH_NODES_FOR_PAGERANK to 2, insert 3 nodes, verify the
+    warning is logged and the returned pagerank_score is 0.0 (empty dict fallback).
+    """
+    # Lower the limit so 3 nodes trip it.
+    monkeypatch.setattr(scorer_module, "MAX_GRAPH_NODES_FOR_PAGERANK", 2)
+
+    a = _node("a", year=2020)
+    b = _node("b", year=2020)
+    c = _node("c", year=2020)
+    _persist_chain(store, a, b)
+    # Insert c separately (no edge needed — we just need the node count to hit 3)
+    store.add_nodes_batch([c.to_graph_node()])
+
+    s = InfluenceScorer(store=store)
+    with structlog.testing.capture_logs() as logs:
+        metrics_list = await s.compute_for_graph([a.paper_id, b.paper_id, c.paper_id])
+
+    # The PageRank skip event must have been emitted.
+    skip_events = [
+        e
+        for e in logs
+        if e.get("event") == "influence_scorer_pagerank_skipped_oversize_graph"
+    ]
+    assert len(skip_events) == 1
+    assert skip_events[0]["node_count"] == 3
+    assert skip_events[0]["limit"] == 2
+
+    # All metrics must still be returned (with pagerank_score == 0.0).
+    assert len(metrics_list) == 3
+    for m in metrics_list:
+        assert m.pagerank_score == 0.0

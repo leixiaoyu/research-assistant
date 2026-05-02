@@ -93,19 +93,20 @@ def _build_job(
     audit_runs: dict[str, MonitoringRunAudit] | None = None,
     digest_side_effect: Exception | None = None,
 ) -> tuple[MonitoringCheckJob, MagicMock, MagicMock]:
-    """Construct a job with mocked runner + digest generator."""
+    """Construct a job with mocked runner + digest generator.
+
+    Uses the public delegation methods (H-C1) rather than private attrs.
+    """
     runner = MagicMock()
     runner.run_once = AsyncMock(return_value=runs or [])
-    runner._subscriptions = MagicMock()
-    runner._subscriptions.list_subscriptions = MagicMock(
-        return_value=subscriptions or []
-    )
-    runner._run_repo = MagicMock()
+    # Public delegation method (H-C1)
+    runner.list_subscriptions = MagicMock(return_value=subscriptions or [])
 
-    def get_run(run_id: str) -> MonitoringRunAudit | None:
+    def get_audit_run(run_id: str) -> MonitoringRunAudit | None:
         return (audit_runs or {}).get(run_id)
 
-    runner._run_repo.get_run = MagicMock(side_effect=get_run)
+    # Public delegation method (H-C1)
+    runner.get_audit_run = MagicMock(side_effect=get_audit_run)
 
     digest = MagicMock()
     if digest_side_effect is not None:
@@ -216,12 +217,9 @@ class TestMonitoringCheckJobRun:
 
         runner = MagicMock()
         runner.run_once = AsyncMock(return_value=[run_a, run_b])
-        runner._subscriptions = MagicMock()
-        runner._subscriptions.list_subscriptions = MagicMock(
-            return_value=[sub_a, sub_b]
-        )
-        runner._run_repo = MagicMock()
-        runner._run_repo.get_run = MagicMock(
+        # Use public delegation methods (H-C1)
+        runner.list_subscriptions = MagicMock(return_value=[sub_a, sub_b])
+        runner.get_audit_run = MagicMock(
             side_effect=lambda rid: {
                 run_a.run_id: audit_a,
                 run_b.run_id: audit_b,
@@ -278,6 +276,154 @@ class TestMonitoringCheckJobRun:
         assert result["digests_written"] == 1
         assert job.run_count == 1
         assert job.error_count == 0
+
+    @pytest.mark.asyncio
+    async def test_run_once_raises_propagates_and_increments_error_count(
+        self,
+    ) -> None:
+        """C-3: Errors from runner.run_once() propagate through __call__
+        and the BaseJob error_count is incremented.
+
+        This tests the error-propagation path so ``job_failed`` gets
+        logged and APScheduler records a JobError event -- preventing
+        silent data loss on scheduler ticks.
+        """
+        runner = MagicMock()
+        runner.run_once = AsyncMock(side_effect=RuntimeError("network down"))
+        runner.list_subscriptions = MagicMock(return_value=[])
+        digest = MagicMock()
+
+        job = MonitoringCheckJob(runner=runner, digest_generator=digest)
+
+        with pytest.raises(RuntimeError, match="network down"):
+            await job()
+
+        assert job.error_count == 1
+        assert job.run_count == 0  # run_count only increments on success
+
+    @pytest.mark.asyncio
+    async def test_structlog_events_emitted_for_skipped_digest_failed_run(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """H-T1: ``monitoring_digest_skipped_failed_run`` is emitted when
+        a FAILED run is encountered during the digest pass.
+        """
+        import structlog
+        import structlog.testing
+
+        # ``src/utils/logging.py`` configures structlog with
+        # ``cache_logger_on_first_use=True``; under that mode the module-level
+        # ``logger`` in ``src.scheduling.jobs`` is bound to the production
+        # processor chain at import time and ignores ``capture_logs()``'s
+        # processor swap. Re-bind the jobs logger to a fresh proxy so the
+        # current global configuration (set by capture_logs) is honored.
+        from src.scheduling import jobs as jobs_module
+
+        monkeypatch.setattr(jobs_module, "logger", structlog.get_logger())
+
+        sub = _make_subscription()
+        run = _make_run(status=MonitoringRunStatus.FAILED, error="upstream 500")
+        job, runner, digest = _build_job(
+            runs=[run],
+            subscriptions=[sub],
+            audit_runs={run.run_id: _make_audit_run(status=MonitoringRunStatus.FAILED)},
+        )
+        with structlog.testing.capture_logs() as logs:
+            await job.run()
+
+        skip_events = [
+            e for e in logs if e.get("event") == "monitoring_digest_skipped_failed_run"
+        ]
+        assert len(skip_events) == 1
+        assert skip_events[0].get("run_id") == run.run_id
+
+    @pytest.mark.asyncio
+    async def test_structlog_event_emitted_for_missing_subscription(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """H-T1: ``monitoring_digest_skipped_missing_subscription`` is logged
+        when the subscription was deleted between cycle and digest pass.
+        """
+        import structlog
+        import structlog.testing
+
+        from src.scheduling import jobs as jobs_module
+
+        monkeypatch.setattr(jobs_module, "logger", structlog.get_logger())
+
+        run = _make_run(subscription_id="sub-deleted")
+        job, runner, digest = _build_job(
+            runs=[run],
+            subscriptions=[],  # subscription deleted
+            audit_runs={run.run_id: _make_audit_run(subscription_id="sub-deleted")},
+        )
+        with structlog.testing.capture_logs() as logs:
+            await job.run()
+
+        skip_events = [
+            e
+            for e in logs
+            if e.get("event") == "monitoring_digest_skipped_missing_subscription"
+        ]
+        assert len(skip_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_structlog_event_emitted_for_digest_write_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """H-T1: ``monitoring_digest_write_failed`` is logged when
+        digest generation raises.
+        """
+        import structlog
+        import structlog.testing
+
+        from src.scheduling import jobs as jobs_module
+
+        monkeypatch.setattr(jobs_module, "logger", structlog.get_logger())
+
+        sub = _make_subscription()
+        run = _make_run()
+        job, runner, digest = _build_job(
+            runs=[run],
+            subscriptions=[sub],
+            audit_runs={run.run_id: _make_audit_run()},
+            digest_side_effect=OSError("disk full"),
+        )
+        with structlog.testing.capture_logs() as logs:
+            await job.run()
+
+        error_events = [
+            e for e in logs if e.get("event") == "monitoring_digest_write_failed"
+        ]
+        assert len(error_events) == 1
+        assert "disk full" in error_events[0].get("error", "")
+
+    def test_public_methods_list_subscriptions_and_get_audit_run(self) -> None:
+        """H-C1: runner.list_subscriptions() and runner.get_audit_run()
+        are public delegation methods that the job uses instead of
+        accessing private attributes.
+        """
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
+
+        sub_mgr = MagicMock()
+        sub_mgr.list_subscriptions = MagicMock(return_value=["sub1"])
+        monitor = MagicMock()
+        run_repo = MagicMock()
+        run_repo.get_run = MagicMock(return_value="audit_row")
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=run_repo,
+        )
+
+        assert runner.list_subscriptions() == ["sub1"]
+        assert runner.get_audit_run("run-abc") == "audit_row"
+        sub_mgr.list_subscriptions.assert_called_once()
+        run_repo.get_run.assert_called_once_with("run-abc")
 
 
 # ---------------------------------------------------------------------------

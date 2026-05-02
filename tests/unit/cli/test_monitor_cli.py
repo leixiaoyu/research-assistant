@@ -19,7 +19,6 @@ import pytest
 from typer.testing import CliRunner
 
 from src.cli.monitor import (
-    AUTO_INGEST_THRESHOLD,
     _DB_ENV_VAR,
     _auto_ingest_runs,
     _resolve_db_path,
@@ -109,15 +108,24 @@ class TestResolveDbPath:
 
 class TestAutoIngestRuns:
     def test_counts_above_threshold(self) -> None:
+        sub = ResearchSubscription(
+            subscription_id="sub-test12345",
+            user_id="alice",
+            name="Sub",
+            query="tree of thoughts",
+            min_relevance_score=0.7,
+        )
         run = _make_run(
+            subscription_id="sub-test12345",
             papers=[
                 _make_paper_record(paper_id="hi", relevance_score=0.95),
                 _make_paper_record(paper_id="lo", relevance_score=0.4),
                 _make_paper_record(paper_id="thr", relevance_score=0.7),
-            ]
+            ],
         )
-        # 0.95 and 0.7 (>= AUTO_INGEST_THRESHOLD) count; 0.4 does not.
-        assert _auto_ingest_runs([run]) == 2
+        # 0.95 and 0.7 (>= sub.min_relevance_score=0.7) count; 0.4 does not.
+        subs_by_id = {sub.subscription_id: sub}
+        assert _auto_ingest_runs([run], subscriptions_by_id=subs_by_id) == 2
 
     def test_skips_unscored(self) -> None:
         run = _make_run(
@@ -127,9 +135,35 @@ class TestAutoIngestRuns:
         )
         assert _auto_ingest_runs([run]) == 0
 
-    def test_threshold_constant(self) -> None:
-        # Sanity check the resolved decision is wired correctly.
-        assert AUTO_INGEST_THRESHOLD == 0.7
+    def test_threshold_uses_subscription_min_relevance(self) -> None:
+        """Per-subscription threshold is used instead of global constant (H-A4)."""
+        sub = ResearchSubscription(
+            subscription_id="sub-test12345",
+            user_id="alice",
+            name="High Bar",
+            query="tree of thoughts",
+            min_relevance_score=0.9,
+        )
+        run = _make_run(
+            subscription_id="sub-test12345",
+            papers=[
+                _make_paper_record(paper_id="just-below", relevance_score=0.85),
+                _make_paper_record(paper_id="above", relevance_score=0.95),
+            ],
+        )
+        subs_by_id = {sub.subscription_id: sub}
+        # Only 0.95 clears the 0.9 threshold; 0.85 does not.
+        assert _auto_ingest_runs([run], subscriptions_by_id=subs_by_id) == 1
+
+    def test_fallback_default_threshold_without_subscription_map(self) -> None:
+        """Without subscription map, falls back to default 0.7 threshold."""
+        run = _make_run(
+            papers=[
+                _make_paper_record(paper_id="above", relevance_score=0.8),
+                _make_paper_record(paper_id="below", relevance_score=0.5),
+            ]
+        )
+        assert _auto_ingest_runs([run]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -256,11 +290,12 @@ class TestCheckCommand:
         )
         fake_runner = MagicMock()
         fake_runner.run_once = AsyncMock(return_value=[run])
+        fake_runner.list_subscriptions = MagicMock(return_value=[])
         with patch("src.cli.monitor._build_runner", return_value=fake_runner):
             result = runner.invoke(monitor_app, ["check", "--user-id", "alice"])
         assert result.exit_code == 0
         assert "sub-aaa" in result.output
-        assert "1 paper(s) above relevance" in result.output
+        assert "paper(s) above" in result.output
         fake_runner.run_once.assert_awaited_once_with(user_id="alice")
 
 
@@ -457,6 +492,7 @@ class TestBuildHelpers:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         from src.cli.monitor import _build_runner
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
 
         monkeypatch.setenv(_DB_ENV_VAR, str(tmp_path / "m.db"))
         # Stub ArxivProvider + RegistryService so the runner builds without
@@ -468,4 +504,111 @@ class TestBuildHelpers:
             arxiv_cls.return_value = MagicMock()
             reg_cls.return_value = MagicMock()
             runner_obj = _build_runner()
-        assert runner_obj is not None
+        # H-T4: Assert isinstance and that public delegation method works.
+        assert isinstance(runner_obj, MonitoringRunner)
+        assert runner_obj.list_subscriptions() == []
+
+    def test_add_command_db_raises_exits_nonzero(
+        self,
+        runner: CliRunner,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """H-T3: @handle_errors converts unexpected exceptions to exit code 1.
+
+        Simulates a database error during add_command to verify the decorator
+        catches it and exits with a non-zero code and error message.
+        """
+        monkeypatch.setenv(_DB_ENV_VAR, str(tmp_path / "m.db"))
+        with patch(
+            "src.cli.monitor._build_subscription_manager",
+            side_effect=RuntimeError("database locked"),
+        ):
+            result = runner.invoke(
+                monitor_app,
+                ["add", "--name", "X", "--query", "y"],
+            )
+        assert result.exit_code != 0
+        assert "Error" in result.output or "database locked" in result.output
+
+
+class TestDigestFailedRunGate:
+    """C-2: digest_command exits 1 for FAILED runs; --force bypasses gate."""
+
+    def _seed_failed_run(
+        self,
+        db_env: Path,
+        run_id: str = "run-failed-1",
+    ) -> str:
+        """Insert a FAILED audit row and return its run_id."""
+        import sqlite3
+
+        from src.services.intelligence.monitoring.run_repository import (
+            MonitoringRunRepository,
+        )
+
+        repo = MonitoringRunRepository(db_env)
+        repo.initialize()
+        conn = sqlite3.connect(str(db_env))
+        try:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute(
+                "INSERT INTO monitoring_runs (run_id, subscription_id, "
+                "user_id, started_at, status, papers_found, papers_new) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    "sub-failed",
+                    "alice",
+                    "2026-04-24T00:00:00+00:00",
+                    "failed",
+                    0,
+                    0,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return run_id
+
+    def test_digest_failed_run_exits_one(
+        self, runner: CliRunner, db_env: Path, tmp_path: Path
+    ) -> None:
+        """C-2: Digesting a FAILED run exits with code 1 and error message."""
+        run_id = self._seed_failed_run(db_env)
+        out_dir = tmp_path / "digests_out"
+        result = runner.invoke(
+            monitor_app,
+            ["digest", run_id, "--output-root", str(out_dir)],
+        )
+        assert result.exit_code == 1
+        assert "FAILED" in result.output
+        assert "digest would be empty" in result.output
+
+    def test_digest_failed_run_force_flag_generates(
+        self, runner: CliRunner, db_env: Path, tmp_path: Path
+    ) -> None:
+        """C-2: --force bypasses the FAILED gate and writes the (empty) digest."""
+        # Need to insert a subscription first so the digest can render a header.
+        from src.services.intelligence.monitoring.subscription_manager import (
+            SubscriptionManager,
+        )
+
+        mgr = SubscriptionManager(db_env)
+        mgr.initialize()
+        sub = ResearchSubscription(
+            subscription_id="sub-failed",
+            user_id="alice",
+            name="Failed Sub",
+            query="x",
+        )
+        mgr.add_subscription(sub)
+
+        run_id = self._seed_failed_run(db_env)
+        out_dir = tmp_path / "digests_out"
+        result = runner.invoke(
+            monitor_app,
+            ["digest", run_id, "--output-root", str(out_dir), "--force"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Digest written" in result.output

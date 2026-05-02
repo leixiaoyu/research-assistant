@@ -422,16 +422,19 @@ class TestRegistryLookup:
 
         # HttpUrl from pydantic returns a non-str object; fake it.
         class _FakeUrl:
-            def __str__(self) -> str:  # pragma: no cover
+            def __str__(self) -> str:
                 return "https://example.com/x"
 
-        entry.metadata_snapshot = {"title": "T", "url": _FakeUrl()}
+        url_obj = _FakeUrl()
+        entry.metadata_snapshot = {"title": "T", "url": url_obj}
         entry.title_normalized = "t"
         registry.get_entry.return_value = entry
 
         gen = DigestGenerator(tmp_output, registry=registry)
         papers = [_make_paper_audit(paper_id="abc")]
         text = gen.generate(_make_run(papers=papers), _make_subscription()).read_text()
+        # Assert the rendered text contains the URL via __str__ path.
+        assert str(url_obj) in text
         assert "https://example.com/x" in text
 
     def test_registry_miss_falls_back_to_paper_id(self, tmp_output: Path) -> None:
@@ -569,3 +572,62 @@ class TestRenderedSnapshot:
         assert "Direct match on PEFT keyword." in text
         assert "## Stats\n" in text
         assert text.endswith("\n")
+
+
+# ---------------------------------------------------------------------------
+# H-S4: ARISP_OUTPUT_ROOT env var sandbox
+# ---------------------------------------------------------------------------
+
+
+class TestOutputRootEnvVar:
+    """H-S4: Env-var override for output root is accepted and traversal blocked."""
+
+    def test_env_var_override_accepted(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """ARISP_OUTPUT_ROOT allows a custom approved base."""
+        custom_root = tmp_path / "custom_output"
+        custom_root.mkdir()
+        monkeypatch.setenv("ARISP_OUTPUT_ROOT", str(custom_root))
+
+        gen = DigestGenerator(custom_root / "sub")
+        # DigestGenerator should construct without error -- the env var
+        # makes ``custom_root`` an approved base.
+        assert gen is not None
+
+    def test_env_var_traversal_still_blocked(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Setting ARISP_OUTPUT_ROOT does not allow paths outside it."""
+        custom_root = tmp_path / "allowed"
+        custom_root.mkdir()
+        monkeypatch.setenv("ARISP_OUTPUT_ROOT", str(custom_root))
+        # Try to escape to /etc (not under custom_root OR other approved bases)
+        monkeypatch.chdir(str(tmp_path))  # ensure cwd/output is not /etc
+
+        with pytest.raises(SecurityError):
+            DigestGenerator(Path("/etc/malicious"))
+
+    def test_structlog_monitoring_digest_written(
+        self,
+        tmp_output: Path,
+    ) -> None:
+        """H-T1: ``monitoring_digest_written`` is logged by DigestGenerator."""
+        import structlog.testing
+
+        gen = DigestGenerator(tmp_output)
+        sub = _make_subscription()
+        run = _make_run()
+        with structlog.testing.capture_logs() as logs:
+            gen.generate(run, sub)
+
+        written_events = [
+            e for e in logs if e.get("event") == "monitoring_digest_written"
+        ]
+        assert len(written_events) == 1
+        assert written_events[0].get("run_id") == run.run_id
+        assert written_events[0].get("subscription_id") == sub.subscription_id

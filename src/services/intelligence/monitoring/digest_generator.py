@@ -42,7 +42,7 @@ Public surface:
 from __future__ import annotations
 
 import os
-import re
+import tempfile
 from datetime import timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING, Optional
 import structlog
 
 from src.services.intelligence.monitoring.models import (
+    IDENTIFIER_PATTERN,
     MonitoringPaperAudit,
     MonitoringRunAudit,
     ResearchSubscription,
@@ -78,10 +79,10 @@ DEFAULT_TOP_N = 20
 # from a misbehaving model and the digest renders the cap explicitly.
 REASONING_TRUNCATE_CHARS = 280
 
-# Subscription-id slug pattern. Identical to the one in
-# ``ResearchSubscription._validate_identifier`` -- duplicated here so
-# this module has no implicit coupling to model internals.
-_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9._\-]+$")
+# Subscription-id slug pattern. Imported from models (H-C2 DRY) so
+# both this module and the models agree on the same character class.
+# Kept as a module-level alias so the rest of this file uses the short name.
+_SLUG_PATTERN = IDENTIFIER_PATTERN
 
 
 class DigestGenerator:
@@ -175,15 +176,22 @@ class DigestGenerator:
     def _sanitize_output_root(root: Path) -> Path:
         """Resolve ``root`` and assert it is inside an allowed sandbox.
 
-        Approved sandboxes:
-          - ``<cwd>/output`` (the canonical pipeline output sink)
-          - the system temp dir (for tests and ad-hoc debugging)
+        Approved sandboxes (H-S4):
+          - ``<cwd>/output`` (the canonical pipeline output sink, default)
+          - The directory specified by the ``ARISP_OUTPUT_ROOT`` env var,
+            when set. This lets container deployments and tests redirect
+            digest output without changing CWD or patching the module.
+          - The system temp dir (for tests and ad-hoc debugging).
+
+        The env var is read at call time (not import time) so that tests
+        using ``monkeypatch.setenv`` see the correct value.
 
         Returns:
             The resolved absolute Path.
-        """
-        import tempfile
 
+        Raises:
+            SecurityError: If ``root`` is outside every approved sandbox.
+        """
         candidate = Path(root)
         resolved = (
             candidate.resolve()
@@ -194,6 +202,12 @@ class DigestGenerator:
             (Path.cwd() / "output").resolve(),
             Path(tempfile.gettempdir()).resolve(),
         ]
+        # H-S4: Allow env-var override so deployments can sandbox output
+        # without depending on CWD.
+        env_root = os.environ.get("ARISP_OUTPUT_ROOT")
+        if env_root:
+            approved.insert(0, Path(env_root).resolve())
+
         for base in approved:
             try:
                 resolved.relative_to(base)

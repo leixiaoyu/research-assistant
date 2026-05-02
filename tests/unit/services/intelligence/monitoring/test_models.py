@@ -200,6 +200,42 @@ class TestKeywordsValidator:
         with pytest.raises(ValidationError):
             ResearchSubscription(name="n", query="q", exclude_keywords=["bad@kw"])
 
+    def test_keyword_oversize_single_rejected(self) -> None:
+        """H-S2: A single keyword exceeding 200 chars is rejected."""
+        oversize_kw = "a" * 201
+        with pytest.raises(ValidationError) as excinfo:
+            ResearchSubscription(name="n", query="q", keywords=[oversize_kw])
+        assert "too long" in str(excinfo.value)
+
+    def test_keyword_exactly_200_chars_accepted(self) -> None:
+        """H-S2: A keyword of exactly 200 chars is accepted."""
+        # Must contain only allowed chars (alphanumeric for simplicity).
+        ok_kw = "a" * 200
+        sub = ResearchSubscription(name="n", query="q", keywords=[ok_kw])
+        assert len(sub.keywords) == 1
+
+    def test_exclude_keyword_oversize_single_rejected(self) -> None:
+        """H-S2: Same 200-char cap applies to exclude_keywords."""
+        oversize_kw = "b" * 201
+        with pytest.raises(ValidationError) as excinfo:
+            ResearchSubscription(name="n", query="q", exclude_keywords=[oversize_kw])
+        assert "too long" in str(excinfo.value)
+
+    def test_keyword_cumulative_oversize_rejected(self) -> None:
+        """H-S2: Cumulative keyword list exceeding 4096 bytes is rejected."""
+        # Each keyword is 100 chars; 42 keywords -> 42*100 + 41*2 = 4282 bytes.
+        kws = [f"{'a' * 98}{i:02d}" for i in range(42)]
+        with pytest.raises(ValidationError) as excinfo:
+            ResearchSubscription(name="n", query="q", keywords=kws)
+        assert "Cumulative keyword" in str(excinfo.value)
+
+    def test_keyword_cumulative_within_limit_accepted(self) -> None:
+        """H-S2: Cumulative keyword list within 4096 bytes is accepted."""
+        # 20 keywords of 10 chars each = 200 + 38*2 = 276 bytes -- well within limit.
+        kws = [f"{'a' * 9}{i:01d}" for i in range(20)]
+        sub = ResearchSubscription(name="n", query="q", keywords=kws)
+        assert len(sub.keywords) == 20
+
 
 class TestSourcesValidator:
     def test_sources_default_arxiv(self) -> None:

@@ -48,9 +48,31 @@ operation, etc.) that need a separate refactor pass tracked under
 from __future__ import annotations
 
 import sqlite3
+import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator, TypeVar
+
+import structlog
+
+logger = structlog.get_logger()
+
+T = TypeVar("T")
+
+# SQLite extended result codes for the lock contention family. Python
+# 3.11+ exposes ``OperationalError.sqlite_errorcode`` so we can
+# distinguish lock contention from semantically-distinct
+# ``OperationalError`` cases (disk full, schema drift, ...) without
+# grepping the message. The numeric values mirror sqlite3.h:
+#
+#   SQLITE_BUSY   = 5  (another process holds an incompatible lock)
+#   SQLITE_LOCKED = 6  (a table in the same connection is locked)
+#
+# Substring fallback covers older sqlite builds whose binding does not
+# populate ``sqlite_errorcode`` (PR #123 review #S1).
+_SQLITE_BUSY = 5
+_SQLITE_LOCKED = 6
+_RETRYABLE_SQLITE_CODES = frozenset({_SQLITE_BUSY, _SQLITE_LOCKED})
 
 
 @contextmanager
@@ -98,3 +120,102 @@ def open_connection(db_path: Path) -> Iterator[sqlite3.Connection]:
         yield conn
     finally:
         conn.close()
+
+
+def retry_on_lock_contention(
+    operation: Callable[[], T],
+    *,
+    max_attempts: int = 3,
+    backoff_seconds: float = 0.05,
+    operation_name: str = "sqlite_operation",
+) -> T:
+    """Retry a SQLite operation on lock contention (BUSY/LOCKED).
+
+    Uses ``sqlite3.OperationalError.sqlite_errorcode`` introspection
+    (codes 5 = SQLITE_BUSY, 6 = SQLITE_LOCKED) with substring fallback
+    for older SQLite versions whose binding does not populate the
+    ``sqlite_errorcode`` attribute. Sleeps ``backoff_seconds * attempt``
+    between retries (linear, not exponential -- contention is
+    short-lived). Re-raises immediately on any non-contention error or
+    after ``max_attempts`` is exhausted.
+
+    The helper is the canonical way to wrap any ``BEGIN IMMEDIATE``
+    write in the intelligence-graph and monitoring layers. WAL +
+    ``busy_timeout`` already buys 5s on the connection level; the
+    application-level retries here are an additional safety margin so
+    a colliding writer does not silently drop a critical row.
+
+    Async callers MUST wrap this call in ``asyncio.to_thread(...)`` --
+    the retry loop uses ``time.sleep`` which would block the event loop
+    for the full backoff budget on every contended write. (See
+    ``MonitoringRunner._run_one`` for the canonical async wrapping.)
+
+    Args:
+        operation: Zero-arg callable that performs the SQLite write.
+            Wrap your statement(s) in a lambda or function so the helper
+            can re-invoke them per attempt.
+        max_attempts: Total attempts including the initial call. Must
+            be >= 1.
+        backoff_seconds: Base sleep interval between attempts. Linear
+            backoff (attempt * base) is used.
+        operation_name: Used in log events for traceability so a single
+            log stream can distinguish e.g. ``monitoring_record_run``
+            from ``influence_write_cache`` contention.
+
+    Returns:
+        Whatever ``operation()`` returns on the first successful
+        attempt.
+
+    Raises:
+        sqlite3.OperationalError: After ``max_attempts`` on lock
+            contention, OR on the first attempt for any non-contention
+            ``OperationalError`` (disk full, schema drift, syntax
+            error, ...).
+    """
+    attempt = 0
+    while True:
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            # Prefer ``sqlite_errorcode`` (Python 3.11+, set by the C
+            # binding) to message substring matching: it is
+            # locale-independent, immune to upstream wording changes,
+            # and covers both SQLITE_BUSY and SQLITE_LOCKED variants.
+            # Fall back to the substring check when the code is
+            # unavailable (older bindings, synthesized exceptions in
+            # tests). Match both "locked" and "busy" wording SQLite has
+            # used historically. (PR #123 review #S1.)
+            sqlite_code = getattr(exc, "sqlite_errorcode", None)
+            if sqlite_code is not None:
+                is_lock_error = sqlite_code in _RETRYABLE_SQLITE_CODES
+            else:
+                msg = str(exc).lower()
+                is_lock_error = "locked" in msg or "busy" in msg
+            is_last_attempt = attempt >= max_attempts - 1
+            if not is_lock_error:
+                # Non-contention OperationalError -- propagate
+                # immediately so the caller sees the real bug.
+                raise
+            if is_last_attempt:
+                # Contention persisted past the retry budget. Emit a
+                # structured error event so ops can grep for
+                # audit-trail gaps (matches the orchestration pattern
+                # of "audit-write the failure paths too").
+                logger.error(
+                    "sqlite_lock_contention_exhausted",
+                    operation_name=operation_name,
+                    attempts=max_attempts,
+                    error=str(exc),
+                )
+                raise
+            backoff = backoff_seconds * (attempt + 1)
+            logger.warning(
+                "sqlite_lock_contention_retry",
+                operation_name=operation_name,
+                attempt=attempt + 1,
+                max_attempts=max_attempts,
+                backoff_seconds=backoff,
+                error=str(exc),
+            )
+            time.sleep(backoff)
+            attempt += 1

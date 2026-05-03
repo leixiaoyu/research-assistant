@@ -149,7 +149,9 @@ def _build_runner(
             llm_cost_limits = CostLimits()
             llm_svc = LLMService(config=llm_config, cost_limits=llm_cost_limits)
         except Exception as exc:
-            logger.warning(
+            # H-M7: env var was set but init failed — this is an operator
+            # misconfiguration, not a soft degradation; raise to error level.
+            logger.error(
                 "monitor_cli_llm_init_failed",
                 error_type=type(exc).__name__,
                 reason="scoring_and_expansion_will_be_skipped",
@@ -383,11 +385,9 @@ def digest_command(
             raise typer.Exit(code=1)
         audit_run = latest_runs[0]
     else:
-        # ``run_id`` is non-None at this point (mutually-exclusive guard
-        # above). Use a proper guard rather than assert (H-C4).
-        if run_id is None:
-            raise typer.BadParameter("internal: run_id missing despite guard")
-        audit_run = repo.get_run(run_id)
+        # ``run_id`` is non-None at this point — guaranteed by the
+        # mutually-exclusive guard above (H-M8: removed unreachable inner guard).
+        audit_run = repo.get_run(run_id)  # type: ignore[arg-type]
         if audit_run is None:
             display_error(f"Run not found: {run_id}")
             raise typer.Exit(code=1)

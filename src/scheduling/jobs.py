@@ -789,7 +789,9 @@ class MonitoringCheckJob(BaseJob):
                     llm_cost_limits = CostLimits()
                     llm_svc = LLMService(config=llm_config, cost_limits=llm_cost_limits)
                 except Exception as exc:
-                    logger.warning(
+                    # H-M7: env var was set but init failed — operator
+                    # misconfiguration, raise to error severity.
+                    logger.error(
                         "monitoring_check_job_llm_init_failed",
                         error_type=type(exc).__name__,
                         reason="scoring_will_be_skipped",

@@ -255,11 +255,14 @@ class MonitoringRunner:
         # the broader-discovery MultiProviderMonitor. Otherwise keep the
         # legacy single-provider ArxivMonitor for backward compatibility.
         monitor: ArxivMonitor | MultiProviderMonitor
-        if extra_providers or query_expander is not None:
+        # H-C6: use ``is not None`` instead of truthiness so that an
+        # explicit ``extra_providers={}`` (empty dict) still builds
+        # MultiProviderMonitor — the caller explicitly opted in.
+        if extra_providers is not None or query_expander is not None:
             providers: dict[PaperSource, DiscoveryProvider] = {
                 PaperSource.ARXIV: arxiv_provider,
             }
-            if extra_providers:
+            if extra_providers is not None:
                 # Defensive copy to isolate from caller mutations; reject
                 # an attempt to override the canonical ArXiv provider via
                 # the extras dict (caller should pass the override as
@@ -453,7 +456,18 @@ class MonitoringRunner:
         level (Fail-Soft Boundary across independent peers).
         """
         try:
-            result = await self._monitor.check(subscription)
+            # H-S1: pass budget counters to MultiProviderMonitor so the
+            # expander call is gated against the cycle's LLM budget.
+            # ArxivMonitor.check does not accept these kwargs; duck-type
+            # on the concrete type so we only pass them when meaningful.
+            if isinstance(self._monitor, MultiProviderMonitor):
+                result = await self._monitor.check(
+                    subscription,
+                    llm_calls_used=llm_calls_used,
+                    max_calls=MAX_LLM_CALLS_PER_CYCLE,
+                )
+            else:
+                result = await self._monitor.check(subscription)
             run = result.run
         except Exception as exc:
             # Defensive envelope: ArxivMonitor.check is documented to

@@ -44,7 +44,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 import structlog
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.models.config.core import ResearchTopic
 from src.models.paper import PaperMetadata
@@ -59,6 +59,7 @@ from src.services.intelligence.monitoring.models import (
     MonitoringRunStatus,
     PaperSource,
     ResearchSubscription,
+    SubscriptionStatus,
 )
 from src.services.providers.base import DiscoveryProvider
 from src.services.registry import RegistryService
@@ -87,16 +88,43 @@ class MultiProviderMonitorConfig(BaseModel):
     Wrapping the constructor params in a Pydantic model gives us strict
     validation at runtime (catching e.g. negative budget caps) and a
     single point to extend without breaking the constructor signature.
+
+    H-M1: all numeric fields carry Pydantic ``Field(ge=..., le=...)``
+    bounds so illegal values are caught at construction time rather than
+    producing silent misuse at runtime.
     """
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    max_papers_per_cycle: int = MAX_PAPERS_PER_CYCLE
-    max_query_variants: int = _DEFAULT_MAX_QUERY_VARIANTS
-    topic_slug_prefix: str = "monitor"
+    max_papers_per_cycle: int = Field(
+        default=MAX_PAPERS_PER_CYCLE,
+        ge=1,
+        le=MAX_PAPERS_PER_CYCLE,
+        description="Hard cap on papers processed per cycle.",
+    )
+    max_query_variants: int = Field(
+        default=_DEFAULT_MAX_QUERY_VARIANTS,
+        ge=1,
+        le=10,
+        description="Maximum number of query variants including the original.",
+    )
+    topic_slug_prefix: str = Field(
+        default="monitor",
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+        description="Prefix used when affiliating monitored papers in the registry.",
+    )
 
     @classmethod
     def with_defaults(cls) -> "MultiProviderMonitorConfig":
+        """Return a config with all defaults applied.
+
+        .. deprecated::
+            Calling ``MultiProviderMonitorConfig()`` directly is equivalent
+            and is preferred. This classmethod is retained for backward
+            compatibility only and will be removed in a future iteration.
+        """
         return cls()
 
 
@@ -143,7 +171,13 @@ class MultiProviderMonitor:
     # ------------------------------------------------------------------
     # Public API — same shape as ArxivMonitor.check()
     # ------------------------------------------------------------------
-    async def check(self, subscription: ResearchSubscription) -> ArxivMonitorResult:
+    async def check(
+        self,
+        subscription: ResearchSubscription,
+        *,
+        llm_calls_used: Optional[list[int]] = None,
+        max_calls: Optional[int] = None,
+    ) -> ArxivMonitorResult:
         """Run one expanded multi-provider monitoring cycle.
 
         Behavior:
@@ -153,11 +187,17 @@ class MultiProviderMonitor:
            subscription's ``sources`` allowlist are skipped so each
            subscription can opt out of specific providers.
         2. Expand the query into N variants (or use only the literal
-           query if no expander is configured).
+           query if no expander is configured). H-S1: the expander call
+           is gated against the ``llm_calls_used`` / ``max_calls``
+           budget so the monitor cannot bypass ``MonitoringRunner``'s
+           ``MAX_LLM_CALLS_PER_CYCLE`` cap.
         3. For each variant, search every provider the subscription has
            allowlisted. Provider failures on a single variant are logged
            and skipped — the cycle continues with whatever other
            providers/variants succeed.
+           H-S5: ``_build_topic_for_query`` is called inside the
+           per-provider try/except so a Pydantic validation failure on
+           a bad variant does not abort the whole subscription cycle.
         4. Union all returned papers, dedup by ``paper_id``.
         5. Apply the per-cycle paper cap.
         6. For each paper, resolve identity against the registry. New
@@ -166,6 +206,16 @@ class MultiProviderMonitor:
         7. Return :class:`ArxivMonitorResult`. Status is ``PARTIAL`` if
            any provider/registry call surfaced an error during the
            cycle, ``SUCCESS`` otherwise.
+
+        Args:
+            subscription: The subscription to check.
+            llm_calls_used: Optional mutable single-element list acting
+                as a shared counter for LLM calls consumed this cycle.
+                When ``None``, budget enforcement is skipped (direct
+                callers and tests that don't need the cap).
+            max_calls: Maximum allowed LLM calls. Checked against
+                ``llm_calls_used[0]`` before the expander is invoked.
+                Ignored when ``llm_calls_used`` is ``None``.
 
         This method never raises — it always returns a result with a
         meaningful :class:`MonitoringRun` status.
@@ -180,7 +230,7 @@ class MultiProviderMonitor:
             source=PaperSource.ARXIV,
         )
 
-        if subscription.status.value != "active":
+        if subscription.status is not SubscriptionStatus.ACTIVE:
             run.status = MonitoringRunStatus.SUCCESS
             run.finished_at = datetime.now(timezone.utc)
             logger.info(
@@ -190,8 +240,11 @@ class MultiProviderMonitor:
             )
             return ArxivMonitorResult(run=run, new_papers=[], deduplicated_papers=[])
 
-        # Step 2: query expansion (or single-query fallback)
-        queries = await self._build_query_variants(subscription)
+        # Step 2: query expansion (or single-query fallback).
+        # H-S1: pass budget counters so the expander call is gated.
+        queries, expansion_degraded = await self._build_query_variants(
+            subscription, llm_calls_used=llm_calls_used, max_calls=max_calls
+        )
         logger.info(
             "monitor_query_expansion_complete",
             subscription_id=subscription.subscription_id,
@@ -203,13 +256,17 @@ class MultiProviderMonitor:
         # failure does NOT abort the cycle — each is independent.
         # H-S3: Only search providers the subscription's allowlist permits.
         fetched: list[PaperMetadata] = []
-        partial_failure = False
+        partial_failure = expansion_degraded  # H-C5: expander degradation → PARTIAL
         for variant in queries:
-            topic = self._build_topic_for_query(subscription, variant)
             for source, provider in self._providers.items():
                 if source not in subscription.sources:
                     continue
                 try:
+                    # H-S5: build topic INSIDE try/except so a Pydantic
+                    # validation error on a bad variant (e.g., containing
+                    # characters rejected by ResearchTopic) does not abort
+                    # the whole cycle — it's treated as a provider failure.
+                    topic = self._build_topic_for_query(subscription, variant)
                     results = await provider.search(topic)
                 except Exception as exc:
                     partial_failure = True
@@ -272,14 +329,33 @@ class MultiProviderMonitor:
     # Internal helpers
     # ------------------------------------------------------------------
     async def _build_query_variants(
-        self, subscription: ResearchSubscription
-    ) -> list[str]:
+        self,
+        subscription: ResearchSubscription,
+        *,
+        llm_calls_used: Optional[list[int]] = None,
+        max_calls: Optional[int] = None,
+    ) -> tuple[list[str], bool]:
         """Expand the subscription's query if an expander is configured.
 
-        Always returns a non-empty list — at minimum, the literal query.
-        Expander failures are caught and logged; the literal query is
-        used as a fail-soft fallback (matching ``QueryExpander.expand``'s
-        own contract — see ``src/utils/query_expander.py:88``).
+        Always returns ``(variants, degraded)`` where ``variants`` is a
+        non-empty list (at minimum, the literal query) and ``degraded``
+        is ``True`` when the expander was skipped, failed, or produced
+        only invalid variants — so the caller can mark the run PARTIAL.
+
+        H-S1 — Budget gate:
+            If ``llm_calls_used`` and ``max_calls`` are both provided and
+            ``llm_calls_used[0] >= max_calls``, the expander call is
+            skipped entirely and ``monitor_expansion_budget_exhausted``
+            is logged. ``degraded=True`` is returned so the run is PARTIAL.
+            On successful expansion, ``llm_calls_used[0]`` is incremented
+            by 1 to account for the expander's LLM call.
+
+        H-S2 — Variant validation:
+            Each variant is passed through
+            ``InputValidation.validate_query``. Invalid variants are
+            dropped with a ``monitor_expansion_variant_rejected`` log
+            event. If all variants are rejected, the literal query is
+            used as a fallback.
 
         ``max_query_variants`` is the final cap on the total result set
         including the original query. The expander is asked for that many
@@ -287,7 +363,23 @@ class MultiProviderMonitor:
         cap regardless of what the expander returns.
         """
         if self._query_expander is None:
-            return [subscription.query]
+            return [subscription.query], False
+
+        # H-S1: Budget guard — skip expander when the cycle's LLM budget
+        # is already exhausted. Use ``degraded=True`` so the caller marks
+        # the run PARTIAL and ops can grep for the audit event.
+        if (
+            llm_calls_used is not None
+            and max_calls is not None
+            and llm_calls_used[0] >= max_calls
+        ):
+            logger.warning(
+                "monitor_expansion_budget_exhausted",
+                subscription_id=subscription.subscription_id,
+                max_calls=max_calls,
+                calls_used=llm_calls_used[0],
+            )
+            return [subscription.query], True
 
         try:
             variants = await self._query_expander.expand(
@@ -300,17 +392,42 @@ class MultiProviderMonitor:
                 subscription_id=subscription.subscription_id,
                 error=repr(str(exc)[:512]),
             )
-            return [subscription.query]
+            return [subscription.query], True
+
+        # H-S1: Increment budget counter on successful expander call.
+        if llm_calls_used is not None:
+            llm_calls_used[0] += 1
 
         # Defensive: if the expander returned nothing usable, fall back
         # to the literal query so we never search with an empty list.
         if not variants:
-            return [subscription.query]
+            return [subscription.query], True
 
         # Clip to the configured cap so callers are never surprised by an
         # oversized variant list even if the expander ignores max_variants.
-        result = variants[: self._config.max_query_variants]
-        return result
+        clipped = variants[: self._config.max_query_variants]
+
+        # H-S2: Validate each variant through InputValidation to drop any
+        # LLM-produced strings that contain injection-risk characters.
+        from src.utils.security import InputValidation
+
+        validated: list[str] = []
+        for variant in clipped:
+            try:
+                InputValidation.validate_query(variant)
+                validated.append(variant)
+            except Exception:
+                logger.warning(
+                    "monitor_expansion_variant_rejected",
+                    subscription_id=subscription.subscription_id,
+                    variant=variant[:120],
+                )
+
+        if not validated:
+            # All variants were rejected — fall back to the literal query.
+            return [subscription.query], True
+
+        return validated, False
 
     def _build_topic_for_query(
         self, subscription: ResearchSubscription, query: str

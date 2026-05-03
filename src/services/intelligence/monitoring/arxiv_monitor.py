@@ -46,6 +46,7 @@ from src.services.intelligence.monitoring.models import (
     MonitoringRun,
     MonitoringRunStatus,
     ResearchSubscription,
+    SubscriptionStatus,
 )
 from src.services.providers.arxiv import ArxivProvider
 from src.services.registry import RegistryService
@@ -242,7 +243,8 @@ class ArxivMonitor:
     @staticmethod
     def _monitor_eligible(subscription: ResearchSubscription) -> bool:
         """Return True if the monitor should poll for this subscription."""
-        if subscription.status.value != "active":
+        # H-M2: use enum identity instead of raw-string comparison.
+        if subscription.status is not SubscriptionStatus.ACTIVE:
             return False
         if PaperSource.ARXIV not in subscription.sources:
             return False

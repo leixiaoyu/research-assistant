@@ -130,7 +130,7 @@ def _build_runner(
             When ``None``, a default ``ArxivProvider()`` is built.
     """
     from src.models.llm import CostLimits, LLMConfig
-    from src.services.intelligence.monitoring.models import PaperSource
+    from src.services.intelligence.monitoring._tier1_factory import build_tier1_extras
     from src.services.llm.service import LLMService
     from src.services.providers.arxiv import ArxivProvider
     from src.services.registry.service import RegistryService
@@ -142,7 +142,7 @@ def _build_runner(
     # (never hardcoded). If the key is absent, run without scoring or
     # expansion (graceful degradation -- legacy single-arxiv behavior).
     llm_svc = None
-    llm_api_key = os.environ.get("LLM_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    llm_api_key = os.environ.get("LLM_API_KEY")
     if llm_api_key and llm_api_key.strip():
         try:
             llm_config = LLMConfig(api_key=llm_api_key)
@@ -157,39 +157,8 @@ def _build_runner(
 
     # Tier 1: build extra providers + query expander when LLM is wired.
     # Constructed lazily so the legacy-fallback path doesn't pay the
-    # provider-construction cost.
-    extra_providers = None
-    query_expander = None
-    if llm_svc is not None:
-        try:
-            from src.services.providers.huggingface import HuggingFaceProvider
-            from src.services.providers.openalex import OpenAlexProvider
-            from src.services.providers.semantic_scholar import (
-                SemanticScholarProvider,
-            )
-            from src.utils.query_expander import QueryExpander
-
-            # Semantic Scholar requires an API key; OpenAlex + HuggingFace
-            # are anonymous-public. If S2 key is missing, skip S2 only --
-            # the other providers still broaden discovery.
-            extra_providers = {
-                PaperSource.OPENALEX: OpenAlexProvider(),
-                PaperSource.HUGGINGFACE: HuggingFaceProvider(),
-            }
-            s2_key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
-            if s2_key and s2_key.strip():
-                extra_providers[PaperSource.SEMANTIC_SCHOLAR] = SemanticScholarProvider(
-                    api_key=s2_key
-                )
-            query_expander = QueryExpander(llm_service=llm_svc)
-        except Exception as exc:
-            logger.warning(
-                "monitor_cli_tier1_init_failed",
-                error=str(exc),
-                reason="falling_back_to_legacy_single_arxiv",
-            )
-            extra_providers = None
-            query_expander = None
+    # provider-construction cost. H-C4: delegated to build_tier1_extras.
+    extra_providers, query_expander = build_tier1_extras(llm_svc)
 
     return MonitoringRunner.from_paths(
         db_path=_resolve_db_path(),

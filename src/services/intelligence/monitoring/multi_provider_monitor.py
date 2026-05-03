@@ -46,12 +46,13 @@ from typing import TYPE_CHECKING, Optional
 import structlog
 from pydantic import BaseModel, ConfigDict
 
-from src.models.config.core import ResearchTopic, TimeframeRecent, TimeframeType
+from src.models.config.core import ResearchTopic
 from src.models.paper import PaperMetadata
-from src.services.intelligence.monitoring.arxiv_monitor import (
-    _MAX_POLL_HOURS,
-    ArxivMonitorResult,
+from src.services.intelligence.monitoring._paper_records import (
+    build_topic,
+    to_paper_record,
 )
+from src.services.intelligence.monitoring.arxiv_monitor import ArxivMonitorResult
 from src.services.intelligence.monitoring.models import (
     MAX_PAPERS_PER_CYCLE,
     MonitoringRun,
@@ -314,13 +315,12 @@ class MultiProviderMonitor:
     def _build_topic_for_query(
         self, subscription: ResearchSubscription, query: str
     ) -> ResearchTopic:
-        """Construct a :class:`ResearchTopic` for one query variant."""
-        hours = min(subscription.poll_interval_hours, _MAX_POLL_HOURS)
-        timeframe = TimeframeRecent(
-            type=TimeframeType.RECENT,
-            value=f"{hours}h",
-        )
-        return ResearchTopic(query=query, timeframe=timeframe)
+        """Construct a :class:`ResearchTopic` for one query variant.
+
+        Delegates to the shared :func:`build_topic` helper (H-C3) so
+        the look-back-window clamping logic lives in one place.
+        """
+        return build_topic(query, subscription.poll_interval_hours)
 
     @staticmethod
     def _dedup_by_paper_id(papers: list[PaperMetadata]) -> list[PaperMetadata]:
@@ -348,8 +348,6 @@ class MultiProviderMonitor:
         — those are individually survivable but flag the overall cycle
         as PARTIAL.
         """
-        from src.services.intelligence.monitoring.arxiv_monitor import ArxivMonitor
-
         new_papers: list[PaperMetadata] = []
         deduped: list[PaperMetadata] = []
         partial_failure = False
@@ -370,7 +368,7 @@ class MultiProviderMonitor:
 
             if match.matched:
                 deduped.append(paper)
-                run.papers.append(ArxivMonitor._to_record(paper, is_new=False))
+                run.papers.append(to_paper_record(paper, is_new=False))
                 continue
 
             try:
@@ -390,6 +388,6 @@ class MultiProviderMonitor:
                 continue
 
             new_papers.append(paper)
-            run.papers.append(ArxivMonitor._to_record(paper, is_new=True))
+            run.papers.append(to_paper_record(paper, is_new=True))
 
         return new_papers, deduped, partial_failure

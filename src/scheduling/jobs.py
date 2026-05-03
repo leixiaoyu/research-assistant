@@ -777,11 +777,12 @@ class MonitoringCheckJob(BaseJob):
             import os
 
             from src.models.llm import CostLimits, LLMConfig
+            from src.services.intelligence.monitoring._tier1_factory import (
+                build_tier1_extras,
+            )
 
             llm_svc = None
-            llm_api_key = os.environ.get("LLM_API_KEY") or os.environ.get(
-                "GEMINI_API_KEY"
-            )
+            llm_api_key = os.environ.get("LLM_API_KEY")
             if llm_api_key and llm_api_key.strip():
                 try:
                     llm_config = LLMConfig(api_key=llm_api_key)
@@ -799,45 +800,9 @@ class MonitoringCheckJob(BaseJob):
                     reason="scoring_will_be_skipped",
                 )
             # Tier 1 (Issue #139): wire multi-provider monitor + query
-            # expander when LLM is available. Falls back to legacy
-            # single-arxiv when LLM key is missing (graceful).
-            extra_providers = None
-            query_expander = None
-            if llm_svc is not None:
-                try:
-                    from src.services.intelligence.monitoring.models import (
-                        PaperSource,
-                    )
-                    from src.services.providers.huggingface import (
-                        HuggingFaceProvider,
-                    )
-                    from src.services.providers.openalex import OpenAlexProvider
-                    from src.services.providers.semantic_scholar import (
-                        SemanticScholarProvider,
-                    )
-                    from src.utils.query_expander import QueryExpander
-
-                    # Semantic Scholar requires an API key; OpenAlex +
-                    # HuggingFace are anonymous-public. Skip S2 if its
-                    # key is missing -- the others still broaden search.
-                    extra_providers = {
-                        PaperSource.OPENALEX: OpenAlexProvider(),
-                        PaperSource.HUGGINGFACE: HuggingFaceProvider(),
-                    }
-                    s2_key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
-                    if s2_key and s2_key.strip():
-                        extra_providers[PaperSource.SEMANTIC_SCHOLAR] = (
-                            SemanticScholarProvider(api_key=s2_key)
-                        )
-                    query_expander = QueryExpander(llm_service=llm_svc)
-                except Exception as exc:
-                    logger.warning(
-                        "monitoring_check_job_tier1_init_failed",
-                        error=str(exc),
-                        reason="falling_back_to_legacy_single_arxiv",
-                    )
-                    extra_providers = None
-                    query_expander = None
+            # expander when LLM is available. H-C4: delegated to
+            # build_tier1_extras so the wiring logic is not duplicated.
+            extra_providers, query_expander = build_tier1_extras(llm_svc)
 
             self._runner = MonitoringRunner.from_paths(
                 db_path=self._db_path,

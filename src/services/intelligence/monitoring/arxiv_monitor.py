@@ -27,21 +27,21 @@ Design notes:
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional
 
 import structlog
 from pydantic import BaseModel, ConfigDict
 
-from src.models.config.core import (
-    ResearchTopic,
-    TimeframeRecent,
-    TimeframeType,
-)
+from src.models.config.core import ResearchTopic
 from src.models.paper import PaperMetadata
 from src.models.registry import RegistryEntry
 from src.services.intelligence.models.monitoring import PaperSource
+from src.services.intelligence.monitoring._paper_records import (
+    build_topic,
+    to_paper_record,
+)
 from src.services.intelligence.monitoring.models import (
     MAX_PAPERS_PER_CYCLE,
+    MAX_POLL_HOURS,
     MonitoringPaperRecord,
     MonitoringRun,
     MonitoringRunStatus,
@@ -53,10 +53,10 @@ from src.services.registry import RegistryService
 logger = structlog.get_logger()
 
 
-# Default lookback window when a poll interval is too long to express
-# as a TimeframeRecent (>720h cap). ``ArxivProvider`` validates the
-# string at construction time so we cap to the provider's known max.
-_MAX_POLL_HOURS = 720
+# H-C2: _MAX_POLL_HOURS is now imported from models.py as MAX_POLL_HOURS.
+# Keep a local alias for backward compat with imports from other modules
+# that depended on the old private name.
+_MAX_POLL_HOURS = MAX_POLL_HOURS
 # How many papers to ask ArXiv for per call. We pull the per-cycle cap
 # so a single subscription can saturate the cycle if necessary.
 _DEFAULT_MAX_PAPERS = MAX_PAPERS_PER_CYCLE
@@ -252,20 +252,10 @@ class ArxivMonitor:
     def _build_topic(subscription: ResearchSubscription) -> ResearchTopic:
         """Map a subscription to a ``ResearchTopic`` for the provider.
 
-        ArxivProvider's ``TimeframeRecent`` value pattern is ``\\d+[hd]``,
-        with a 720h cap (~30 days) enforced by the model's
-        ``validate_recent_format``. We clamp ``poll_interval_hours`` to
-        that ceiling to avoid a validation error mid-cycle.
+        Delegates to the shared :func:`build_topic` helper in
+        ``_paper_records`` (H-C3) so the clamping logic lives in one place.
         """
-        hours = min(subscription.poll_interval_hours, _MAX_POLL_HOURS)
-        timeframe = TimeframeRecent(
-            type=TimeframeType.RECENT,
-            value=f"{hours}h",
-        )
-        return ResearchTopic(
-            query=subscription.query,
-            timeframe=timeframe,
-        )
+        return build_topic(subscription.query, subscription.poll_interval_hours)
 
     def _topic_slug(self, subscription: ResearchSubscription) -> str:
         """Derive a topic slug for registry affiliation."""
@@ -291,14 +281,5 @@ class ArxivMonitor:
 
     @staticmethod
     def _to_record(paper: PaperMetadata, is_new: bool) -> MonitoringPaperRecord:
-        published: Optional[datetime] = paper.publication_date
-        # PaperMetadata uses HttpUrl; MonitoringPaperRecord stores plain
-        # strings (it's a serialization-friendly DTO). Cast via str().
-        return MonitoringPaperRecord(
-            paper_id=paper.paper_id,
-            title=paper.title,
-            url=str(paper.url) if paper.url else None,
-            pdf_url=str(paper.open_access_pdf) if paper.open_access_pdf else None,
-            published_at=published,
-            is_new=is_new,
-        )
+        """Delegate to the shared :func:`to_paper_record` helper (H-C1)."""
+        return to_paper_record(paper, is_new)

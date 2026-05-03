@@ -129,8 +129,6 @@ def _build_runner(
         arxiv: Optional ``ArxivProvider`` seam for testing.
             When ``None``, a default ``ArxivProvider()`` is built.
     """
-    import os
-
     from src.models.llm import CostLimits, LLMConfig
     from src.services.intelligence.monitoring.models import PaperSource
     from src.services.llm.service import LLMService
@@ -145,7 +143,7 @@ def _build_runner(
     # expansion (graceful degradation -- legacy single-arxiv behavior).
     llm_svc = None
     llm_api_key = os.environ.get("LLM_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    if llm_api_key:
+    if llm_api_key and llm_api_key.strip():
         try:
             llm_config = LLMConfig(api_key=llm_api_key)
             llm_cost_limits = CostLimits()
@@ -153,7 +151,7 @@ def _build_runner(
         except Exception as exc:
             logger.warning(
                 "monitor_cli_llm_init_failed",
-                error=str(exc),
+                error_type=type(exc).__name__,
                 reason="scoring_and_expansion_will_be_skipped",
             )
 
@@ -179,7 +177,7 @@ def _build_runner(
                 PaperSource.HUGGINGFACE: HuggingFaceProvider(),
             }
             s2_key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
-            if s2_key:
+            if s2_key and s2_key.strip():
                 extra_providers[PaperSource.SEMANTIC_SCHOLAR] = SemanticScholarProvider(
                     api_key=s2_key
                 )

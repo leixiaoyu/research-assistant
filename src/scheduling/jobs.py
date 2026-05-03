@@ -782,7 +782,7 @@ class MonitoringCheckJob(BaseJob):
             llm_api_key = os.environ.get("LLM_API_KEY") or os.environ.get(
                 "GEMINI_API_KEY"
             )
-            if llm_api_key:
+            if llm_api_key and llm_api_key.strip():
                 try:
                     llm_config = LLMConfig(api_key=llm_api_key)
                     llm_cost_limits = CostLimits()
@@ -790,7 +790,7 @@ class MonitoringCheckJob(BaseJob):
                 except Exception as exc:
                     logger.warning(
                         "monitoring_check_job_llm_init_failed",
-                        error=str(exc),
+                        error_type=type(exc).__name__,
                         reason="scoring_will_be_skipped",
                     )
             else:
@@ -825,7 +825,7 @@ class MonitoringCheckJob(BaseJob):
                         PaperSource.HUGGINGFACE: HuggingFaceProvider(),
                     }
                     s2_key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
-                    if s2_key:
+                    if s2_key and s2_key.strip():
                         extra_providers[PaperSource.SEMANTIC_SCHOLAR] = (
                             SemanticScholarProvider(api_key=s2_key)
                         )

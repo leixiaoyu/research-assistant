@@ -213,7 +213,7 @@ class MultiProviderMonitor:
                         subscription_id=subscription.subscription_id,
                         source=source.value,
                         query=variant[:120],
-                        error=str(exc),
+                        error=repr(str(exc)[:512]),
                     )
                     continue
                 fetched.extend(results)
@@ -288,7 +288,7 @@ class MultiProviderMonitor:
             logger.warning(
                 "monitor_query_expansion_failed",
                 subscription_id=subscription.subscription_id,
-                error=str(exc),
+                error=repr(str(exc)[:512]),
             )
             return [subscription.query]
 
@@ -351,7 +351,7 @@ class MultiProviderMonitor:
                     "monitor_identity_resolution_error",
                     subscription_id=subscription.subscription_id,
                     paper_id=paper.paper_id,
-                    error=str(exc),
+                    error=repr(str(exc)[:512]),
                 )
                 continue
 
@@ -372,7 +372,7 @@ class MultiProviderMonitor:
                     "monitor_registry_write_error",
                     subscription_id=subscription.subscription_id,
                     paper_id=paper.paper_id,
-                    error=str(exc),
+                    error=repr(str(exc)[:512]),
                 )
                 continue
 

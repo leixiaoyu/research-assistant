@@ -586,3 +586,111 @@ class TestSchedulerHelper:
         )
         assert job_id == "custom_id"
         assert scheduler.scheduler.get_job("custom_id") is not None
+
+
+# ---------------------------------------------------------------------------
+# C-3 regression: LLM init failure must NOT leak API key in job logs
+# ---------------------------------------------------------------------------
+
+
+class TestJobApiKeyLeakageRegression:
+    """C-3: MonitoringCheckJob LLM init exception must NOT log the key."""
+
+    def test_init_llm_failure_does_not_leak_api_key_to_logs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When LLMService raises an exception whose message contains the
+        API key (e.g., Pydantic ValidationError embedding the key),
+        the job logs ``error_type`` only — the raw key must NOT appear.
+        """
+        import structlog
+        import structlog.testing
+
+        from src.scheduling import jobs as jobs_module
+
+        monkeypatch.setattr(jobs_module, "logger", structlog.get_logger())
+        monkeypatch.setenv("LLM_API_KEY", "test-api-key-12345")
+
+        with (
+            patch(
+                "src.services.intelligence.monitoring.MonitoringRunner.from_paths"
+            ) as from_paths,
+            patch("src.services.providers.arxiv.ArxivProvider"),
+            patch("src.services.registry.service.RegistryService"),
+            patch(
+                "src.services.llm.service.LLMService",
+                side_effect=ValueError("validation error: test-api-key-12345"),
+            ),
+        ):
+            from_paths.return_value = MagicMock()
+            with structlog.testing.capture_logs() as logs:
+                MonitoringCheckJob(db_path=Path("./data/x.db"))
+
+        # The api key must not appear in any log field value.
+        for log_entry in logs:
+            for val in log_entry.values():
+                assert "test-api-key-12345" not in str(
+                    val
+                ), f"API key leaked in log field: {val}"
+
+        # Confirm error_type (not error message) was logged.
+        init_failed_events = [
+            e for e in logs if e.get("event") == "monitoring_check_job_llm_init_failed"
+        ]
+        assert len(init_failed_events) == 1
+        assert "error_type" in init_failed_events[0]
+        assert "error" not in init_failed_events[0]
+
+
+# ---------------------------------------------------------------------------
+# H-S4 regression: whitespace-only env vars in job must fall back to legacy
+# ---------------------------------------------------------------------------
+
+
+class TestJobWhitespaceEnvVarRegression:
+    """H-S4: whitespace-only API key env vars must skip LLM/S2 wiring."""
+
+    def test_whitespace_only_llm_key_skips_tier1_wiring(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A whitespace-only LLM_API_KEY must not wire LLM or Tier 1."""
+        monkeypatch.setenv("LLM_API_KEY", "   ")  # whitespace only
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+        with (
+            patch(
+                "src.services.intelligence.monitoring.MonitoringRunner.from_paths"
+            ) as from_paths,
+            patch("src.services.providers.arxiv.ArxivProvider"),
+            patch("src.services.registry.service.RegistryService"),
+        ):
+            from_paths.return_value = MagicMock()
+            MonitoringCheckJob(db_path=Path("./data/x.db"))
+
+        kwargs = from_paths.call_args.kwargs
+        assert kwargs["llm_service"] is None
+        assert kwargs["extra_providers"] is None
+        assert kwargs["query_expander"] is None
+
+    def test_whitespace_only_s2_key_skips_s2_provider(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A whitespace-only SEMANTIC_SCHOLAR_API_KEY must not include S2."""
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "   ")  # whitespace only
+
+        with (
+            patch(
+                "src.services.intelligence.monitoring.MonitoringRunner.from_paths"
+            ) as from_paths,
+            patch("src.services.providers.arxiv.ArxivProvider"),
+            patch("src.services.registry.service.RegistryService"),
+        ):
+            from_paths.return_value = MagicMock()
+            MonitoringCheckJob(db_path=Path("./data/x.db"))
+
+        kwargs = from_paths.call_args.kwargs
+        from src.services.intelligence.monitoring.models import PaperSource
+
+        assert kwargs["extra_providers"] is not None
+        assert PaperSource.SEMANTIC_SCHOLAR not in kwargs["extra_providers"]

@@ -714,3 +714,178 @@ class TestDigestFailedRunGate:
         )
         assert result.exit_code == 0, result.output
         assert "Digest written" in result.output
+
+
+# ---------------------------------------------------------------------------
+# C-3 regression: API key must NOT leak via LLM-init exception log
+# ---------------------------------------------------------------------------
+
+
+class TestApiKeyLeakageRegression:
+    """C-3: Pydantic ValidationError on LLM init must NOT embed API key in logs."""
+
+    def test_init_llm_failure_does_not_leak_api_key_to_logs(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """When LLMService raises (e.g., bad config embedding the key),
+        the ``error_type`` field is logged instead of the exception message
+        so the raw API key never appears in the log stream.
+        """
+        import structlog
+        import structlog.testing
+
+        from src.cli import monitor as monitor_module
+
+        monkeypatch.setattr(monitor_module, "logger", structlog.get_logger())
+        monkeypatch.setenv(_DB_ENV_VAR, str(tmp_path / "m.db"))
+        monkeypatch.setenv("LLM_API_KEY", "test-api-key-12345")
+
+        # The exception message intentionally embeds the key to simulate
+        # Pydantic's ValidationError format.
+        with (
+            patch("src.services.providers.arxiv.ArxivProvider"),
+            patch("src.services.registry.service.RegistryService"),
+            patch(
+                "src.services.llm.service.LLMService",
+                side_effect=ValueError("validation error: test-api-key-12345"),
+            ),
+        ):
+            with structlog.testing.capture_logs() as logs:
+                from src.cli.monitor import _build_runner
+
+                _build_runner()
+
+        # The api key must not appear in any log field value.
+        for log_entry in logs:
+            for val in log_entry.values():
+                assert "test-api-key-12345" not in str(
+                    val
+                ), f"API key leaked in log field: {val}"
+
+        # Confirm error_type (not error) was logged.
+        init_failed_events = [
+            e for e in logs if e.get("event") == "monitor_cli_llm_init_failed"
+        ]
+        assert len(init_failed_events) == 1
+        assert "error_type" in init_failed_events[0]
+        assert "error" not in init_failed_events[0]
+
+
+# ---------------------------------------------------------------------------
+# H-S4 regression: whitespace-only env vars must not enable LLM/S2 providers
+# ---------------------------------------------------------------------------
+
+
+class TestWhitespaceEnvVarRegression:
+    """H-S4: whitespace-only API key env vars must fall back to legacy."""
+
+    def test_whitespace_only_llm_api_key_falls_back_to_legacy(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A whitespace-only LLM_API_KEY must behave identically to absent."""
+        from src.cli.monitor import _build_runner
+        from src.services.intelligence.monitoring.arxiv_monitor import ArxivMonitor
+
+        monkeypatch.setenv(_DB_ENV_VAR, str(tmp_path / "m.db"))
+        monkeypatch.setenv("LLM_API_KEY", "   ")  # whitespace only
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+        with (
+            patch("src.services.providers.arxiv.ArxivProvider"),
+            patch("src.services.registry.service.RegistryService"),
+        ):
+            runner_obj = _build_runner()
+
+        # No LLM service wired → legacy ArxivMonitor fallback
+        assert isinstance(runner_obj._monitor, ArxivMonitor)
+        assert runner_obj._scorer is None
+
+    def test_whitespace_only_s2_key_skips_s2_provider(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A whitespace-only SEMANTIC_SCHOLAR_API_KEY must not wire S2."""
+        from src.cli.monitor import _build_runner
+        from src.services.intelligence.monitoring.models import PaperSource
+        from src.services.intelligence.monitoring.multi_provider_monitor import (
+            MultiProviderMonitor,
+        )
+
+        monkeypatch.setenv(_DB_ENV_VAR, str(tmp_path / "m.db"))
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "   ")  # whitespace only
+
+        with (
+            patch("src.services.providers.arxiv.ArxivProvider"),
+            patch("src.services.registry.service.RegistryService"),
+        ):
+            runner_obj = _build_runner()
+
+        assert isinstance(runner_obj._monitor, MultiProviderMonitor)
+        assert PaperSource.SEMANTIC_SCHOLAR not in runner_obj._monitor._providers
+
+
+# ---------------------------------------------------------------------------
+# C-4 regression: provider error messages must be truncated in logs
+# ---------------------------------------------------------------------------
+
+
+class TestProviderErrorTruncationRegression:
+    """C-4: long error messages from providers must be truncated in logs."""
+
+    @pytest.mark.asyncio
+    async def test_check_provider_failure_truncates_long_error_in_log(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 10KB exception message from a provider must be truncated to
+        ≤520 chars in the structured log (repr adds ~2 extra chars for quotes).
+        """
+        import structlog
+        import structlog.testing
+
+        from src.services.intelligence.monitoring import (
+            multi_provider_monitor as mpm_module,
+        )
+        from src.services.intelligence.monitoring.models import (
+            PaperSource,
+            ResearchSubscription,
+            SubscriptionStatus,
+        )
+        from src.services.intelligence.monitoring.multi_provider_monitor import (
+            MultiProviderMonitor,
+        )
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setattr(mpm_module, "logger", structlog.get_logger())
+
+        long_error = "X" * 10_000  # 10KB error message
+        provider = MagicMock()
+        provider.search = AsyncMock(side_effect=RuntimeError(long_error))
+
+        registry = MagicMock()
+        resolve_result = MagicMock()
+        resolve_result.matched = False
+        registry.resolve_identity = MagicMock(return_value=resolve_result)
+        registry.register_paper = MagicMock()
+
+        sub = ResearchSubscription(
+            subscription_id="sub-trunc",
+            user_id="u1",
+            name="Sub",
+            query="test query",
+            status=SubscriptionStatus.ACTIVE,
+        )
+
+        monitor = MultiProviderMonitor(
+            providers={PaperSource.ARXIV: provider},
+            registry=registry,
+        )
+
+        with structlog.testing.capture_logs() as logs:
+            await monitor.check(sub)
+
+        failed_events = [
+            e for e in logs if e.get("event") == "monitor_provider_search_failed"
+        ]
+        assert len(failed_events) >= 1
+        error_val = failed_events[0]["error"]
+        assert len(error_val) <= 520, f"Error was not truncated: len={len(error_val)}"

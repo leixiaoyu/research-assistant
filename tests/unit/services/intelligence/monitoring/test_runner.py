@@ -1016,3 +1016,59 @@ class TestLLMBudgetCap:
             e for e in logs if e.get("event") == "monitoring_llm_budget_exhausted"
         ]
         assert len(exhausted_events) >= 1
+
+
+# ---------------------------------------------------------------------------
+# H-S1: Runner passes budget counters to MultiProviderMonitor
+# ---------------------------------------------------------------------------
+
+
+class TestMultiProviderMonitorBudgetPassthrough:
+    """H-S1: When the runner's monitor is a MultiProviderMonitor, _run_one
+    passes llm_calls_used and max_calls to monitor.check.
+    """
+
+    @pytest.mark.asyncio
+    async def test_run_once_passes_budget_to_multi_provider_monitor(self) -> None:
+        """The runner passes the cycle-wide llm_calls_used counter and
+        MAX_LLM_CALLS_PER_CYCLE to MultiProviderMonitor.check so the
+        expander is gated against the cycle budget.
+        """
+        from unittest.mock import AsyncMock as _AsyncMock, MagicMock as _MagicMock
+        from src.services.intelligence.monitoring.multi_provider_monitor import (
+            MultiProviderMonitor,
+        )
+
+        sub = _make_subscription(subscription_id="sub-budget-passthrough")
+
+        # Build a MultiProviderMonitor mock that records what was passed.
+        received_kwargs: dict = {}
+
+        async def mock_check(subscription, *, llm_calls_used=None, max_calls=None):
+            received_kwargs["llm_calls_used"] = llm_calls_used
+            received_kwargs["max_calls"] = max_calls
+            run = _make_run(subscription_id=subscription.subscription_id)
+            return ArxivMonitorResult(run=run, new_papers=[], deduplicated_papers=[])
+
+        monitor_mock = _MagicMock(spec=MultiProviderMonitor)
+        monitor_mock.check = _AsyncMock(side_effect=mock_check)
+
+        sub_mgr = _MagicMock()
+        sub_mgr.list_subscriptions = _MagicMock(return_value=[sub])
+        sub_mgr.mark_checked = _MagicMock()
+        repo = _MagicMock()
+        repo.record_run = _MagicMock()
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor_mock,
+            run_repo=repo,
+        )
+        await runner.run_once()
+
+        # The runner must have passed the budget counter and max cap.
+        assert received_kwargs.get("llm_calls_used") is not None
+        assert received_kwargs["llm_calls_used"][0] == 0  # starts at 0
+        from src.services.intelligence.monitoring.runner import MAX_LLM_CALLS_PER_CYCLE
+
+        assert received_kwargs.get("max_calls") == MAX_LLM_CALLS_PER_CYCLE

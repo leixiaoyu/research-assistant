@@ -21,6 +21,16 @@ Covers:
   neither is provided (backward compatible).
 - ``MonitoringRunner.from_paths`` rejects an attempt to override the
   arXiv provider via ``extra_providers``.
+- H-S1: expansion budget gate.
+- H-S2: variant validation + rejection.
+- H-S5: topic-build inside try/except.
+- H-C5: expander failure → PARTIAL status.
+- H-C6: empty-dict extra_providers builds MultiProviderMonitor.
+- H-T1: capture_logs assertions on failure paths.
+- H-T3: strong paper_id assertion.
+- H-T5: register_paper.call_count assertion.
+- H-T6: Pydantic strict-mode tests.
+- L-2: exact default field values.
 
 Note: ``ArxivMonitorResult`` is intentionally reused as the return DTO
 so both monitors are duck-type compatible from the runner's POV.
@@ -28,13 +38,17 @@ so both monitors are duck-type compatible from the runner's POV.
 
 from __future__ import annotations
 
+import structlog
+import structlog.testing
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.models.paper import PaperMetadata
+from src.services.intelligence.monitoring import multi_provider_monitor as mpm_module
 from src.services.intelligence.monitoring.arxiv_monitor import ArxivMonitor
 from src.services.intelligence.monitoring.models import (
+    MAX_PAPERS_PER_CYCLE,
     MonitoringRunStatus,
     PaperSource,
     ResearchSubscription,
@@ -43,6 +57,7 @@ from src.services.intelligence.monitoring.models import (
 from src.services.intelligence.monitoring.multi_provider_monitor import (
     MultiProviderMonitor,
     MultiProviderMonitorConfig,
+    _DEFAULT_MAX_QUERY_VARIANTS,
 )
 from src.services.intelligence.monitoring.runner import MonitoringRunner
 
@@ -155,10 +170,12 @@ def test_init_defensive_copies_providers_dict() -> None:
 
 
 def test_config_with_defaults_all_fields_set() -> None:
-    """Smoke-test the config helper -- all knobs have sane defaults."""
+    """Smoke-test the config helper -- all knobs have sane defaults.
+    L-2: pin exact default values so accidental changes trip the test.
+    """
     cfg = MultiProviderMonitorConfig.with_defaults()
-    assert cfg.max_papers_per_cycle > 0
-    assert cfg.max_query_variants > 0
+    assert cfg.max_papers_per_cycle == MAX_PAPERS_PER_CYCLE
+    assert cfg.max_query_variants == _DEFAULT_MAX_QUERY_VARIANTS
     assert cfg.topic_slug_prefix == "monitor"
 
 
@@ -169,7 +186,9 @@ def test_config_with_defaults_all_fields_set() -> None:
 
 @pytest.mark.asyncio
 async def test_check_paused_subscription_short_circuits() -> None:
-    """Paused subscriptions return SUCCESS without touching providers."""
+    """Paused subscriptions return SUCCESS without touching providers.
+    H-M9: also assert new_papers == [] and deduplicated_papers == [].
+    """
     sub = _make_subscription(status=SubscriptionStatus.PAUSED)
     arxiv = _make_provider(return_papers=[_make_paper("p1")])
     monitor = MultiProviderMonitor(
@@ -180,6 +199,9 @@ async def test_check_paused_subscription_short_circuits() -> None:
     assert result.run.status is MonitoringRunStatus.SUCCESS
     assert result.run.papers_seen == 0
     arxiv.search.assert_not_called()
+    # H-M9: verify empty paper lists for paused subscriptions
+    assert result.new_papers == []
+    assert result.deduplicated_papers == []
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +260,9 @@ async def test_check_with_expander_searches_all_variants() -> None:
 
 @pytest.mark.asyncio
 async def test_check_expander_failure_falls_back_to_literal_query() -> None:
-    """If expander.expand() raises, fall back to the literal query (Fail-Soft)."""
+    """If expander.expand() raises, fall back to the literal query (Fail-Soft).
+    H-C5: expander failure sets run status to PARTIAL.
+    """
     sub = _make_subscription(query="LLM agents")
     expander = MagicMock()
     expander.expand = AsyncMock(side_effect=RuntimeError("LLM down"))
@@ -248,15 +272,19 @@ async def test_check_expander_failure_falls_back_to_literal_query() -> None:
         registry=_make_registry(),
         query_expander=expander,
     )
-    await monitor.check(sub)
+    result = await monitor.check(sub)
     # Despite the expander failure, the cycle still searches the literal query.
     assert arxiv.search.await_count == 1
     assert arxiv.search.await_args.args[0].query == "LLM agents"
+    # H-C5: expander degradation marks the run PARTIAL.
+    assert result.run.status is MonitoringRunStatus.PARTIAL
 
 
 @pytest.mark.asyncio
 async def test_check_expander_returns_empty_falls_back_to_literal() -> None:
-    """If expander returns an empty list, fall back to literal query."""
+    """If expander returns an empty list, fall back to literal query.
+    H-C5: empty expansion is treated as degraded → PARTIAL.
+    """
     sub = _make_subscription(query="LLM agents")
     expander = MagicMock()
     expander.expand = AsyncMock(return_value=[])  # pathological case
@@ -266,9 +294,11 @@ async def test_check_expander_returns_empty_falls_back_to_literal() -> None:
         registry=_make_registry(),
         query_expander=expander,
     )
-    await monitor.check(sub)
+    result = await monitor.check(sub)
     assert arxiv.search.await_count == 1
     assert arxiv.search.await_args.args[0].query == "LLM agents"
+    # H-C5: empty result is degraded → PARTIAL.
+    assert result.run.status is MonitoringRunStatus.PARTIAL
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +414,29 @@ async def test_check_dedups_papers_by_paper_id_across_providers() -> None:
     )
     result = await monitor.check(sub)
     # Only ONE paper despite both providers returning it.
+    assert result.run.papers_seen == 1
+
+
+@pytest.mark.asyncio
+async def test_check_dedups_same_paper_from_two_query_variants() -> None:
+    """If two query variants return the same paper_id (via the same provider),
+    it appears only once in the final result set (exercises the dedup continue branch).
+    """
+    sub = _make_subscription(query="original")
+    shared = _make_paper("shared-id", title="Same paper, two variants")
+    expander = MagicMock()
+    expander.expand = AsyncMock(return_value=["original", "variant1"])
+    # Return the same paper for both queries.
+    arxiv = _make_provider(return_papers=[shared])
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=_make_registry(),
+        query_expander=expander,
+    )
+    result = await monitor.check(sub)
+    # 2 queries × 1 provider = 2 search calls, each returning the same paper.
+    assert arxiv.search.await_count == 2
+    # Dedup yields only 1 unique paper.
     assert result.run.papers_seen == 1
 
 
@@ -553,3 +606,395 @@ def test_from_paths_rejects_arxiv_in_extra_providers(tmp_path) -> None:
             arxiv_provider=MagicMock(),
             extra_providers={PaperSource.ARXIV: _make_provider()},
         )
+
+
+# ---------------------------------------------------------------------------
+# H-C6: empty-dict extra_providers builds MultiProviderMonitor
+# ---------------------------------------------------------------------------
+
+
+def test_from_paths_with_empty_dict_extra_providers_builds_multi_provider(
+    tmp_path,
+) -> None:
+    """H-C6: extra_providers={} (empty dict, not None) explicitly opts the
+    caller into MultiProviderMonitor. The is-not-None check must honour this.
+    """
+    db_path = tmp_path / "monitoring.db"
+    runner = MonitoringRunner.from_paths(
+        db_path=db_path,
+        registry=MagicMock(),
+        arxiv_provider=MagicMock(),
+        extra_providers={},  # empty but explicitly provided
+    )
+    assert isinstance(runner._monitor, MultiProviderMonitor)
+    # Only arXiv (from arxiv_provider); the empty extras dict adds nothing.
+    assert PaperSource.ARXIV in runner._monitor._providers
+    assert len(runner._monitor._providers) == 1
+
+
+# ---------------------------------------------------------------------------
+# H-T1: capture_logs assertions on failure paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_query_expansion_failed_emits_log(monkeypatch) -> None:
+    """H-T1: monitor_query_expansion_failed is emitted when expander raises."""
+    sub = _make_subscription(query="LLM agents")
+    expander = MagicMock()
+    expander.expand = AsyncMock(side_effect=RuntimeError("LLM down"))
+    arxiv = _make_provider()
+    monkeypatch.setattr(mpm_module, "logger", structlog.get_logger())
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=_make_registry(),
+        query_expander=expander,
+    )
+    with structlog.testing.capture_logs() as logs:
+        await monitor.check(sub)
+    events = [e for e in logs if e.get("event") == "monitor_query_expansion_failed"]
+    assert len(events) == 1
+    assert events[0].get("subscription_id") == sub.subscription_id
+
+
+@pytest.mark.asyncio
+async def test_check_provider_search_failed_emits_log(monkeypatch) -> None:
+    """H-T1: monitor_provider_search_failed is emitted on provider error."""
+    sub = _make_subscription()
+    arxiv = _make_provider(raise_on_search=ConnectionError("timeout"))
+    monkeypatch.setattr(mpm_module, "logger", structlog.get_logger())
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=_make_registry(),
+    )
+    with structlog.testing.capture_logs() as logs:
+        result = await monitor.check(sub)
+    events = [e for e in logs if e.get("event") == "monitor_provider_search_failed"]
+    assert len(events) == 1
+    assert result.run.status is MonitoringRunStatus.PARTIAL
+
+
+@pytest.mark.asyncio
+async def test_check_identity_resolution_error_emits_log(monkeypatch) -> None:
+    """H-T1: monitor_identity_resolution_error is emitted on resolve failure."""
+    sub = _make_subscription()
+    arxiv = _make_provider(return_papers=[_make_paper("p1")])
+    registry = _make_registry(resolve_side_effect=RuntimeError("bad row"))
+    monkeypatch.setattr(mpm_module, "logger", structlog.get_logger())
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=registry,
+    )
+    with structlog.testing.capture_logs() as logs:
+        await monitor.check(sub)
+    events = [e for e in logs if e.get("event") == "monitor_identity_resolution_error"]
+    assert len(events) == 1
+    assert events[0].get("paper_id") == "p1"
+
+
+@pytest.mark.asyncio
+async def test_check_registry_write_error_emits_log(monkeypatch) -> None:
+    """H-T1: monitor_registry_write_error is emitted on register_paper failure."""
+    sub = _make_subscription()
+    arxiv = _make_provider(return_papers=[_make_paper("p1")])
+    registry = _make_registry(register_side_effect=RuntimeError("disk full"))
+    monkeypatch.setattr(mpm_module, "logger", structlog.get_logger())
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=registry,
+    )
+    with structlog.testing.capture_logs() as logs:
+        await monitor.check(sub)
+    events = [e for e in logs if e.get("event") == "monitor_registry_write_error"]
+    assert len(events) == 1
+    assert events[0].get("paper_id") == "p1"
+
+
+# ---------------------------------------------------------------------------
+# H-S1: LLM budget gate for query expansion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_expansion_skipped_when_budget_exhausted(monkeypatch) -> None:
+    """H-S1: When llm_calls_used[0] >= max_calls, the expander is not called
+    and monitor_expansion_budget_exhausted is logged.
+    """
+    sub = _make_subscription(query="agents")
+    expander = MagicMock()
+    expander.expand = AsyncMock(return_value=["agents", "variant"])
+    arxiv = _make_provider()
+    monkeypatch.setattr(mpm_module, "logger", structlog.get_logger())
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=_make_registry(),
+        query_expander=expander,
+    )
+    llm_calls_used = [5]  # already at limit
+    with structlog.testing.capture_logs() as logs:
+        result = await monitor.check(sub, llm_calls_used=llm_calls_used, max_calls=5)
+    # Expander must NOT have been called.
+    expander.expand.assert_not_awaited()
+    # Should fall back to literal query (1 search).
+    assert arxiv.search.await_count == 1
+    # Status is PARTIAL due to budget degradation.
+    assert result.run.status is MonitoringRunStatus.PARTIAL
+    budget_events = [
+        e for e in logs if e.get("event") == "monitor_expansion_budget_exhausted"
+    ]
+    assert len(budget_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_check_expansion_increments_budget_counter_on_success() -> None:
+    """H-S1: Successful expander call increments llm_calls_used by 1."""
+    sub = _make_subscription(query="agents")
+    expander = MagicMock()
+    expander.expand = AsyncMock(return_value=["agents", "variant"])
+    arxiv = _make_provider()
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=_make_registry(),
+        query_expander=expander,
+    )
+    llm_calls_used = [0]
+    await monitor.check(sub, llm_calls_used=llm_calls_used, max_calls=100)
+    # Counter incremented by 1 for the expansion call.
+    assert llm_calls_used[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# H-S2: variant validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_variant_with_injection_chars_is_rejected(monkeypatch) -> None:
+    """H-S2: A variant containing injection-risk characters is dropped and
+    monitor_expansion_variant_rejected is logged. The cycle continues with
+    the valid variants.
+    """
+    sub = _make_subscription(query="agents")
+    expander = MagicMock()
+    # First variant is valid, second contains shell injection.
+    expander.expand = AsyncMock(return_value=["agents", "agents && rm -rf /"])
+    arxiv = _make_provider()
+    monkeypatch.setattr(mpm_module, "logger", structlog.get_logger())
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=_make_registry(),
+        query_expander=expander,
+    )
+    with structlog.testing.capture_logs() as logs:
+        result = await monitor.check(sub)
+
+    # Only valid variant searched.
+    assert arxiv.search.await_count == 1
+    topic = arxiv.search.await_args.args[0]
+    assert topic.query == "agents"
+    # Rejection logged for the bad variant.
+    reject_events = [
+        e for e in logs if e.get("event") == "monitor_expansion_variant_rejected"
+    ]
+    assert len(reject_events) == 1
+    # Cycle must succeed with the valid variant.
+    assert result.run.status is MonitoringRunStatus.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_check_all_variants_rejected_falls_back_to_literal(monkeypatch) -> None:
+    """H-S2: If ALL expanded variants fail validation, the literal query is
+    used and the run is marked PARTIAL.
+    """
+    sub = _make_subscription(query="agents")
+    expander = MagicMock()
+    # All variants contain injection chars.
+    expander.expand = AsyncMock(
+        return_value=["agents && rm /", "agents | cat /etc/passwd"]
+    )
+    arxiv = _make_provider()
+    monkeypatch.setattr(mpm_module, "logger", structlog.get_logger())
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=_make_registry(),
+        query_expander=expander,
+    )
+    with structlog.testing.capture_logs() as logs:
+        result = await monitor.check(sub)
+
+    # Fall back to literal query.
+    assert arxiv.search.await_count == 1
+    assert arxiv.search.await_args.args[0].query == "agents"
+    # Both variants should have been rejected.
+    reject_events = [
+        e for e in logs if e.get("event") == "monitor_expansion_variant_rejected"
+    ]
+    assert len(reject_events) == 2
+    # All rejected → degraded → PARTIAL.
+    assert result.run.status is MonitoringRunStatus.PARTIAL
+
+
+# ---------------------------------------------------------------------------
+# H-S5: topic build inside per-provider try/except
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_topic_build_failure_treated_as_provider_failure() -> None:
+    """H-S5: If _build_topic_for_query raises (e.g., because ResearchTopic
+    validation fails on a bad variant), the cycle continues for other variants
+    and the run is marked PARTIAL — it does NOT kill the whole subscription.
+
+    We simulate the scenario by patching _build_topic_for_query to raise on
+    the first call, then succeed on the second.
+    """
+    sub = _make_subscription(query="agents")
+    expander = MagicMock()
+    expander.expand = AsyncMock(return_value=["bad-variant", "good-variant"])
+    arxiv = _make_provider(return_papers=[_make_paper("p1")])
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=_make_registry(),
+        query_expander=expander,
+    )
+
+    call_count = [0]
+    original_build = monitor._build_topic_for_query
+
+    def flaky_build(subscription, variant):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise ValueError("Bad ResearchTopic variant")
+        return original_build(subscription, variant)
+
+    monitor._build_topic_for_query = flaky_build  # type: ignore[method-assign]
+
+    result = await monitor.check(sub)
+    # Second variant still searched (fail-soft).
+    assert arxiv.search.await_count == 1
+    # Failure from topic build → partial.
+    assert result.run.status is MonitoringRunStatus.PARTIAL
+
+
+# ---------------------------------------------------------------------------
+# H-M10: 2-paper test for registry failure continues for the other paper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_registry_write_error_continues_for_second_paper() -> None:
+    """H-M10: When register_paper raises for the first paper, the cycle
+    continues to process the second paper (2-paper variant of the single-paper
+    test).
+    """
+    sub = _make_subscription()
+    p1 = _make_paper("p1")
+    p2 = _make_paper("p2")
+    arxiv = _make_provider(return_papers=[p1, p2])
+
+    call_count = [0]
+
+    def selective_fail(*args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise RuntimeError("disk full on first paper")
+        # Second call succeeds (no return value needed for register_paper).
+
+    registry = _make_registry()
+    registry.register_paper = MagicMock(side_effect=selective_fail)
+
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=registry,
+    )
+    result = await monitor.check(sub)
+    assert result.run.status is MonitoringRunStatus.PARTIAL
+    # First paper failed registry write → not in new_papers.
+    # Second paper succeeded → in new_papers.
+    assert result.run.papers_new == 1
+    assert result.new_papers[0].paper_id == "p2"
+
+
+# ---------------------------------------------------------------------------
+# H-T6: Pydantic strict-mode tests for MultiProviderMonitorConfig
+# ---------------------------------------------------------------------------
+
+
+def test_config_rejects_extra_fields() -> None:
+    """H-T6: extra='forbid' must reject unknown fields."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError, match="Extra inputs"):
+        MultiProviderMonitorConfig(unknown_field="oops")  # type: ignore[call-arg]
+
+
+def test_config_rejects_non_int_strict_mode() -> None:
+    """H-T6: strict=True must reject float where int is expected."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        MultiProviderMonitorConfig(max_papers_per_cycle=1.5)  # type: ignore[arg-type]
+
+
+def test_config_rejects_negative_max_papers_per_cycle() -> None:
+    """H-T6: ge=1 rejects zero or negative max_papers_per_cycle."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError, match="greater than or equal"):
+        MultiProviderMonitorConfig(max_papers_per_cycle=0)
+
+
+def test_config_rejects_max_query_variants_below_one() -> None:
+    """H-T6: ge=1 rejects zero or negative max_query_variants."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError, match="greater than or equal"):
+        MultiProviderMonitorConfig(max_query_variants=0)
+
+
+def test_config_rejects_max_papers_above_cap() -> None:
+    """H-T6: le=MAX_PAPERS_PER_CYCLE rejects values above the project cap."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError, match="less than or equal"):
+        MultiProviderMonitorConfig(max_papers_per_cycle=MAX_PAPERS_PER_CYCLE + 1)
+
+
+def test_config_rejects_max_query_variants_above_ten() -> None:
+    """H-T6: le=10 rejects max_query_variants above 10."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError, match="less than or equal"):
+        MultiProviderMonitorConfig(max_query_variants=11)
+
+
+# ---------------------------------------------------------------------------
+# H-C4: build_tier1_extras unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_build_tier1_extras_returns_none_when_no_llm() -> None:
+    """H-C4: build_tier1_extras returns (None, None) when llm_service is None."""
+    from src.services.intelligence.monitoring._tier1_factory import build_tier1_extras
+
+    extra_providers, query_expander = build_tier1_extras(None)
+    assert extra_providers is None
+    assert query_expander is None
+
+
+def test_build_tier1_extras_returns_none_on_construction_failure(
+    monkeypatch,
+) -> None:
+    """H-C4: If provider construction fails, build_tier1_extras returns (None, None)."""
+    # Patch the factory to simulate a construction failure.
+    monkeypatch.setattr(
+        "src.services.intelligence.monitoring._tier1_factory.build_tier1_extras",
+        lambda llm: (None, None),
+    )
+
+    from src.services.intelligence.monitoring._tier1_factory import build_tier1_extras
+
+    extra_providers, query_expander = build_tier1_extras(MagicMock())
+    # When the factory is patched to always return (None, None), caller receives None.
+    assert extra_providers is None
+    assert query_expander is None

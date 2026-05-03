@@ -36,6 +36,7 @@ from src.services.intelligence.monitoring.models import (
 from src.services.intelligence.monitoring.run_repository import (
     MonitoringRunRepository,
 )
+from src.storage.intelligence_graph import connection as conn_mod
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -244,7 +245,7 @@ class TestPathSafety:
     def test_rejects_path_outside_approved_roots(self) -> None:
         from src.utils.security import SecurityError
 
-        with pytest.raises(SecurityError):
+        with pytest.raises(SecurityError, match="outside approved storage roots"):
             MonitoringRunRepository("/etc/forbidden.db")
 
 
@@ -426,7 +427,11 @@ class TestRecordRunErrors:
         # Append a duplicate directly on the model attribute to bypass
         # the field validator.
         run.papers.append(_make_record(paper_id="2301.0001"))
-        with pytest.raises(sqlite3.IntegrityError):
+        # The test does not seed the subscriptions table, so the
+        # monitoring_runs INSERT hits the FOREIGN KEY constraint before
+        # the duplicate-paper UNIQUE constraint. Both are IntegrityError;
+        # the FK message is what we actually observe.
+        with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY constraint"):
             repo.record_run(run)
         # Run must NOT be persisted.
         assert repo.get_run(run.run_id) is None
@@ -520,7 +525,7 @@ class TestOperationalErrorRetry:
         """Two transient lock failures, then success on attempt 3."""
         from src.services.intelligence.monitoring import run_repository as rr_mod
 
-        max_failures = MonitoringRunRepository._RECORD_RUN_MAX_ATTEMPTS - 1
+        max_failures = conn_mod.DEFAULT_MAX_ATTEMPTS - 1
         fake_open, attempts = _make_begin_immediate_failure_open(
             error_message="database is locked",
             max_failures=max_failures,
@@ -545,8 +550,7 @@ class TestOperationalErrorRetry:
         # One sleep per failed attempt -- linear backoff (50ms, 100ms).
         assert len(sleep_calls) == max_failures
         assert sleep_calls == [
-            MonitoringRunRepository._RECORD_RUN_RETRY_BACKOFF_SECONDS * (i + 1)
-            for i in range(max_failures)
+            conn_mod.DEFAULT_BACKOFF_SECONDS * (i + 1) for i in range(max_failures)
         ]
         # Run actually persisted -- the proxy passes through to the
         # real connection on the success attempt.
@@ -565,6 +569,12 @@ class TestOperationalErrorRetry:
 
         from src.services.intelligence.monitoring import run_repository as rr_mod
 
+        sleep_calls: list[float] = []
+        monkeypatch.setattr(
+            "src.storage.intelligence_graph.connection.time.sleep",
+            lambda s: sleep_calls.append(s),
+        )
+
         fake_open, attempts = _make_begin_immediate_failure_open(
             error_message="disk I/O error"
         )
@@ -572,8 +582,9 @@ class TestOperationalErrorRetry:
         run = _make_run(run_id="run-no-retry")
         with pytest.raises(_sqlite3.OperationalError, match="disk I/O error"):
             repo.record_run(run)
-        # No retry on a non-lock error.
+        # No retry on a non-lock error -- no sleep should have fired.
         assert attempts["n"] == 1
+        assert sleep_calls == []
 
     def test_record_run_gives_up_after_max_attempts(
         self,
@@ -596,17 +607,15 @@ class TestOperationalErrorRetry:
         import structlog.testing
 
         from src.services.intelligence.monitoring import run_repository as rr_mod
-        from src.storage.intelligence_graph import connection as conn_mod
 
         fake_open, attempts = _make_begin_immediate_failure_open(
             error_message="database is locked"
         )
         monkeypatch.setattr(rr_mod, "open_connection", fake_open)
-        # Speed the test up so we don't sleep through the real backoff.
+        # Speed the test up by patching sleep in the connection module.
         monkeypatch.setattr(
-            MonitoringRunRepository,
-            "_RECORD_RUN_RETRY_BACKOFF_SECONDS",
-            0.001,
+            "src.storage.intelligence_graph.connection.time.sleep",
+            lambda _s: None,
         )
         # ``src/utils/logging.py`` configures structlog with
         # ``cache_logger_on_first_use=True``; under that mode the
@@ -626,7 +635,7 @@ class TestOperationalErrorRetry:
         with structlog.testing.capture_logs() as logs:
             with pytest.raises(_sqlite3.OperationalError, match="database is locked"):
                 repo.record_run(run)
-        assert attempts["n"] == MonitoringRunRepository._RECORD_RUN_MAX_ATTEMPTS
+        assert attempts["n"] == conn_mod.DEFAULT_MAX_ATTEMPTS
 
         retry_logs = [
             entry for entry in logs if entry["event"] == "sqlite_lock_contention_retry"
@@ -636,15 +645,12 @@ class TestOperationalErrorRetry:
         # This pins the "log on retry, error on give-up" semantics so a
         # future refactor that double-logs (or skips the warn) fails
         # loudly.
-        assert len(retry_logs) == MonitoringRunRepository._RECORD_RUN_MAX_ATTEMPTS - 1
+        assert len(retry_logs) == conn_mod.DEFAULT_MAX_ATTEMPTS - 1
         for idx, entry in enumerate(retry_logs):
             assert entry["log_level"] == "warning"
             assert entry["operation_name"] == "monitoring_record_run"
             assert entry["attempt"] == idx + 1
-            assert (
-                entry["max_attempts"]
-                == MonitoringRunRepository._RECORD_RUN_MAX_ATTEMPTS
-            )
+            assert entry["max_attempts"] == conn_mod.DEFAULT_MAX_ATTEMPTS
             assert "locked" in entry["error"].lower()
         # The exhausted-attempts error is emitted exactly once by the
         # helper before re-raising.
@@ -656,10 +662,7 @@ class TestOperationalErrorRetry:
         assert len(exhausted_logs) == 1
         assert exhausted_logs[0]["log_level"] == "error"
         assert exhausted_logs[0]["operation_name"] == "monitoring_record_run"
-        assert (
-            exhausted_logs[0]["attempts"]
-            == MonitoringRunRepository._RECORD_RUN_MAX_ATTEMPTS
-        )
+        assert exhausted_logs[0]["total_attempts"] == conn_mod.DEFAULT_MAX_ATTEMPTS
 
     def test_record_run_retries_on_busy_error_code(
         self, repo: MonitoringRunRepository, monkeypatch: pytest.MonkeyPatch
@@ -672,7 +675,6 @@ class TestOperationalErrorRetry:
         "locked".
         """
         from src.services.intelligence.monitoring import run_repository as rr_mod
-        from src.storage.intelligence_graph import connection as conn_mod
 
         max_failures = 1  # one BUSY then succeed
         fake_open, attempts = _make_begin_immediate_failure_open(
@@ -702,7 +704,6 @@ class TestOperationalErrorRetry:
         accidentally drops one of the two codes fails loudly.
         """
         from src.services.intelligence.monitoring import run_repository as rr_mod
-        from src.storage.intelligence_graph import connection as conn_mod
 
         fake_open, attempts = _make_begin_immediate_failure_open(
             error_message="some locked-table message",
@@ -718,6 +719,8 @@ class TestOperationalErrorRetry:
         run = _make_run(run_id="run-locked-code")
         repo.record_run(run)
         assert attempts["failures"] == 1
+        # Persistence assertion: the run was successfully written after retry.
+        assert repo.get_run(run.run_id) is not None
 
     def test_record_run_propagates_unrelated_operational_error_with_no_errorcode(
         self, repo: MonitoringRunRepository, monkeypatch: pytest.MonkeyPatch

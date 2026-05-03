@@ -82,7 +82,7 @@ class TestLifecycle:
             captured = conn
         # After exit, operations on the connection raise ProgrammingError
         # because the connection is closed.
-        with pytest.raises(sqlite3.ProgrammingError):
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
             captured.execute("SELECT 1")
 
     def test_connection_closed_on_exception(self, db_path: Path) -> None:
@@ -94,7 +94,7 @@ class TestLifecycle:
                 raise RuntimeError("boom")
 
         assert captured is not None
-        with pytest.raises(sqlite3.ProgrammingError):
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
             captured.execute("SELECT 1")
 
 
@@ -103,9 +103,12 @@ class TestErrorPaths:
         # A path whose parent directory does not exist cannot be opened.
         # ``sqlite3.connect`` surfaces this as ``OperationalError``.
         bad_path = tmp_path / "does" / "not" / "exist" / "x.db"
-        with pytest.raises(sqlite3.OperationalError):
+        with pytest.raises(sqlite3.OperationalError, match="unable to open"):
             with open_connection(bad_path):
-                pass  # pragma: no cover (helper raises before yielding)
+                pass  # pragma: no cover -- helper raises before yielding; the
+                # ``pass`` body is unreachable by construction. Justified: the
+                # context manager raises in __enter__ so __exit__ / yield is
+                # never reached. This is the only legitimate pragma in this file.
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +147,7 @@ class TestRetryOnLockContention:
       ``sqlite_lock_contention_exhausted`` (error) on give-up.
     """
 
-    def test_returns_immediately_on_success(
+    def test_retry_on_lock_contention_returns_immediately_on_success(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Happy path: operation succeeds on the first attempt and the
@@ -166,7 +169,7 @@ class TestRetryOnLockContention:
         assert calls["n"] == 1
         assert sleeps == []  # No retry path taken.
 
-    def test_retries_then_succeeds_on_busy_code(
+    def test_retry_on_lock_contention_retries_then_succeeds_on_busy_code(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """SQLITE_BUSY (errorcode 5) must trigger a retry even when the
@@ -191,7 +194,7 @@ class TestRetryOnLockContention:
         assert result == 42
         assert attempts["n"] == 2  # one retry, then success
 
-    def test_retries_then_succeeds_on_locked_code(
+    def test_retry_on_lock_contention_retries_then_succeeds_on_locked_code(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """SQLITE_LOCKED (errorcode 6) -- separate from BUSY so a future
@@ -215,12 +218,12 @@ class TestRetryOnLockContention:
         assert retry_on_lock_contention(op, operation_name="locked_test") == "done"
         assert attempts["n"] == 2
 
-    def test_falls_back_to_substring_match(
+    def test_retry_on_lock_contention_falls_back_to_substring_match(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Older SQLite bindings do not populate ``sqlite_errorcode``.
         The helper must still recognize lock contention via the message
-        substring ("locked" / "busy"), case-insensitively.
+        phrase substring ("database is locked" / "database is busy").
         """
         monkeypatch.setattr(
             "src.storage.intelligence_graph.connection.time.sleep",
@@ -239,7 +242,7 @@ class TestRetryOnLockContention:
         assert retry_on_lock_contention(op, operation_name="substr_test") == 7
         assert attempts["n"] == 2
 
-    def test_does_not_retry_on_other_errors(
+    def test_retry_on_lock_contention_does_not_retry_on_other_errors(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Any non-contention OperationalError (e.g. syntax error,
@@ -264,12 +267,12 @@ class TestRetryOnLockContention:
         assert attempts["n"] == 1
         assert sleeps == []
 
-    def test_does_not_retry_on_other_error_with_no_errorcode(
+    def test_retry_on_lock_contention_does_not_retry_on_other_error_with_no_errorcode(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Substring fallback path: an OperationalError with no
-        ``sqlite_errorcode`` whose message lacks "locked"/"busy" must
-        still propagate immediately (PR #123 #S1 protected this).
+        ``sqlite_errorcode`` whose message lacks "database is locked" /
+        "database is busy" must still propagate immediately (PR #123 #S1).
         """
         sleeps: list[float] = []
         monkeypatch.setattr(
@@ -287,13 +290,18 @@ class TestRetryOnLockContention:
         assert attempts["n"] == 1
         assert sleeps == []
 
-    def test_exhausts_attempts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_retry_on_lock_contention_exhausts_attempts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Persistent contention past ``max_attempts`` must surface the
         final ``OperationalError`` so the caller can log + skip.
+        Also verifies that exactly max_attempts-1 sleeps fire (one between
+        each failed attempt -- 3 attempts = 2 sleeps).
         """
+        sleep_calls: list[float] = []
         monkeypatch.setattr(
             "src.storage.intelligence_graph.connection.time.sleep",
-            lambda _s: None,
+            lambda s: sleep_calls.append(s),
         )
         attempts = {"n": 0}
 
@@ -308,8 +316,12 @@ class TestRetryOnLockContention:
                 operation_name="exhaust_test",
             )
         assert attempts["n"] == 3
+        # 3 attempts = 2 inter-attempt sleeps (no sleep after the final raise).
+        assert len(sleep_calls) == 2
 
-    def test_emits_warning_log_per_retry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_retry_on_lock_contention_emits_warning_log_per_retry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Each retry emits exactly one ``sqlite_lock_contention_retry``
         warning carrying ``operation_name``, ``attempt``,
         ``max_attempts``, ``backoff_seconds``, and ``error``. The final
@@ -370,7 +382,7 @@ class TestRetryOnLockContention:
             entry["event"] == "sqlite_lock_contention_exhausted" for entry in logs
         )
 
-    def test_emits_error_log_when_exhausted(
+    def test_retry_on_lock_contention_emits_error_log_when_exhausted(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When the retry budget is exhausted, the helper emits exactly
@@ -388,7 +400,7 @@ class TestRetryOnLockContention:
             raise _make_op_error("database is locked")
 
         with structlog.testing.capture_logs() as logs:
-            with pytest.raises(sqlite3.OperationalError):
+            with pytest.raises(sqlite3.OperationalError, match="database is locked"):
                 retry_on_lock_contention(
                     op,
                     max_attempts=2,
@@ -404,5 +416,155 @@ class TestRetryOnLockContention:
         entry = exhausted[0]
         assert entry["log_level"] == "error"
         assert entry["operation_name"] == "exhaust_log_test"
-        assert entry["attempts"] == 2
+        assert entry["total_attempts"] == 2
         assert "locked" in entry["error"].lower()
+
+    def test_retry_on_lock_contention_includes_extra_log_fields(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Extra keyword fields passed to the helper must appear in both
+        retry warning events and the exhausted error event.
+        """
+        monkeypatch.setattr(
+            "src.storage.intelligence_graph.connection.time.sleep",
+            lambda _s: None,
+        )
+        monkeypatch.setattr(conn_mod, "logger", structlog.get_logger())
+
+        def op() -> None:
+            raise _make_op_error("database is locked")
+
+        with structlog.testing.capture_logs() as logs:
+            with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+                retry_on_lock_contention(
+                    op,
+                    max_attempts=2,
+                    operation_name="extra_fields_test",
+                    run_id="run-xyzzy",
+                    subscription_id="sub-abc",
+                )
+
+        for entry in logs:
+            if entry["event"] in (
+                "sqlite_lock_contention_retry",
+                "sqlite_lock_contention_exhausted",
+            ):
+                assert entry["run_id"] == "run-xyzzy"
+                assert entry["subscription_id"] == "sub-abc"
+
+    def test_retry_on_lock_contention_rejects_invalid_operation_name(self) -> None:
+        """operation_name must match _OP_NAME_PATTERN; invalid names raise
+        ValueError.
+        """
+        bad_names = ["bad\nname", "", "123abc", "x" * 65, "Bad_Name", "has space"]
+        for name in bad_names:
+            with pytest.raises(ValueError, match="operation_name"):
+                retry_on_lock_contention(
+                    lambda: None,
+                    operation_name=name,
+                )
+
+    def test_retry_on_lock_contention_rejects_max_attempts_below_one(self) -> None:
+        """max_attempts < 1 must raise ValueError."""
+        with pytest.raises(ValueError, match="max_attempts"):
+            retry_on_lock_contention(
+                lambda: None,
+                operation_name="valid_op",
+                max_attempts=0,
+            )
+
+    def test_retry_on_lock_contention_rejects_max_attempts_above_ten(self) -> None:
+        """max_attempts > 10 must raise ValueError."""
+        with pytest.raises(ValueError, match="max_attempts"):
+            retry_on_lock_contention(
+                lambda: None,
+                operation_name="valid_op",
+                max_attempts=11,
+            )
+
+    def test_retry_on_lock_contention_rejects_negative_backoff(self) -> None:
+        """backoff_seconds < 0 must raise ValueError."""
+        with pytest.raises(ValueError, match="backoff_seconds"):
+            retry_on_lock_contention(
+                lambda: None,
+                operation_name="valid_op",
+                backoff_seconds=-0.001,
+            )
+
+    def test_retry_on_lock_contention_truncates_long_error_in_log(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An exception whose str() exceeds 200 chars must be truncated in
+        the log ``error`` field (S-M1 regression guard).
+        """
+        monkeypatch.setattr(
+            "src.storage.intelligence_graph.connection.time.sleep",
+            lambda _s: None,
+        )
+        monkeypatch.setattr(conn_mod, "logger", structlog.get_logger())
+
+        long_msg = "database is locked " + "x" * 10_000
+
+        def op() -> None:
+            raise _make_op_error(long_msg)
+
+        with structlog.testing.capture_logs() as logs:
+            with pytest.raises(sqlite3.OperationalError):
+                retry_on_lock_contention(
+                    op,
+                    max_attempts=1,
+                    operation_name="trunc_test",
+                )
+
+        # The exhausted event must exist and the error field must be <= ~220 chars.
+        exhausted = [
+            e for e in logs if e["event"] == "sqlite_lock_contention_exhausted"
+        ]
+        assert len(exhausted) == 1
+        logged_error = exhausted[0]["error"]
+        assert len(logged_error) <= 220, f"error field too long: {len(logged_error)}"
+        assert "[...truncated]" in logged_error
+
+    def test_retry_on_lock_contention_handles_extended_busy_code(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Extended errorcode SQLITE_BUSY_RECOVERY (261 = 0x105) must be
+        treated as BUSY (primary code 5 via & 0xFF mask, S-L3).
+        """
+        monkeypatch.setattr(
+            "src.storage.intelligence_graph.connection.time.sleep",
+            lambda _s: None,
+        )
+        attempts = {"n": 0}
+
+        def op() -> str:
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise _make_op_error("database is busy", errorcode=261)
+            return "ok"
+
+        result = retry_on_lock_contention(op, operation_name="extended_code_test")
+        assert result == "ok"
+        assert attempts["n"] == 2
+
+    def test_retry_on_lock_contention_falls_back_to_substring_match_uppercase(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Substring fallback must be case-insensitive: 'DATABASE IS LOCKED'
+        must trigger a retry (exercises the .lower() path, T-M2).
+        """
+        monkeypatch.setattr(
+            "src.storage.intelligence_graph.connection.time.sleep",
+            lambda _s: None,
+        )
+        attempts = {"n": 0}
+
+        def op() -> int:
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                # Uppercase -- no errorcode, tests the .lower() path.
+                raise _make_op_error("DATABASE IS LOCKED")
+            return 99
+
+        assert retry_on_lock_contention(op, operation_name="upper_substr_test") == 99
+        assert attempts["n"] == 2

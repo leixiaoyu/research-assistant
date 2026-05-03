@@ -47,6 +47,10 @@ operation, etc.) that need a separate refactor pass tracked under
 
 from __future__ import annotations
 
+# TODO(post-phase-9): if a non-intelligence-graph SQLite caller arrives,
+# move this module to src/utils/sqlite.py for layering clarity.
+
+import re
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -73,6 +77,26 @@ T = TypeVar("T")
 _SQLITE_BUSY = 5
 _SQLITE_LOCKED = 6
 _RETRYABLE_SQLITE_CODES = frozenset({_SQLITE_BUSY, _SQLITE_LOCKED})
+
+# Public defaults for the retry helper, also imported by callers so
+# test assertions don't depend on private constants.
+DEFAULT_MAX_ATTEMPTS: int = 3
+DEFAULT_BACKOFF_SECONDS: float = 0.05
+
+# Allowed pattern for operation_name: lowercase alpha start, then
+# lowercase alphanumeric or underscore, max 64 chars total.
+_OP_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+_TRUNC_LIMIT = 200
+_TRUNC_SUFFIX = "[...truncated]"
+
+
+def _trunc(exc: BaseException) -> str:
+    """Return str(exc) truncated to _TRUNC_LIMIT chars to prevent log flooding."""
+    s = str(exc)
+    if len(s) > _TRUNC_LIMIT:
+        return s[:_TRUNC_LIMIT] + _TRUNC_SUFFIX
+    return s
 
 
 @contextmanager
@@ -125,9 +149,10 @@ def open_connection(db_path: Path) -> Iterator[sqlite3.Connection]:
 def retry_on_lock_contention(
     operation: Callable[[], T],
     *,
-    max_attempts: int = 3,
-    backoff_seconds: float = 0.05,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
     operation_name: str = "sqlite_operation",
+    **extra_log_fields: object,
 ) -> T:
     """Retry a SQLite operation on lock contention (BUSY/LOCKED).
 
@@ -155,23 +180,36 @@ def retry_on_lock_contention(
             Wrap your statement(s) in a lambda or function so the helper
             can re-invoke them per attempt.
         max_attempts: Total attempts including the initial call. Must
-            be >= 1.
+            be in [1, 10].
         backoff_seconds: Base sleep interval between attempts. Linear
-            backoff (attempt * base) is used.
+            backoff (attempt * base) is used. Must be in [0, 5.0].
         operation_name: Used in log events for traceability so a single
             log stream can distinguish e.g. ``monitoring_record_run``
-            from ``influence_write_cache`` contention.
+            from ``influence_write_cache`` contention. Must match
+            ``^[a-z][a-z0-9_]{0,63}$``.
+        **extra_log_fields: Additional key/value fields merged into every
+            log event emitted by this helper (e.g. ``run_id=...``).
 
     Returns:
         Whatever ``operation()`` returns on the first successful
         attempt.
 
     Raises:
+        ValueError: If ``operation_name`` does not match the allowed
+            pattern, or if ``max_attempts``/``backoff_seconds`` are out
+            of bounds.
         sqlite3.OperationalError: After ``max_attempts`` on lock
             contention, OR on the first attempt for any non-contention
             ``OperationalError`` (disk full, schema drift, syntax
             error, ...).
     """
+    if not _OP_NAME_PATTERN.match(operation_name):
+        raise ValueError(f"operation_name must match {_OP_NAME_PATTERN.pattern!r}")
+    if max_attempts < 1 or max_attempts > 10:
+        raise ValueError("max_attempts must be in [1, 10]")
+    if not (0 <= backoff_seconds <= 5.0):
+        raise ValueError("backoff_seconds must be in [0, 5.0]")
+
     attempt = 0
     while True:
         try:
@@ -183,14 +221,21 @@ def retry_on_lock_contention(
             # and covers both SQLITE_BUSY and SQLITE_LOCKED variants.
             # Fall back to the substring check when the code is
             # unavailable (older bindings, synthesized exceptions in
-            # tests). Match both "locked" and "busy" wording SQLite has
-            # used historically. (PR #123 review #S1.)
+            # tests). Match phrase-level substrings to avoid
+            # false-positives on unrelated messages. (PR #123 review #S1.)
             sqlite_code = getattr(exc, "sqlite_errorcode", None)
             if sqlite_code is not None:
-                is_lock_error = sqlite_code in _RETRYABLE_SQLITE_CODES
+                # Mask to primary code (low byte) so extended codes
+                # like SQLITE_BUSY_RECOVERY (261 = 0x105) map to BUSY (5).
+                primary = sqlite_code & 0xFF
+                is_lock_error = primary in _RETRYABLE_SQLITE_CODES
             else:
                 msg = str(exc).lower()
-                is_lock_error = "locked" in msg or "busy" in msg
+                is_lock_error = (
+                    "database is locked" in msg
+                    or "database table is locked" in msg
+                    or "database is busy" in msg
+                )
             is_last_attempt = attempt >= max_attempts - 1
             if not is_lock_error:
                 # Non-contention OperationalError -- propagate
@@ -204,8 +249,10 @@ def retry_on_lock_contention(
                 logger.error(
                     "sqlite_lock_contention_exhausted",
                     operation_name=operation_name,
-                    attempts=max_attempts,
-                    error=str(exc),
+                    total_attempts=max_attempts,
+                    error=_trunc(exc),
+                    error_code=sqlite_code,
+                    **extra_log_fields,
                 )
                 raise
             backoff = backoff_seconds * (attempt + 1)
@@ -215,7 +262,9 @@ def retry_on_lock_contention(
                 attempt=attempt + 1,
                 max_attempts=max_attempts,
                 backoff_seconds=backoff,
-                error=str(exc),
+                error=_trunc(exc),
+                error_code=sqlite_code,
+                **extra_log_fields,
             )
             time.sleep(backoff)
             attempt += 1

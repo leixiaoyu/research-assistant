@@ -79,6 +79,8 @@ from src.services.intelligence.monitoring.models import (
     MonitoringRunStatus,
 )
 from src.storage.intelligence_graph.connection import (
+    DEFAULT_BACKOFF_SECONDS,
+    DEFAULT_MAX_ATTEMPTS,
     open_connection,
     retry_on_lock_contention,
 )
@@ -161,10 +163,7 @@ class MonitoringRunRepository:
     # The retry mechanics themselves live in
     # :func:`src.storage.intelligence_graph.connection.retry_on_lock_contention`
     # so all SQLite write sites in the intelligence layer share one
-    # implementation. The constants below stay here so callers / tests
-    # have a stable place to read the tuning. (Issue #133.)
-    _RECORD_RUN_MAX_ATTEMPTS = 3
-    _RECORD_RUN_RETRY_BACKOFF_SECONDS = 0.05  # 50ms, 100ms (linear)
+    # implementation. Defaults are the public module constants. (Issue #133.)
 
     def record_run(
         self,
@@ -213,9 +212,11 @@ class MonitoringRunRepository:
 
         retry_on_lock_contention(
             lambda: self._record_run_once(run, owner, finished),
-            max_attempts=self._RECORD_RUN_MAX_ATTEMPTS,
-            backoff_seconds=self._RECORD_RUN_RETRY_BACKOFF_SECONDS,
+            max_attempts=DEFAULT_MAX_ATTEMPTS,
+            backoff_seconds=DEFAULT_BACKOFF_SECONDS,
             operation_name="monitoring_record_run",
+            run_id=run.run_id,
+            subscription_id=run.subscription_id,
         )
 
         logger.info(

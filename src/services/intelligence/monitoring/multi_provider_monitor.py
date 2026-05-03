@@ -147,19 +147,16 @@ class MultiProviderMonitor:
 
         Behavior:
 
-        1. Skip immediately if the subscription is paused. (Per-source
-           filtering is NOT applied here — multi-provider monitors
-           consult every configured provider regardless of the
-           subscription's ``sources`` list, since the whole point of
-           Tier 1 is broader discovery. Sources filtering can be
-           reintroduced in a follow-up if users want per-subscription
-           provider opt-out.)
+        1. Skip immediately if the subscription is paused. Per-source
+           filtering IS applied (H-S3): providers not in the
+           subscription's ``sources`` allowlist are skipped so each
+           subscription can opt out of specific providers.
         2. Expand the query into N variants (or use only the literal
            query if no expander is configured).
-        3. For each variant, search every configured provider. Provider
-           failures on a single variant are logged and skipped — the
-           cycle continues with whatever other providers/variants
-           succeed.
+        3. For each variant, search every provider the subscription has
+           allowlisted. Provider failures on a single variant are logged
+           and skipped — the cycle continues with whatever other
+           providers/variants succeed.
         4. Union all returned papers, dedup by ``paper_id``.
         5. Apply the per-cycle paper cap.
         6. For each paper, resolve identity against the registry. New
@@ -175,6 +172,10 @@ class MultiProviderMonitor:
         run = MonitoringRun(
             subscription_id=subscription.subscription_id,
             # See Tier 1 schema-compat note in module docstring.
+            # TODO(issue #141): per-paper source tracking — add
+            # MonitoringPaperRecord.source field + schema migration so
+            # each paper records its actual discovery provider instead of
+            # hardcoding PaperSource.ARXIV for schema compatibility.
             source=PaperSource.ARXIV,
         )
 
@@ -199,11 +200,14 @@ class MultiProviderMonitor:
 
         # Step 3: fan-out across (variant × provider). One provider+variant
         # failure does NOT abort the cycle — each is independent.
+        # H-S3: Only search providers the subscription's allowlist permits.
         fetched: list[PaperMetadata] = []
         partial_failure = False
         for variant in queries:
             topic = self._build_topic_for_query(subscription, variant)
             for source, provider in self._providers.items():
+                if source not in subscription.sources:
+                    continue
                 try:
                     results = await provider.search(topic)
                 except Exception as exc:
@@ -275,6 +279,11 @@ class MultiProviderMonitor:
         Expander failures are caught and logged; the literal query is
         used as a fail-soft fallback (matching ``QueryExpander.expand``'s
         own contract — see ``src/utils/query_expander.py:88``).
+
+        ``max_query_variants`` is the final cap on the total result set
+        including the original query. The expander is asked for that many
+        variants; the result is clipped locally afterwards to enforce the
+        cap regardless of what the expander returns.
         """
         if self._query_expander is None:
             return [subscription.query]
@@ -282,7 +291,7 @@ class MultiProviderMonitor:
         try:
             variants = await self._query_expander.expand(
                 subscription.query,
-                max_variants=self._config.max_query_variants - 1,
+                max_variants=self._config.max_query_variants,
             )
         except Exception as exc:
             logger.warning(
@@ -296,7 +305,11 @@ class MultiProviderMonitor:
         # to the literal query so we never search with an empty list.
         if not variants:
             return [subscription.query]
-        return variants
+
+        # Clip to the configured cap so callers are never surprised by an
+        # oversized variant list even if the expander ignores max_variants.
+        result = variants[: self._config.max_query_variants]
+        return result
 
     def _build_topic_for_query(
         self, subscription: ResearchSubscription, query: str

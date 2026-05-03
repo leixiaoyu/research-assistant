@@ -375,15 +375,22 @@ class MonitoringRunner:
         # We need a PaperMetadata-compatible object to pass to the scorer.
         # MonitoringPaperRecord carries title + url; reconstruct a minimal
         # PaperMetadata so the scorer can build its prompt. PaperMetadata
-        # requires a valid HttpUrl, so provide a fallback when the paper
-        # record has no URL (common for papers registered without one).
+        # requires a valid HttpUrl; skip scoring rather than fabricating a
+        # URL for non-arXiv papers that have no provenance (C-2).
         from src.models.paper import PaperMetadata
 
-        paper_url = paper.url or f"https://arxiv.org/abs/{paper.paper_id}"
+        if paper.url is None:
+            logger.info(
+                "monitoring_relevance_score_skipped_no_url",
+                subscription_id=subscription.subscription_id,
+                paper_id=paper.paper_id,
+            )
+            return
+
         paper_meta = PaperMetadata(
             paper_id=paper.paper_id,
             title=paper.title,
-            url=paper_url,  # type: ignore[arg-type]
+            url=paper.url,  # type: ignore[arg-type]
         )
 
         async with sem:

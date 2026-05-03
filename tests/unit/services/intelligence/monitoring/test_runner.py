@@ -649,8 +649,18 @@ class TestScorerIntegration:
         from src.services.intelligence.monitoring.runner import MonitoringRunner
 
         sub = _make_subscription(subscription_id="sub-scorer")
-        paper1 = MonitoringPaperRecord(paper_id="p1", title="Paper 1", is_new=True)
-        paper2 = MonitoringPaperRecord(paper_id="p2", title="Paper 2", is_new=True)
+        paper1 = MonitoringPaperRecord(
+            paper_id="p1",
+            title="Paper 1",
+            is_new=True,
+            url="https://arxiv.org/abs/p1",
+        )
+        paper2 = MonitoringPaperRecord(
+            paper_id="p2",
+            title="Paper 2",
+            is_new=True,
+            url="https://arxiv.org/abs/p2",
+        )
         run_obj = _make_run(subscription_id="sub-scorer")
         run_obj = run_obj.model_copy(update={"papers": [paper1, paper2]})
 
@@ -701,8 +711,18 @@ class TestScorerIntegration:
         from src.services.intelligence.monitoring.runner import MonitoringRunner
 
         sub = _make_subscription(subscription_id="sub-scorer2")
-        paper1 = MonitoringPaperRecord(paper_id="p1", title="Paper 1", is_new=True)
-        paper2 = MonitoringPaperRecord(paper_id="p2", title="Paper 2", is_new=True)
+        paper1 = MonitoringPaperRecord(
+            paper_id="p1",
+            title="Paper 1",
+            is_new=True,
+            url="https://arxiv.org/abs/p1",
+        )
+        paper2 = MonitoringPaperRecord(
+            paper_id="p2",
+            title="Paper 2",
+            is_new=True,
+            url="https://arxiv.org/abs/p2",
+        )
         run_obj = _make_run(subscription_id="sub-scorer2")
         run_obj = run_obj.model_copy(update={"papers": [paper1, paper2]})
         result = ArxivMonitorResult(run=run_obj, new_papers=[], deduplicated_papers=[])
@@ -772,6 +792,81 @@ class TestScorerIntegration:
         runs = await runner.run_once()
 
         assert runs[0].papers[0].relevance_score is None
+
+    @pytest.mark.asyncio
+    async def test_scorer_skips_paper_with_no_url(self) -> None:
+        """C-2: Papers with url=None are skipped before scoring rather than
+        fabricating an arXiv URL for non-arXiv papers.
+        The ``monitoring_relevance_score_skipped_no_url`` event is emitted.
+        """
+        import structlog.testing
+        from unittest.mock import AsyncMock as _AsyncMock, MagicMock as _MagicMock
+
+        from src.services.intelligence.monitoring.models import MonitoringPaperRecord
+        from src.services.intelligence.monitoring.relevance_scorer import (
+            RelevanceScoreResult,
+        )
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
+
+        sub = _make_subscription(subscription_id="sub-nourl")
+        paper_no_url = MonitoringPaperRecord(
+            paper_id="p-nourl", title="No URL Paper", is_new=True, url=None
+        )
+        paper_with_url = MonitoringPaperRecord(
+            paper_id="p-url",
+            title="Has URL Paper",
+            is_new=True,
+            url="https://arxiv.org/abs/p-url",
+        )
+        run_obj = _make_run(subscription_id="sub-nourl")
+        run_obj = run_obj.model_copy(update={"papers": [paper_no_url, paper_with_url]})
+        result = ArxivMonitorResult(run=run_obj, new_papers=[], deduplicated_papers=[])
+
+        ok_result = RelevanceScoreResult(
+            score=0.7,
+            reasoning="Some match found in paper",
+            model_used="gemini-1.5-flash",
+            cost_usd=0.0,
+        )
+        scorer = _MagicMock()
+        scorer.score = _AsyncMock(return_value=ok_result)
+
+        sub_mgr = _MagicMock()
+        sub_mgr.list_subscriptions = _MagicMock(return_value=[sub])
+        sub_mgr.mark_checked = _MagicMock()
+        monitor = _MagicMock()
+        monitor.check = _AsyncMock(return_value=result)
+        repo = _MagicMock()
+        repo.record_run = _MagicMock()
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+            scorer=scorer,
+        )
+
+        import structlog
+        import src.services.intelligence.monitoring.runner as runner_module2
+
+        runner_module2.logger = structlog.get_logger()
+
+        with structlog.testing.capture_logs() as logs:
+            runs = await runner.run_once()
+
+        # The paper with URL is scored; the paper without URL is skipped.
+        assert runs[0].papers[0].relevance_score is None  # no URL → skipped
+        assert runs[0].papers[1].relevance_score == pytest.approx(0.7)
+        # Scorer is called only once (for the URL paper).
+        assert scorer.score.await_count == 1
+
+        skip_events = [
+            e
+            for e in logs
+            if e.get("event") == "monitoring_relevance_score_skipped_no_url"
+        ]
+        assert len(skip_events) == 1
+        assert skip_events[0]["paper_id"] == "p-nourl"
 
 
 # ---------------------------------------------------------------------------
@@ -867,8 +962,14 @@ class TestLLMBudgetCap:
 
         sub = _make_subscription(subscription_id="sub-budget")
         # Create 3 papers but set the budget cap to 1 so only 1 gets scored.
+        # Include URLs so the C-2 url-check does not skip these papers.
         papers = [
-            MonitoringPaperRecord(paper_id=f"p{i}", title=f"Paper {i}", is_new=True)
+            MonitoringPaperRecord(
+                paper_id=f"p{i}",
+                title=f"Paper {i}",
+                is_new=True,
+                url=f"https://arxiv.org/abs/p{i}",
+            )
             for i in range(3)
         ]
         run_obj = _make_run(subscription_id="sub-budget")

@@ -138,7 +138,9 @@ def test_init_accepts_single_provider() -> None:
         providers={PaperSource.ARXIV: _make_provider()},
         registry=MagicMock(),
     )
-    assert monitor is not None
+    # H-T4: Assert specific structure instead of vacuous `is not None`
+    assert PaperSource.ARXIV in monitor._providers
+    assert len(monitor._providers) == 1
 
 
 def test_init_defensive_copies_providers_dict() -> None:
@@ -204,7 +206,12 @@ async def test_check_no_expander_uses_literal_query_only() -> None:
 
 @pytest.mark.asyncio
 async def test_check_with_expander_searches_all_variants() -> None:
-    """With an expander, each variant fans out to every provider."""
+    """With an expander, each variant fans out to every allowlisted provider.
+
+    The subscription has only PaperSource.ARXIV in sources (MVP default),
+    so only the arXiv provider is searched for each of the 3 variants;
+    the S2 provider is skipped by the H-S3 allowlist filter.
+    """
     sub = _make_subscription(query="original")
     expander = MagicMock()
     expander.expand = AsyncMock(return_value=["original", "variant1", "variant2"])
@@ -219,9 +226,14 @@ async def test_check_with_expander_searches_all_variants() -> None:
         query_expander=expander,
     )
     await monitor.check(sub)
-    # 3 variants × 2 providers = 6 searches total
+    # 3 variants × 1 allowed provider (ARXIV) = 3 searches
+    # expander was called with max_variants = config.max_query_variants (C-1 fix)
     assert arxiv.search.await_count == 3
-    assert s2.search.await_count == 3
+    # S2 is not in subscription.sources → skipped by H-S3 filter
+    assert s2.search.await_count == 0
+    expander.expand.assert_awaited_once_with(
+        "original", max_variants=monitor._config.max_query_variants
+    )
 
 
 @pytest.mark.asyncio
@@ -260,18 +272,23 @@ async def test_check_expander_returns_empty_falls_back_to_literal() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Provider fan-out + Fail-Soft Boundary
+# H-S3: subscription.sources allowlist honored
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_check_one_provider_failure_does_not_abort_cycle() -> None:
-    """A single provider raising must NOT abort the cycle (Fail-Soft).
-    Status becomes PARTIAL and the surviving provider's papers land.
+async def test_check_respects_subscription_sources_allowlist() -> None:
+    """H-S3: Providers not in subscription.sources must not be searched.
+
+    The MVP ResearchSubscription only allows PaperSource.ARXIV in sources.
+    A multi-provider monitor configured with both ARXIV and S2 must only
+    search ARXIV for subscriptions that only allow ARXIV.
     """
-    sub = _make_subscription()
-    arxiv = _make_provider(return_papers=[_make_paper("arxiv-1")])
-    s2 = _make_provider(raise_on_search=ConnectionError("S2 timeout"))
+    sub = _make_subscription()  # sources=[PaperSource.ARXIV] by default
+    assert sub.sources == [PaperSource.ARXIV]
+
+    arxiv = _make_provider(return_papers=[_make_paper("p1")])
+    s2 = _make_provider(return_papers=[_make_paper("p2")])
     monitor = MultiProviderMonitor(
         providers={
             PaperSource.ARXIV: arxiv,
@@ -280,9 +297,56 @@ async def test_check_one_provider_failure_does_not_abort_cycle() -> None:
         registry=_make_registry(),
     )
     result = await monitor.check(sub)
+
+    # ARXIV is in sources → searched; S2 is not → skipped
+    arxiv.search.assert_awaited_once()
+    s2.search.assert_not_called()
+    # Only the ARXIV paper landed
+    assert result.run.papers_seen == 1
+
+
+# ---------------------------------------------------------------------------
+# Provider fan-out + Fail-Soft Boundary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_one_provider_failure_does_not_abort_cycle() -> None:
+    """A single provider raising must NOT abort the cycle (Fail-Soft).
+    Status becomes PARTIAL and the surviving provider's papers land.
+
+    Since subscription.sources is [ARXIV] (MVP default), ARXIV is the only
+    provider searched. We test fail-soft by having the ARXIV provider raise
+    on one call in a multi-variant setup, so the second variant still proceeds.
+    H-S3: S2 provider is skipped because it is not in subscription.sources.
+    """
+    sub = _make_subscription()
+    # ARXIV raises on first call, returns papers on second
+    call_count = [0]
+
+    async def arxiv_search(topic):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise ConnectionError("arxiv timeout on first variant")
+        return [_make_paper("arxiv-1")]
+
+    arxiv = MagicMock()
+    arxiv.search = AsyncMock(side_effect=arxiv_search)
+    expander = MagicMock()
+    expander.expand = AsyncMock(return_value=["original", "variant2"])
+    monitor = MultiProviderMonitor(
+        providers={
+            PaperSource.ARXIV: arxiv,
+        },
+        registry=_make_registry(),
+        query_expander=expander,
+    )
+    result = await monitor.check(sub)
     assert result.run.status is MonitoringRunStatus.PARTIAL
-    assert result.run.papers_seen == 1  # the arXiv result survived
+    assert result.run.papers_seen == 1  # the second-variant arXiv result survived
     assert result.run.error is not None  # explained
+    # H-T3: assert that the paper_id from the surviving call is present
+    assert result.new_papers[0].paper_id == "arxiv-1"
 
 
 @pytest.mark.asyncio
@@ -334,13 +398,16 @@ async def test_check_enforces_max_papers_per_cycle_cap() -> None:
         max_query_variants=3,
         topic_slug_prefix="monitor",
     )
+    registry = _make_registry()
     monitor = MultiProviderMonitor(
         providers={PaperSource.ARXIV: arxiv},
-        registry=_make_registry(),
+        registry=registry,
         config=cfg,
     )
     result = await monitor.check(sub)
     assert result.run.papers_seen == 3
+    # H-T5: exactly 3 papers registered (cap enforced before registry calls)
+    assert registry.register_paper.call_count == 3
 
 
 # ---------------------------------------------------------------------------

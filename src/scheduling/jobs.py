@@ -798,11 +798,54 @@ class MonitoringCheckJob(BaseJob):
                     "monitoring_check_job_no_llm_api_key",
                     reason="scoring_will_be_skipped",
                 )
+            # Tier 1 (Issue #139): wire multi-provider monitor + query
+            # expander when LLM is available. Falls back to legacy
+            # single-arxiv when LLM key is missing (graceful).
+            extra_providers = None
+            query_expander = None
+            if llm_svc is not None:
+                try:
+                    from src.services.intelligence.monitoring.models import (
+                        PaperSource,
+                    )
+                    from src.services.providers.huggingface import (
+                        HuggingFaceProvider,
+                    )
+                    from src.services.providers.openalex import OpenAlexProvider
+                    from src.services.providers.semantic_scholar import (
+                        SemanticScholarProvider,
+                    )
+                    from src.utils.query_expander import QueryExpander
+
+                    # Semantic Scholar requires an API key; OpenAlex +
+                    # HuggingFace are anonymous-public. Skip S2 if its
+                    # key is missing -- the others still broaden search.
+                    extra_providers = {
+                        PaperSource.OPENALEX: OpenAlexProvider(),
+                        PaperSource.HUGGINGFACE: HuggingFaceProvider(),
+                    }
+                    s2_key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
+                    if s2_key:
+                        extra_providers[PaperSource.SEMANTIC_SCHOLAR] = (
+                            SemanticScholarProvider(api_key=s2_key)
+                        )
+                    query_expander = QueryExpander(llm_service=llm_svc)
+                except Exception as exc:
+                    logger.warning(
+                        "monitoring_check_job_tier1_init_failed",
+                        error=str(exc),
+                        reason="falling_back_to_legacy_single_arxiv",
+                    )
+                    extra_providers = None
+                    query_expander = None
+
             self._runner = MonitoringRunner.from_paths(
                 db_path=self._db_path,
                 registry=registry or RegistryService(),
                 arxiv_provider=arxiv_provider or ArxivProvider(),
                 llm_service=llm_svc,
+                extra_providers=extra_providers,
+                query_expander=query_expander,
             )
         self._digest_generator = digest_generator or DigestGenerator(
             output_root=digest_output_root,

@@ -54,10 +54,14 @@ from typing import TYPE_CHECKING, Optional
 import structlog
 
 from src.services.intelligence.monitoring.arxiv_monitor import ArxivMonitor
+from src.services.intelligence.monitoring.multi_provider_monitor import (
+    MultiProviderMonitor,
+)
 from src.services.intelligence.monitoring.models import (
     MonitoringPaperRecord,
     MonitoringRun,
     MonitoringRunStatus,
+    PaperSource,
     ResearchSubscription,
 )
 from src.services.intelligence.monitoring.relevance_scorer import (
@@ -74,7 +78,9 @@ from src.services.intelligence.monitoring.subscription_manager import (
 if TYPE_CHECKING:
     from src.services.llm.service import LLMService
     from src.services.providers.arxiv import ArxivProvider
+    from src.services.providers.base import DiscoveryProvider
     from src.services.registry.service import RegistryService
+    from src.utils.query_expander import QueryExpander
 
 logger = structlog.get_logger()
 
@@ -108,7 +114,7 @@ class MonitoringRunner:
     def __init__(
         self,
         subscription_manager: SubscriptionManager,
-        monitor: ArxivMonitor,
+        monitor: ArxivMonitor | MultiProviderMonitor,
         run_repo: MonitoringRunRepository,
         scorer: Optional[RelevanceScorer] = None,
     ) -> None:
@@ -117,10 +123,12 @@ class MonitoringRunner:
         Args:
             subscription_manager: Source of active subscriptions and
                 target for ``mark_checked`` updates.
-            monitor: ArXiv monitor that performs the per-subscription
-                poll. The runner does not care whether a future
-                multi-source monitor wraps this -- the contract is
-                ``check(subscription) -> ArxivMonitorResult``.
+            monitor: A monitor implementing ``check(subscription) ->
+                ArxivMonitorResult``. Either :class:`ArxivMonitor`
+                (single-provider, literal-query) or
+                :class:`MultiProviderMonitor` (multi-provider,
+                LLM-expanded queries — Tier 1) is accepted; the runner
+                duck-types on the ``check`` interface.
             run_repo: Repository for the per-cycle audit record.
             scorer: Optional ``RelevanceScorer`` for LLM-based relevance
                 scoring. When ``None``, papers are returned unscored
@@ -170,6 +178,8 @@ class MonitoringRunner:
         registry: "RegistryService",
         arxiv_provider: "ArxivProvider",
         llm_service: Optional["LLMService"] = None,
+        extra_providers: Optional["dict[PaperSource, DiscoveryProvider]"] = None,
+        query_expander: Optional["QueryExpander"] = None,
     ) -> "MonitoringRunner":
         """Convenience factory wiring the standard collaborators.
 
@@ -200,6 +210,23 @@ class MonitoringRunner:
             llm_service: Optional ``LLMService`` used to build a
                 ``RelevanceScorer``. When ``None``, papers are returned
                 unscored (backward-compatible with Week-1 behavior).
+            extra_providers: Optional mapping of ``PaperSource`` to
+                ``DiscoveryProvider`` for multi-provider search beyond
+                arXiv (e.g., Semantic Scholar, OpenAlex, HuggingFace).
+                When supplied, a :class:`MultiProviderMonitor` is
+                constructed with arXiv + the extras; queries fan out
+                across all providers in parallel. When ``None``
+                (default), the legacy single-provider
+                :class:`ArxivMonitor` is used (backward compatible).
+                (Tier 1: monitoring expanded search, Issue #139.)
+            query_expander: Optional :class:`QueryExpander` for
+                LLM-based query expansion. When supplied alongside
+                ``extra_providers`` (or even alone), each subscription's
+                literal query is expanded into N variants via Gemini
+                Flash before the provider fan-out — broadens discovery
+                coverage at ~1 cheap LLM call per subscription per
+                cycle. When ``None``, only the literal subscription
+                query is searched. (Tier 1.)
 
         Returns:
             A fully-wired, initialized ``MonitoringRunner`` ready for
@@ -222,7 +249,36 @@ class MonitoringRunner:
         db_path = Path(db_path)  # accept str | Path; coerce for downstream typing
         sub_mgr = SubscriptionManager(db_path)
         sub_mgr.initialize()
-        monitor = ArxivMonitor(provider=arxiv_provider, registry=registry)
+
+        # Tier 1: choose monitor implementation based on what was supplied.
+        # If the caller provided extra providers OR a query expander, build
+        # the broader-discovery MultiProviderMonitor. Otherwise keep the
+        # legacy single-provider ArxivMonitor for backward compatibility.
+        monitor: ArxivMonitor | MultiProviderMonitor
+        if extra_providers or query_expander is not None:
+            providers: dict[PaperSource, DiscoveryProvider] = {
+                PaperSource.ARXIV: arxiv_provider,
+            }
+            if extra_providers:
+                # Defensive copy to isolate from caller mutations; reject
+                # an attempt to override the canonical ArXiv provider via
+                # the extras dict (caller should pass the override as
+                # ``arxiv_provider`` instead).
+                for src, provider in extra_providers.items():
+                    if src is PaperSource.ARXIV:
+                        raise ValueError(
+                            "extra_providers must not include "
+                            "PaperSource.ARXIV; pass arxiv_provider directly"
+                        )
+                    providers[src] = provider
+            monitor = MultiProviderMonitor(
+                providers=providers,
+                registry=registry,
+                query_expander=query_expander,
+            )
+        else:
+            monitor = ArxivMonitor(provider=arxiv_provider, registry=registry)
+
         repo = MonitoringRunRepository(db_path)
         repo.initialize()
         scorer = RelevanceScorer(llm_service) if llm_service is not None else None

@@ -495,6 +495,9 @@ class TestBuildHelpers:
         from src.services.intelligence.monitoring.runner import MonitoringRunner
 
         monkeypatch.setenv(_DB_ENV_VAR, str(tmp_path / "m.db"))
+        # Without LLM keys, the legacy single-arxiv path runs.
+        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         # Stub ArxivProvider + RegistryService so the runner builds without
         # touching real settings / disk lock files.
         with (
@@ -507,6 +510,105 @@ class TestBuildHelpers:
         # H-T4: Assert isinstance and that public delegation method works.
         assert isinstance(runner_obj, MonitoringRunner)
         assert runner_obj.list_subscriptions() == []
+
+    def test_build_runner_with_llm_key_wires_tier1(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Tier 1 (Issue #139): when LLM_API_KEY is in the env,
+        ``_build_runner`` constructs the MultiProviderMonitor with
+        OpenAlex + HuggingFace (S2 only when its own key is present)
+        plus a QueryExpander.
+        """
+        from src.cli.monitor import _build_runner
+        from src.services.intelligence.monitoring.multi_provider_monitor import (
+            MultiProviderMonitor,
+        )
+
+        monkeypatch.setenv(_DB_ENV_VAR, str(tmp_path / "m.db"))
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+        with (
+            patch("src.services.providers.arxiv.ArxivProvider"),
+            patch("src.services.registry.service.RegistryService"),
+        ):
+            runner_obj = _build_runner()
+        # Tier 1 monitor selected
+        assert isinstance(runner_obj._monitor, MultiProviderMonitor)
+        # Without S2 key: no S2 in extras
+        from src.services.intelligence.monitoring.models import PaperSource
+
+        assert PaperSource.OPENALEX in runner_obj._monitor._providers
+        assert PaperSource.HUGGINGFACE in runner_obj._monitor._providers
+        assert PaperSource.SEMANTIC_SCHOLAR not in runner_obj._monitor._providers
+        # Expander wired
+        assert runner_obj._monitor._query_expander is not None
+
+    def test_build_runner_with_llm_and_s2_keys_includes_s2(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Tier 1: SEMANTIC_SCHOLAR_API_KEY enables Semantic Scholar."""
+        from src.cli.monitor import _build_runner
+
+        monkeypatch.setenv(_DB_ENV_VAR, str(tmp_path / "m.db"))
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "test-s2-key")
+        with (
+            patch("src.services.providers.arxiv.ArxivProvider"),
+            patch("src.services.registry.service.RegistryService"),
+        ):
+            runner_obj = _build_runner()
+        from src.services.intelligence.monitoring.models import PaperSource
+
+        assert PaperSource.SEMANTIC_SCHOLAR in runner_obj._monitor._providers
+
+    def test_build_runner_llm_init_failure_falls_back_to_legacy(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Tier 1: LLMService construction failure -> legacy single-arxiv
+        wiring (graceful degradation, no crash).
+        """
+        from src.cli.monitor import _build_runner
+        from src.services.intelligence.monitoring.arxiv_monitor import ArxivMonitor
+
+        monkeypatch.setenv(_DB_ENV_VAR, str(tmp_path / "m.db"))
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        with (
+            patch("src.services.providers.arxiv.ArxivProvider"),
+            patch("src.services.registry.service.RegistryService"),
+            patch(
+                "src.services.llm.service.LLMService",
+                side_effect=RuntimeError("bad llm config"),
+            ),
+        ):
+            runner_obj = _build_runner()
+        # LLM init failed → no scorer + legacy ArxivMonitor (no tier 1)
+        assert isinstance(runner_obj._monitor, ArxivMonitor)
+        assert runner_obj._scorer is None
+
+    def test_build_runner_tier1_provider_init_failure_falls_back(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Tier 1: extra-provider construction failure -> legacy
+        ArxivMonitor (LLM scorer still wired).
+        """
+        from src.cli.monitor import _build_runner
+        from src.services.intelligence.monitoring.arxiv_monitor import ArxivMonitor
+
+        monkeypatch.setenv(_DB_ENV_VAR, str(tmp_path / "m.db"))
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+        with (
+            patch("src.services.providers.arxiv.ArxivProvider"),
+            patch("src.services.registry.service.RegistryService"),
+            patch(
+                "src.services.providers.openalex.OpenAlexProvider",
+                side_effect=RuntimeError("openalex init failed"),
+            ),
+        ):
+            runner_obj = _build_runner()
+        # Extras init failed → legacy ArxivMonitor (scorer still works)
+        assert isinstance(runner_obj._monitor, ArxivMonitor)
+        assert runner_obj._scorer is not None
 
     def test_add_command_db_raises_exits_nonzero(
         self,

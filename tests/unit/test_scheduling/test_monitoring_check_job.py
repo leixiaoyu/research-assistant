@@ -145,6 +145,139 @@ class TestMonitoringCheckJobInit:
             MonitoringCheckJob(db_path=Path("./data/x.db"))
         from_paths.assert_called_once()
 
+    def test_init_without_llm_key_skips_tier1_wiring(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Tier 1 (Issue #139): when no LLM key is in the env, the job
+        falls back to legacy single-arxiv wiring (no extras, no
+        expander). ``from_paths`` is called with both Tier 1 args
+        ``None`` so it constructs the legacy ``ArxivMonitor``.
+        """
+        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        with (
+            patch(
+                "src.services.intelligence.monitoring.MonitoringRunner.from_paths"
+            ) as from_paths,
+            patch("src.services.providers.arxiv.ArxivProvider"),
+            patch("src.services.registry.service.RegistryService"),
+        ):
+            from_paths.return_value = MagicMock()
+            MonitoringCheckJob(db_path=Path("./data/x.db"))
+        # No LLM → no extras, no expander, no scorer
+        kwargs = from_paths.call_args.kwargs
+        assert kwargs["llm_service"] is None
+        assert kwargs["extra_providers"] is None
+        assert kwargs["query_expander"] is None
+
+    def test_init_with_llm_key_wires_tier1_providers_and_expander(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Tier 1 (Issue #139): when LLM_API_KEY is present, the job
+        wires extra providers (OpenAlex + HuggingFace; S2 only if its
+        own key is present) and a QueryExpander for query expansion.
+        """
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+        with (
+            patch(
+                "src.services.intelligence.monitoring.MonitoringRunner.from_paths"
+            ) as from_paths,
+            patch("src.services.providers.arxiv.ArxivProvider"),
+            patch("src.services.registry.service.RegistryService"),
+        ):
+            from_paths.return_value = MagicMock()
+            MonitoringCheckJob(db_path=Path("./data/x.db"))
+        kwargs = from_paths.call_args.kwargs
+        assert kwargs["llm_service"] is not None
+        # Without S2 key: OpenAlex + HuggingFace, no S2
+        from src.services.intelligence.monitoring.models import PaperSource
+
+        assert kwargs["extra_providers"] is not None
+        assert PaperSource.OPENALEX in kwargs["extra_providers"]
+        assert PaperSource.HUGGINGFACE in kwargs["extra_providers"]
+        assert PaperSource.SEMANTIC_SCHOLAR not in kwargs["extra_providers"]
+        assert kwargs["query_expander"] is not None
+
+    def test_init_with_llm_and_s2_keys_includes_s2_provider(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Tier 1: when SEMANTIC_SCHOLAR_API_KEY is also present,
+        Semantic Scholar joins the multi-provider fan-out.
+        """
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "test-s2-key")
+        with (
+            patch(
+                "src.services.intelligence.monitoring.MonitoringRunner.from_paths"
+            ) as from_paths,
+            patch("src.services.providers.arxiv.ArxivProvider"),
+            patch("src.services.registry.service.RegistryService"),
+        ):
+            from_paths.return_value = MagicMock()
+            MonitoringCheckJob(db_path=Path("./data/x.db"))
+        kwargs = from_paths.call_args.kwargs
+        from src.services.intelligence.monitoring.models import PaperSource
+
+        assert PaperSource.SEMANTIC_SCHOLAR in kwargs["extra_providers"]
+
+    def test_init_llm_construction_failure_falls_back_gracefully(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Tier 1: if LLMService construction raises (e.g., bad config),
+        we log + continue without scoring or expansion (legacy wiring).
+        Pre-PR code already had this defensive handler at jobs.py:786-795
+        — the new test pins it before we trust the fallback in production.
+        """
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        with (
+            patch(
+                "src.services.intelligence.monitoring.MonitoringRunner.from_paths"
+            ) as from_paths,
+            patch("src.services.providers.arxiv.ArxivProvider"),
+            patch("src.services.registry.service.RegistryService"),
+            patch(
+                "src.services.llm.service.LLMService",
+                side_effect=RuntimeError("bad llm config"),
+            ),
+        ):
+            from_paths.return_value = MagicMock()
+            MonitoringCheckJob(db_path=Path("./data/x.db"))
+        kwargs = from_paths.call_args.kwargs
+        # LLM init failed → no scorer + no tier 1 wiring (legacy fallback)
+        assert kwargs["llm_service"] is None
+        assert kwargs["extra_providers"] is None
+        assert kwargs["query_expander"] is None
+
+    def test_init_tier1_provider_construction_failure_falls_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Tier 1: if extra-provider construction raises (e.g., S2
+        rejects empty key), we log + run with LLM-only (scorer present
+        but legacy single-arxiv monitor). Tests the inner try/except
+        at jobs.py:833-840.
+        """
+        monkeypatch.setenv("LLM_API_KEY", "test-llm-key")
+        monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+        with (
+            patch(
+                "src.services.intelligence.monitoring.MonitoringRunner.from_paths"
+            ) as from_paths,
+            patch("src.services.providers.arxiv.ArxivProvider"),
+            patch("src.services.registry.service.RegistryService"),
+            patch(
+                "src.services.providers.openalex.OpenAlexProvider",
+                side_effect=RuntimeError("openalex init failed"),
+            ),
+        ):
+            from_paths.return_value = MagicMock()
+            MonitoringCheckJob(db_path=Path("./data/x.db"))
+        kwargs = from_paths.call_args.kwargs
+        # LLM still wired (scoring works), but Tier 1 fan-out not wired
+        assert kwargs["llm_service"] is not None
+        assert kwargs["extra_providers"] is None
+        assert kwargs["query_expander"] is None
+
 
 # ---------------------------------------------------------------------------
 # Run behavior

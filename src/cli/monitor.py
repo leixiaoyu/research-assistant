@@ -114,6 +114,15 @@ def _build_runner(
     cost (or the side-effect risk) of constructing the registry +
     arxiv provider when they don't need them.
 
+    Tier 1 (Issue #139): when an LLM key is available we wire the
+    multi-provider monitor with arXiv + Semantic Scholar + OpenAlex +
+    HuggingFace, plus a :class:`QueryExpander` that turns each
+    subscription's literal query into N variants via Gemini Flash. This
+    dramatically broadens discovery without requiring spec changes —
+    the monitor still returns ``ArxivMonitorResult`` so the runner is
+    duck-type compatible. When the LLM key is missing, falls back to
+    legacy single-arXiv behavior (no expansion, single provider).
+
     Args:
         registry: Optional ``RegistryService`` seam for testing.
             When ``None``, a default ``RegistryService()`` is built.
@@ -123,6 +132,7 @@ def _build_runner(
     import os
 
     from src.models.llm import CostLimits, LLMConfig
+    from src.services.intelligence.monitoring.models import PaperSource
     from src.services.llm.service import LLMService
     from src.services.providers.arxiv import ArxivProvider
     from src.services.registry.service import RegistryService
@@ -130,8 +140,9 @@ def _build_runner(
     resolved_registry = registry if registry is not None else RegistryService()
     resolved_arxiv = arxiv if arxiv is not None else ArxivProvider()
 
-    # Build LLMService for relevance scoring from env (never hardcoded).
-    # If the key is absent, run without scoring (graceful degradation).
+    # Build LLMService for relevance scoring + query expansion from env
+    # (never hardcoded). If the key is absent, run without scoring or
+    # expansion (graceful degradation -- legacy single-arxiv behavior).
     llm_svc = None
     llm_api_key = os.environ.get("LLM_API_KEY") or os.environ.get("GEMINI_API_KEY")
     if llm_api_key:
@@ -143,13 +154,52 @@ def _build_runner(
             logger.warning(
                 "monitor_cli_llm_init_failed",
                 error=str(exc),
-                reason="scoring_will_be_skipped",
+                reason="scoring_and_expansion_will_be_skipped",
             )
+
+    # Tier 1: build extra providers + query expander when LLM is wired.
+    # Constructed lazily so the legacy-fallback path doesn't pay the
+    # provider-construction cost.
+    extra_providers = None
+    query_expander = None
+    if llm_svc is not None:
+        try:
+            from src.services.providers.huggingface import HuggingFaceProvider
+            from src.services.providers.openalex import OpenAlexProvider
+            from src.services.providers.semantic_scholar import (
+                SemanticScholarProvider,
+            )
+            from src.utils.query_expander import QueryExpander
+
+            # Semantic Scholar requires an API key; OpenAlex + HuggingFace
+            # are anonymous-public. If S2 key is missing, skip S2 only --
+            # the other providers still broaden discovery.
+            extra_providers = {
+                PaperSource.OPENALEX: OpenAlexProvider(),
+                PaperSource.HUGGINGFACE: HuggingFaceProvider(),
+            }
+            s2_key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
+            if s2_key:
+                extra_providers[PaperSource.SEMANTIC_SCHOLAR] = SemanticScholarProvider(
+                    api_key=s2_key
+                )
+            query_expander = QueryExpander(llm_service=llm_svc)
+        except Exception as exc:
+            logger.warning(
+                "monitor_cli_tier1_init_failed",
+                error=str(exc),
+                reason="falling_back_to_legacy_single_arxiv",
+            )
+            extra_providers = None
+            query_expander = None
+
     return MonitoringRunner.from_paths(
         db_path=_resolve_db_path(),
         registry=resolved_registry,  # type: ignore[arg-type]
         arxiv_provider=resolved_arxiv,  # type: ignore[arg-type]
         llm_service=llm_svc,
+        extra_providers=extra_providers,  # type: ignore[arg-type]
+        query_expander=query_expander,
     )
 
 

@@ -483,6 +483,7 @@ class InfluenceScorer:
         ]
         try:
             with open_connection(self.store.db_path) as conn:
+                # TODO(#134): wrap in retry_on_lock_contention
                 conn.execute("BEGIN IMMEDIATE")
                 conn.executemany(
                     """

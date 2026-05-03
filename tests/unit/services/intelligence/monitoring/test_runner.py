@@ -14,6 +14,10 @@ Covers:
   -- the in-memory run is still returned.
 - ``mark_checked`` errors are logged but don't break the cycle.
 - Empty active list returns ``[]`` and does not touch monitor / repo.
+- ``from_paths`` monitor selection: ArxivMonitor vs MultiProviderMonitor
+  based on extra_providers / query_expander (H-M6: relocated from
+  test_multi_provider_monitor.py so all from_paths tests live here).
+- H-S1: Runner passes budget counters to MultiProviderMonitor.
 """
 
 from __future__ import annotations
@@ -23,12 +27,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.services.intelligence.monitoring.arxiv_monitor import ArxivMonitorResult
+from src.services.intelligence.monitoring.arxiv_monitor import (
+    ArxivMonitor,
+    ArxivMonitorResult,
+)
 from src.services.intelligence.monitoring.models import (
     MonitoringRun,
     MonitoringRunStatus,
+    PaperSource,
     ResearchSubscription,
     SubscriptionStatus,
+)
+from src.services.intelligence.monitoring.multi_provider_monitor import (
+    MultiProviderMonitor,
 )
 from src.services.intelligence.monitoring.run_repository import (
     MonitoringRunRepository,
@@ -270,6 +281,87 @@ class TestFromPathsFactory:
                 arxiv_provider=MagicMock(),
             )
         assert runner is not None
+
+    # H-M6: relocated from test_multi_provider_monitor.py so all from_paths
+    # monitor-selection tests live together in test_runner.py.
+
+    def test_from_paths_with_no_extras_builds_arxiv_monitor(
+        self, tmp_path: Path
+    ) -> None:
+        """Backward-compatible default: legacy ArxivMonitor when no extras
+        and no expander are provided.
+        """
+        db_path = tmp_path / "monitoring.db"
+        runner = MonitoringRunner.from_paths(
+            db_path=db_path,
+            registry=MagicMock(),
+            arxiv_provider=MagicMock(),
+        )
+        assert isinstance(runner._monitor, ArxivMonitor)
+
+    def test_from_paths_with_extra_providers_builds_multi_provider_monitor(
+        self, tmp_path: Path
+    ) -> None:
+        """When extra_providers is supplied, MultiProviderMonitor is selected."""
+        db_path = tmp_path / "monitoring.db"
+        extras = {PaperSource.SEMANTIC_SCHOLAR: MagicMock()}
+        runner = MonitoringRunner.from_paths(
+            db_path=db_path,
+            registry=MagicMock(),
+            arxiv_provider=MagicMock(),
+            extra_providers=extras,
+        )
+        assert isinstance(runner._monitor, MultiProviderMonitor)
+        # arXiv plus the one extra.
+        assert PaperSource.ARXIV in runner._monitor._providers
+        assert PaperSource.SEMANTIC_SCHOLAR in runner._monitor._providers
+
+    def test_from_paths_with_only_query_expander_builds_multi_provider(
+        self, tmp_path: Path
+    ) -> None:
+        """Even without extras, providing a query_expander promotes to
+        MultiProviderMonitor (the LLM expansion is the upgrade signal).
+        """
+        db_path = tmp_path / "monitoring.db"
+        runner = MonitoringRunner.from_paths(
+            db_path=db_path,
+            registry=MagicMock(),
+            arxiv_provider=MagicMock(),
+            query_expander=MagicMock(),
+        )
+        assert isinstance(runner._monitor, MultiProviderMonitor)
+
+    def test_from_paths_rejects_arxiv_in_extra_providers(self, tmp_path: Path) -> None:
+        """Caller must not pass arXiv via ``extra_providers`` -- the
+        canonical arXiv provider goes through ``arxiv_provider`` to keep
+        the wiring contract single-source.
+        """
+        db_path = tmp_path / "monitoring.db"
+        with pytest.raises(ValueError, match="must not include PaperSource.ARXIV"):
+            MonitoringRunner.from_paths(
+                db_path=db_path,
+                registry=MagicMock(),
+                arxiv_provider=MagicMock(),
+                extra_providers={PaperSource.ARXIV: MagicMock()},
+            )
+
+    def test_from_paths_with_empty_dict_extra_providers_builds_multi_provider(
+        self, tmp_path: Path
+    ) -> None:
+        """H-C6: extra_providers={} (empty dict, not None) explicitly opts the
+        caller into MultiProviderMonitor. The is-not-None check must honour this.
+        """
+        db_path = tmp_path / "monitoring.db"
+        runner = MonitoringRunner.from_paths(
+            db_path=db_path,
+            registry=MagicMock(),
+            arxiv_provider=MagicMock(),
+            extra_providers={},  # empty but explicitly provided
+        )
+        assert isinstance(runner._monitor, MultiProviderMonitor)
+        # Only arXiv (from arxiv_provider); the empty extras dict adds nothing.
+        assert PaperSource.ARXIV in runner._monitor._providers
+        assert len(runner._monitor._providers) == 1
 
 
 # ---------------------------------------------------------------------------

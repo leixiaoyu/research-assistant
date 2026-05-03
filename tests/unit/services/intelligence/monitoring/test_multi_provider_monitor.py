@@ -15,12 +15,7 @@ Covers:
 - ``check`` skips papers already in the registry.
 - ``check`` survives a single registry write error (PARTIAL).
 - ``check`` survives a single identity-resolution error (PARTIAL).
-- ``MonitoringRunner.from_paths`` builds ``MultiProviderMonitor`` when
-  extra_providers OR query_expander is provided.
-- ``MonitoringRunner.from_paths`` falls back to ``ArxivMonitor`` when
-  neither is provided (backward compatible).
-- ``MonitoringRunner.from_paths`` rejects an attempt to override the
-  arXiv provider via ``extra_providers``.
+- (from_paths monitor-selection tests relocated to test_runner.py, H-M6)
 - H-S1: expansion budget gate.
 - H-S2: variant validation + rejection.
 - H-S5: topic-build inside try/except.
@@ -46,7 +41,6 @@ import pytest
 
 from src.models.paper import PaperMetadata
 from src.services.intelligence.monitoring import multi_provider_monitor as mpm_module
-from src.services.intelligence.monitoring.arxiv_monitor import ArxivMonitor
 from src.services.intelligence.monitoring.models import (
     MAX_PAPERS_PER_CYCLE,
     MonitoringRunStatus,
@@ -59,7 +53,6 @@ from src.services.intelligence.monitoring.multi_provider_monitor import (
     MultiProviderMonitorConfig,
     _DEFAULT_MAX_QUERY_VARIANTS,
 )
-from src.services.intelligence.monitoring.runner import MonitoringRunner
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -169,11 +162,12 @@ def test_init_defensive_copies_providers_dict() -> None:
     assert PaperSource.SEMANTIC_SCHOLAR not in monitor._providers
 
 
-def test_config_with_defaults_all_fields_set() -> None:
-    """Smoke-test the config helper -- all knobs have sane defaults.
+def test_config_default_construction_all_fields_set() -> None:
+    """Smoke-test default construction -- all knobs have sane defaults.
+    L-1: with_defaults() dropped; MultiProviderMonitorConfig() is equivalent.
     L-2: pin exact default values so accidental changes trip the test.
     """
-    cfg = MultiProviderMonitorConfig.with_defaults()
+    cfg = MultiProviderMonitorConfig()
     assert cfg.max_papers_per_cycle == MAX_PAPERS_PER_CYCLE
     assert cfg.max_query_variants == _DEFAULT_MAX_QUERY_VARIANTS
     assert cfg.topic_slug_prefix == "monitor"
@@ -463,6 +457,32 @@ async def test_check_enforces_max_papers_per_cycle_cap() -> None:
     assert registry.register_paper.call_count == 3
 
 
+@pytest.mark.asyncio
+async def test_check_cap_applied_emits_log(monkeypatch) -> None:
+    """L-3: monitor_per_cycle_cap_applied is logged when the cap clips results."""
+    sub = _make_subscription()
+    papers = [_make_paper(f"p{i}") for i in range(5)]
+    arxiv = _make_provider(return_papers=papers)
+    cfg = MultiProviderMonitorConfig(
+        max_papers_per_cycle=2,
+        max_query_variants=3,
+        topic_slug_prefix="monitor",
+    )
+    monkeypatch.setattr(mpm_module, "logger", structlog.get_logger())
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=_make_registry(),
+        config=cfg,
+    )
+    with structlog.testing.capture_logs() as logs:
+        result = await monitor.check(sub)
+    cap_events = [e for e in logs if e.get("event") == "monitor_per_cycle_cap_applied"]
+    assert len(cap_events) == 1
+    assert cap_events[0]["papers_before_cap"] == 5
+    assert cap_events[0]["cap"] == 2
+    assert result.run.papers_seen == 2
+
+
 # ---------------------------------------------------------------------------
 # Registry interaction
 # ---------------------------------------------------------------------------
@@ -541,95 +561,8 @@ async def test_check_identity_resolution_error_marks_partial_and_continues() -> 
     assert result.run.papers_deduplicated == 0
 
 
-# ---------------------------------------------------------------------------
-# MonitoringRunner.from_paths integration: monitor selection
-# ---------------------------------------------------------------------------
-
-
-def test_from_paths_with_no_extras_builds_arxiv_monitor(tmp_path) -> None:
-    """Backward-compatible default: legacy ArxivMonitor when no extras
-    and no expander are provided.
-    """
-    db_path = tmp_path / "monitoring.db"
-    runner = MonitoringRunner.from_paths(
-        db_path=db_path,
-        registry=MagicMock(),
-        arxiv_provider=MagicMock(),
-    )
-    assert isinstance(runner._monitor, ArxivMonitor)
-
-
-def test_from_paths_with_extra_providers_builds_multi_provider_monitor(
-    tmp_path,
-) -> None:
-    """When extra_providers is supplied, MultiProviderMonitor is selected."""
-    db_path = tmp_path / "monitoring.db"
-    extras = {PaperSource.SEMANTIC_SCHOLAR: _make_provider()}
-    runner = MonitoringRunner.from_paths(
-        db_path=db_path,
-        registry=MagicMock(),
-        arxiv_provider=MagicMock(),
-        extra_providers=extras,
-    )
-    assert isinstance(runner._monitor, MultiProviderMonitor)
-    # arXiv plus the one extra
-    assert PaperSource.ARXIV in runner._monitor._providers
-    assert PaperSource.SEMANTIC_SCHOLAR in runner._monitor._providers
-
-
-def test_from_paths_with_only_query_expander_builds_multi_provider(
-    tmp_path,
-) -> None:
-    """Even without extras, providing a query_expander promotes to
-    MultiProviderMonitor (the LLM expansion is the upgrade signal).
-    """
-    db_path = tmp_path / "monitoring.db"
-    runner = MonitoringRunner.from_paths(
-        db_path=db_path,
-        registry=MagicMock(),
-        arxiv_provider=MagicMock(),
-        query_expander=MagicMock(),
-    )
-    assert isinstance(runner._monitor, MultiProviderMonitor)
-
-
-def test_from_paths_rejects_arxiv_in_extra_providers(tmp_path) -> None:
-    """Caller must not pass arXiv via ``extra_providers`` -- the
-    canonical arXiv provider goes through ``arxiv_provider`` to keep
-    the wiring contract single-source.
-    """
-    db_path = tmp_path / "monitoring.db"
-    with pytest.raises(ValueError, match="must not include PaperSource.ARXIV"):
-        MonitoringRunner.from_paths(
-            db_path=db_path,
-            registry=MagicMock(),
-            arxiv_provider=MagicMock(),
-            extra_providers={PaperSource.ARXIV: _make_provider()},
-        )
-
-
-# ---------------------------------------------------------------------------
-# H-C6: empty-dict extra_providers builds MultiProviderMonitor
-# ---------------------------------------------------------------------------
-
-
-def test_from_paths_with_empty_dict_extra_providers_builds_multi_provider(
-    tmp_path,
-) -> None:
-    """H-C6: extra_providers={} (empty dict, not None) explicitly opts the
-    caller into MultiProviderMonitor. The is-not-None check must honour this.
-    """
-    db_path = tmp_path / "monitoring.db"
-    runner = MonitoringRunner.from_paths(
-        db_path=db_path,
-        registry=MagicMock(),
-        arxiv_provider=MagicMock(),
-        extra_providers={},  # empty but explicitly provided
-    )
-    assert isinstance(runner._monitor, MultiProviderMonitor)
-    # Only arXiv (from arxiv_provider); the empty extras dict adds nothing.
-    assert PaperSource.ARXIV in runner._monitor._providers
-    assert len(runner._monitor._providers) == 1
+# (from_paths monitor-selection tests have been relocated to test_runner.py
+#  under TestFromPathsFactory — see H-M6)
 
 
 # ---------------------------------------------------------------------------

@@ -116,17 +116,6 @@ class MultiProviderMonitorConfig(BaseModel):
         description="Prefix used when affiliating monitored papers in the registry.",
     )
 
-    @classmethod
-    def with_defaults(cls) -> "MultiProviderMonitorConfig":
-        """Return a config with all defaults applied.
-
-        .. deprecated::
-            Calling ``MultiProviderMonitorConfig()`` directly is equivalent
-            and is preferred. This classmethod is retained for backward
-            compatibility only and will be removed in a future iteration.
-        """
-        return cls()
-
 
 class MultiProviderMonitor:
     """Polls multiple discovery providers, optionally with query expansion.
@@ -142,8 +131,9 @@ class MultiProviderMonitor:
             the subscription's query is expanded into N variants via
             an LLM call before the provider fan-out. When ``None``, only
             the literal subscription query is searched (no LLM cost).
-        config: Knobs (caps, prefix). Defaults via
-            :meth:`MultiProviderMonitorConfig.with_defaults`.
+        config: Knobs (caps, prefix). Defaults to
+            ``MultiProviderMonitorConfig()`` (all fields at their
+            default values).
 
     Raises:
         ValueError: If ``providers`` is empty or ``config`` rejects the
@@ -166,7 +156,7 @@ class MultiProviderMonitor:
         self._providers = dict(providers)  # defensive copy
         self._registry = registry
         self._query_expander = query_expander
-        self._config = config or MultiProviderMonitorConfig.with_defaults()
+        self._config = config or MultiProviderMonitorConfig()
 
     # ------------------------------------------------------------------
     # Public API — same shape as ArxivMonitor.check()
@@ -255,6 +245,13 @@ class MultiProviderMonitor:
         # Step 3: fan-out across (variant × provider). One provider+variant
         # failure does NOT abort the cycle — each is independent.
         # H-S3: Only search providers the subscription's allowlist permits.
+        #
+        # L-7: The nested loop is sequential by design. Fan-out is IO-bound
+        # (arXiv, S2, OpenAlex each have their own rate limits), and the
+        # provider SDKs are not guaranteed thread-safe. Async gather across
+        # providers would also complicate partial-failure accounting without
+        # meaningful latency gains at small provider counts (≤4). Change
+        # only after profiling confirms fan-out latency is the bottleneck.
         fetched: list[PaperMetadata] = []
         partial_failure = expansion_degraded  # H-C5: expander degradation → PARTIAL
         for variant in queries:
@@ -287,6 +284,12 @@ class MultiProviderMonitor:
 
         # Step 5: enforce per-cycle paper cap
         if len(deduped_fetch) > self._config.max_papers_per_cycle:
+            logger.info(
+                "monitor_per_cycle_cap_applied",
+                subscription_id=subscription.subscription_id,
+                papers_before_cap=len(deduped_fetch),
+                cap=self._config.max_papers_per_cycle,
+            )
             deduped_fetch = deduped_fetch[: self._config.max_papers_per_cycle]
 
         run.papers_seen = len(deduped_fetch)

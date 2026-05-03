@@ -47,6 +47,12 @@ MAX_KEYWORDS_PER_SUBSCRIPTION = 100
 MAX_EXCLUDE_KEYWORDS_PER_SUBSCRIPTION = 100
 MAX_PAPERS_PER_CYCLE = 1000
 
+# H-C2: Maximum lookback window (hours) for the TimeframeRecent model.
+# ArxivProvider validates the string at construction time so we cap here.
+# Both ArxivMonitor and MultiProviderMonitor import this instead of each
+# defining a local ``_MAX_POLL_HOURS = 720`` copy.
+MAX_POLL_HOURS = 720
+
 # Subscription name pattern: same character class as the rest of the
 # Phase 9 surface (matches ``ENTITY_NAME_PATTERN`` extended with
 # underscore so existing user_id slugs keep working).

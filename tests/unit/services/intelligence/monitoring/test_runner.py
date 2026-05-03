@@ -14,6 +14,10 @@ Covers:
   -- the in-memory run is still returned.
 - ``mark_checked`` errors are logged but don't break the cycle.
 - Empty active list returns ``[]`` and does not touch monitor / repo.
+- ``from_paths`` monitor selection: ArxivMonitor vs MultiProviderMonitor
+  based on extra_providers / query_expander (H-M6: relocated from
+  test_multi_provider_monitor.py so all from_paths tests live here).
+- H-S1: Runner passes budget counters to MultiProviderMonitor.
 """
 
 from __future__ import annotations
@@ -23,12 +27,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.services.intelligence.monitoring.arxiv_monitor import ArxivMonitorResult
+from src.services.intelligence.monitoring.arxiv_monitor import (
+    ArxivMonitor,
+    ArxivMonitorResult,
+)
 from src.services.intelligence.monitoring.models import (
     MonitoringRun,
     MonitoringRunStatus,
+    PaperSource,
     ResearchSubscription,
     SubscriptionStatus,
+)
+from src.services.intelligence.monitoring.multi_provider_monitor import (
+    MultiProviderMonitor,
 )
 from src.services.intelligence.monitoring.run_repository import (
     MonitoringRunRepository,
@@ -270,6 +281,87 @@ class TestFromPathsFactory:
                 arxiv_provider=MagicMock(),
             )
         assert runner is not None
+
+    # H-M6: relocated from test_multi_provider_monitor.py so all from_paths
+    # monitor-selection tests live together in test_runner.py.
+
+    def test_from_paths_with_no_extras_builds_arxiv_monitor(
+        self, tmp_path: Path
+    ) -> None:
+        """Backward-compatible default: legacy ArxivMonitor when no extras
+        and no expander are provided.
+        """
+        db_path = tmp_path / "monitoring.db"
+        runner = MonitoringRunner.from_paths(
+            db_path=db_path,
+            registry=MagicMock(),
+            arxiv_provider=MagicMock(),
+        )
+        assert isinstance(runner._monitor, ArxivMonitor)
+
+    def test_from_paths_with_extra_providers_builds_multi_provider_monitor(
+        self, tmp_path: Path
+    ) -> None:
+        """When extra_providers is supplied, MultiProviderMonitor is selected."""
+        db_path = tmp_path / "monitoring.db"
+        extras = {PaperSource.SEMANTIC_SCHOLAR: MagicMock()}
+        runner = MonitoringRunner.from_paths(
+            db_path=db_path,
+            registry=MagicMock(),
+            arxiv_provider=MagicMock(),
+            extra_providers=extras,
+        )
+        assert isinstance(runner._monitor, MultiProviderMonitor)
+        # arXiv plus the one extra.
+        assert PaperSource.ARXIV in runner._monitor._providers
+        assert PaperSource.SEMANTIC_SCHOLAR in runner._monitor._providers
+
+    def test_from_paths_with_only_query_expander_builds_multi_provider(
+        self, tmp_path: Path
+    ) -> None:
+        """Even without extras, providing a query_expander promotes to
+        MultiProviderMonitor (the LLM expansion is the upgrade signal).
+        """
+        db_path = tmp_path / "monitoring.db"
+        runner = MonitoringRunner.from_paths(
+            db_path=db_path,
+            registry=MagicMock(),
+            arxiv_provider=MagicMock(),
+            query_expander=MagicMock(),
+        )
+        assert isinstance(runner._monitor, MultiProviderMonitor)
+
+    def test_from_paths_rejects_arxiv_in_extra_providers(self, tmp_path: Path) -> None:
+        """Caller must not pass arXiv via ``extra_providers`` -- the
+        canonical arXiv provider goes through ``arxiv_provider`` to keep
+        the wiring contract single-source.
+        """
+        db_path = tmp_path / "monitoring.db"
+        with pytest.raises(ValueError, match="must not include PaperSource.ARXIV"):
+            MonitoringRunner.from_paths(
+                db_path=db_path,
+                registry=MagicMock(),
+                arxiv_provider=MagicMock(),
+                extra_providers={PaperSource.ARXIV: MagicMock()},
+            )
+
+    def test_from_paths_with_empty_dict_extra_providers_builds_multi_provider(
+        self, tmp_path: Path
+    ) -> None:
+        """H-C6: extra_providers={} (empty dict, not None) explicitly opts the
+        caller into MultiProviderMonitor. The is-not-None check must honour this.
+        """
+        db_path = tmp_path / "monitoring.db"
+        runner = MonitoringRunner.from_paths(
+            db_path=db_path,
+            registry=MagicMock(),
+            arxiv_provider=MagicMock(),
+            extra_providers={},  # empty but explicitly provided
+        )
+        assert isinstance(runner._monitor, MultiProviderMonitor)
+        # Only arXiv (from arxiv_provider); the empty extras dict adds nothing.
+        assert PaperSource.ARXIV in runner._monitor._providers
+        assert len(runner._monitor._providers) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -649,8 +741,18 @@ class TestScorerIntegration:
         from src.services.intelligence.monitoring.runner import MonitoringRunner
 
         sub = _make_subscription(subscription_id="sub-scorer")
-        paper1 = MonitoringPaperRecord(paper_id="p1", title="Paper 1", is_new=True)
-        paper2 = MonitoringPaperRecord(paper_id="p2", title="Paper 2", is_new=True)
+        paper1 = MonitoringPaperRecord(
+            paper_id="p1",
+            title="Paper 1",
+            is_new=True,
+            url="https://arxiv.org/abs/p1",
+        )
+        paper2 = MonitoringPaperRecord(
+            paper_id="p2",
+            title="Paper 2",
+            is_new=True,
+            url="https://arxiv.org/abs/p2",
+        )
         run_obj = _make_run(subscription_id="sub-scorer")
         run_obj = run_obj.model_copy(update={"papers": [paper1, paper2]})
 
@@ -701,8 +803,18 @@ class TestScorerIntegration:
         from src.services.intelligence.monitoring.runner import MonitoringRunner
 
         sub = _make_subscription(subscription_id="sub-scorer2")
-        paper1 = MonitoringPaperRecord(paper_id="p1", title="Paper 1", is_new=True)
-        paper2 = MonitoringPaperRecord(paper_id="p2", title="Paper 2", is_new=True)
+        paper1 = MonitoringPaperRecord(
+            paper_id="p1",
+            title="Paper 1",
+            is_new=True,
+            url="https://arxiv.org/abs/p1",
+        )
+        paper2 = MonitoringPaperRecord(
+            paper_id="p2",
+            title="Paper 2",
+            is_new=True,
+            url="https://arxiv.org/abs/p2",
+        )
         run_obj = _make_run(subscription_id="sub-scorer2")
         run_obj = run_obj.model_copy(update={"papers": [paper1, paper2]})
         result = ArxivMonitorResult(run=run_obj, new_papers=[], deduplicated_papers=[])
@@ -772,6 +884,81 @@ class TestScorerIntegration:
         runs = await runner.run_once()
 
         assert runs[0].papers[0].relevance_score is None
+
+    @pytest.mark.asyncio
+    async def test_scorer_skips_paper_with_no_url(self) -> None:
+        """C-2: Papers with url=None are skipped before scoring rather than
+        fabricating an arXiv URL for non-arXiv papers.
+        The ``monitoring_relevance_score_skipped_no_url`` event is emitted.
+        """
+        import structlog.testing
+        from unittest.mock import AsyncMock as _AsyncMock, MagicMock as _MagicMock
+
+        from src.services.intelligence.monitoring.models import MonitoringPaperRecord
+        from src.services.intelligence.monitoring.relevance_scorer import (
+            RelevanceScoreResult,
+        )
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
+
+        sub = _make_subscription(subscription_id="sub-nourl")
+        paper_no_url = MonitoringPaperRecord(
+            paper_id="p-nourl", title="No URL Paper", is_new=True, url=None
+        )
+        paper_with_url = MonitoringPaperRecord(
+            paper_id="p-url",
+            title="Has URL Paper",
+            is_new=True,
+            url="https://arxiv.org/abs/p-url",
+        )
+        run_obj = _make_run(subscription_id="sub-nourl")
+        run_obj = run_obj.model_copy(update={"papers": [paper_no_url, paper_with_url]})
+        result = ArxivMonitorResult(run=run_obj, new_papers=[], deduplicated_papers=[])
+
+        ok_result = RelevanceScoreResult(
+            score=0.7,
+            reasoning="Some match found in paper",
+            model_used="gemini-1.5-flash",
+            cost_usd=0.0,
+        )
+        scorer = _MagicMock()
+        scorer.score = _AsyncMock(return_value=ok_result)
+
+        sub_mgr = _MagicMock()
+        sub_mgr.list_subscriptions = _MagicMock(return_value=[sub])
+        sub_mgr.mark_checked = _MagicMock()
+        monitor = _MagicMock()
+        monitor.check = _AsyncMock(return_value=result)
+        repo = _MagicMock()
+        repo.record_run = _MagicMock()
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+            scorer=scorer,
+        )
+
+        import structlog
+        import src.services.intelligence.monitoring.runner as runner_module2
+
+        runner_module2.logger = structlog.get_logger()
+
+        with structlog.testing.capture_logs() as logs:
+            runs = await runner.run_once()
+
+        # The paper with URL is scored; the paper without URL is skipped.
+        assert runs[0].papers[0].relevance_score is None  # no URL → skipped
+        assert runs[0].papers[1].relevance_score == pytest.approx(0.7)
+        # Scorer is called only once (for the URL paper).
+        assert scorer.score.await_count == 1
+
+        skip_events = [
+            e
+            for e in logs
+            if e.get("event") == "monitoring_relevance_score_skipped_no_url"
+        ]
+        assert len(skip_events) == 1
+        assert skip_events[0]["paper_id"] == "p-nourl"
 
 
 # ---------------------------------------------------------------------------
@@ -867,8 +1054,14 @@ class TestLLMBudgetCap:
 
         sub = _make_subscription(subscription_id="sub-budget")
         # Create 3 papers but set the budget cap to 1 so only 1 gets scored.
+        # Include URLs so the C-2 url-check does not skip these papers.
         papers = [
-            MonitoringPaperRecord(paper_id=f"p{i}", title=f"Paper {i}", is_new=True)
+            MonitoringPaperRecord(
+                paper_id=f"p{i}",
+                title=f"Paper {i}",
+                is_new=True,
+                url=f"https://arxiv.org/abs/p{i}",
+            )
             for i in range(3)
         ]
         run_obj = _make_run(subscription_id="sub-budget")
@@ -915,3 +1108,59 @@ class TestLLMBudgetCap:
             e for e in logs if e.get("event") == "monitoring_llm_budget_exhausted"
         ]
         assert len(exhausted_events) >= 1
+
+
+# ---------------------------------------------------------------------------
+# H-S1: Runner passes budget counters to MultiProviderMonitor
+# ---------------------------------------------------------------------------
+
+
+class TestMultiProviderMonitorBudgetPassthrough:
+    """H-S1: When the runner's monitor is a MultiProviderMonitor, _run_one
+    passes llm_calls_used and max_calls to monitor.check.
+    """
+
+    @pytest.mark.asyncio
+    async def test_run_once_passes_budget_to_multi_provider_monitor(self) -> None:
+        """The runner passes the cycle-wide llm_calls_used counter and
+        MAX_LLM_CALLS_PER_CYCLE to MultiProviderMonitor.check so the
+        expander is gated against the cycle budget.
+        """
+        from unittest.mock import AsyncMock as _AsyncMock, MagicMock as _MagicMock
+        from src.services.intelligence.monitoring.multi_provider_monitor import (
+            MultiProviderMonitor,
+        )
+
+        sub = _make_subscription(subscription_id="sub-budget-passthrough")
+
+        # Build a MultiProviderMonitor mock that records what was passed.
+        received_kwargs: dict = {}
+
+        async def mock_check(subscription, *, llm_calls_used=None, max_calls=None):
+            received_kwargs["llm_calls_used"] = llm_calls_used
+            received_kwargs["max_calls"] = max_calls
+            run = _make_run(subscription_id=subscription.subscription_id)
+            return ArxivMonitorResult(run=run, new_papers=[], deduplicated_papers=[])
+
+        monitor_mock = _MagicMock(spec=MultiProviderMonitor)
+        monitor_mock.check = _AsyncMock(side_effect=mock_check)
+
+        sub_mgr = _MagicMock()
+        sub_mgr.list_subscriptions = _MagicMock(return_value=[sub])
+        sub_mgr.mark_checked = _MagicMock()
+        repo = _MagicMock()
+        repo.record_run = _MagicMock()
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor_mock,
+            run_repo=repo,
+        )
+        await runner.run_once()
+
+        # The runner must have passed the budget counter and max cap.
+        assert received_kwargs.get("llm_calls_used") is not None
+        assert received_kwargs["llm_calls_used"][0] == 0  # starts at 0
+        from src.services.intelligence.monitoring.runner import MAX_LLM_CALLS_PER_CYCLE
+
+        assert received_kwargs.get("max_calls") == MAX_LLM_CALLS_PER_CYCLE

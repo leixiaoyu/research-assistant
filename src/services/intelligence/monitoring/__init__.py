@@ -31,6 +31,10 @@ from src.services.intelligence.monitoring.arxiv_monitor import (
     ArxivMonitor,
     ArxivMonitorResult,
 )
+from src.services.intelligence.monitoring.multi_provider_monitor import (
+    MultiProviderMonitor,
+    MultiProviderMonitorConfig,
+)
 from src.services.intelligence.monitoring.models import (
     MonitoringPaperAudit,
     MonitoringPaperRecord,
@@ -70,6 +74,8 @@ __all__ = [
     "MonitoringRunRepository",
     "MonitoringRunStatus",
     "MonitoringRunner",
+    "MultiProviderMonitor",
+    "MultiProviderMonitorConfig",
     "RelevanceScorer",
     "RelevanceScoreResult",
     "ResearchSubscription",

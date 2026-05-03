@@ -777,20 +777,23 @@ class MonitoringCheckJob(BaseJob):
             import os
 
             from src.models.llm import CostLimits, LLMConfig
+            from src.services.intelligence.monitoring._tier1_factory import (
+                build_tier1_extras,
+            )
 
             llm_svc = None
-            llm_api_key = os.environ.get("LLM_API_KEY") or os.environ.get(
-                "GEMINI_API_KEY"
-            )
-            if llm_api_key:
+            llm_api_key = os.environ.get("LLM_API_KEY")
+            if llm_api_key and llm_api_key.strip():
                 try:
                     llm_config = LLMConfig(api_key=llm_api_key)
                     llm_cost_limits = CostLimits()
                     llm_svc = LLMService(config=llm_config, cost_limits=llm_cost_limits)
                 except Exception as exc:
-                    logger.warning(
+                    # H-M7: env var was set but init failed — operator
+                    # misconfiguration, raise to error severity.
+                    logger.error(
                         "monitoring_check_job_llm_init_failed",
-                        error=str(exc),
+                        error_type=type(exc).__name__,
                         reason="scoring_will_be_skipped",
                     )
             else:
@@ -798,11 +801,18 @@ class MonitoringCheckJob(BaseJob):
                     "monitoring_check_job_no_llm_api_key",
                     reason="scoring_will_be_skipped",
                 )
+            # Tier 1 (Issue #139): wire multi-provider monitor + query
+            # expander when LLM is available. H-C4: delegated to
+            # build_tier1_extras so the wiring logic is not duplicated.
+            extra_providers, query_expander = build_tier1_extras(llm_svc)
+
             self._runner = MonitoringRunner.from_paths(
                 db_path=self._db_path,
                 registry=registry or RegistryService(),
                 arxiv_provider=arxiv_provider or ArxivProvider(),
                 llm_service=llm_svc,
+                extra_providers=extra_providers,
+                query_expander=query_expander,
             )
         self._digest_generator = digest_generator or DigestGenerator(
             output_root=digest_output_root,

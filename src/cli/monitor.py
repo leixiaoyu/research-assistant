@@ -114,15 +114,23 @@ def _build_runner(
     cost (or the side-effect risk) of constructing the registry +
     arxiv provider when they don't need them.
 
+    Tier 1 (Issue #139): when an LLM key is available we wire the
+    multi-provider monitor with arXiv + Semantic Scholar + OpenAlex +
+    HuggingFace, plus a :class:`QueryExpander` that turns each
+    subscription's literal query into N variants via Gemini Flash. This
+    dramatically broadens discovery without requiring spec changes —
+    the monitor still returns ``ArxivMonitorResult`` so the runner is
+    duck-type compatible. When the LLM key is missing, falls back to
+    legacy single-arXiv behavior (no expansion, single provider).
+
     Args:
         registry: Optional ``RegistryService`` seam for testing.
             When ``None``, a default ``RegistryService()`` is built.
         arxiv: Optional ``ArxivProvider`` seam for testing.
             When ``None``, a default ``ArxivProvider()`` is built.
     """
-    import os
-
     from src.models.llm import CostLimits, LLMConfig
+    from src.services.intelligence.monitoring._tier1_factory import build_tier1_extras
     from src.services.llm.service import LLMService
     from src.services.providers.arxiv import ArxivProvider
     from src.services.registry.service import RegistryService
@@ -130,26 +138,37 @@ def _build_runner(
     resolved_registry = registry if registry is not None else RegistryService()
     resolved_arxiv = arxiv if arxiv is not None else ArxivProvider()
 
-    # Build LLMService for relevance scoring from env (never hardcoded).
-    # If the key is absent, run without scoring (graceful degradation).
+    # Build LLMService for relevance scoring + query expansion from env
+    # (never hardcoded). If the key is absent, run without scoring or
+    # expansion (graceful degradation -- legacy single-arxiv behavior).
     llm_svc = None
-    llm_api_key = os.environ.get("LLM_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    if llm_api_key:
+    llm_api_key = os.environ.get("LLM_API_KEY")
+    if llm_api_key and llm_api_key.strip():
         try:
             llm_config = LLMConfig(api_key=llm_api_key)
             llm_cost_limits = CostLimits()
             llm_svc = LLMService(config=llm_config, cost_limits=llm_cost_limits)
         except Exception as exc:
-            logger.warning(
+            # H-M7: env var was set but init failed — this is an operator
+            # misconfiguration, not a soft degradation; raise to error level.
+            logger.error(
                 "monitor_cli_llm_init_failed",
-                error=str(exc),
-                reason="scoring_will_be_skipped",
+                error_type=type(exc).__name__,
+                reason="scoring_and_expansion_will_be_skipped",
             )
+
+    # Tier 1: build extra providers + query expander when LLM is wired.
+    # Constructed lazily so the legacy-fallback path doesn't pay the
+    # provider-construction cost. H-C4: delegated to build_tier1_extras.
+    extra_providers, query_expander = build_tier1_extras(llm_svc)
+
     return MonitoringRunner.from_paths(
         db_path=_resolve_db_path(),
         registry=resolved_registry,  # type: ignore[arg-type]
         arxiv_provider=resolved_arxiv,  # type: ignore[arg-type]
         llm_service=llm_svc,
+        extra_providers=extra_providers,  # type: ignore[arg-type]
+        query_expander=query_expander,
     )
 
 
@@ -366,11 +385,9 @@ def digest_command(
             raise typer.Exit(code=1)
         audit_run = latest_runs[0]
     else:
-        # ``run_id`` is non-None at this point (mutually-exclusive guard
-        # above). Use a proper guard rather than assert (H-C4).
-        if run_id is None:
-            raise typer.BadParameter("internal: run_id missing despite guard")
-        audit_run = repo.get_run(run_id)
+        # ``run_id`` is non-None at this point — guaranteed by the
+        # mutually-exclusive guard above (H-M8: removed unreachable inner guard).
+        audit_run = repo.get_run(run_id)  # type: ignore[arg-type]
         if audit_run is None:
             display_error(f"Run not found: {run_id}")
             raise typer.Exit(code=1)

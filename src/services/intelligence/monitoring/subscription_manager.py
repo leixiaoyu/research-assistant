@@ -199,6 +199,7 @@ class SubscriptionManager:
             # are atomic against concurrent writers. Without this, two
             # callers can both observe count==MAX-1 and both insert,
             # silently breaking the per-user cap.
+            # TODO(#134): wrap in retry_on_lock_contention
             conn.execute("BEGIN IMMEDIATE")
             current = self._count_user_subscriptions(conn, subscription.user_id)
             if current >= self.MAX_SUBSCRIPTIONS_PER_USER:

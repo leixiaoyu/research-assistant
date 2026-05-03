@@ -596,6 +596,7 @@ class SQLiteGraphStore:
         conn = self._get_connection()
         try:
             # Acquire write lock up-front to prevent the read-then-update race
+            # TODO(#134): wrap in retry_on_lock_contention
             conn.execute("BEGIN IMMEDIATE")
 
             # Get current node

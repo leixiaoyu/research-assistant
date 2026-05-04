@@ -70,7 +70,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator, Optional
+from typing import TYPE_CHECKING, Callable, Iterator, Optional, TypeVar
 
 import structlog
 
@@ -88,6 +88,8 @@ if TYPE_CHECKING:
     from src.services.intelligence.citation.influence_scorer import InfluenceMetrics
 
 logger = structlog.get_logger(__name__)
+
+_T = TypeVar("_T")
 
 
 # Default freshness window for ``get_metrics``. Mirrors
@@ -202,6 +204,40 @@ class CitationInfluenceRepository:
         with open_connection(self.db_path) as conn:
             yield conn
 
+    def _retry(
+        self,
+        operation: Callable[[], _T],
+        *,
+        operation_name: str,
+        **extra_log_fields: object,
+    ) -> _T:
+        """Thin wrapper around :func:`retry_on_lock_contention`.
+
+        Applies the repository's standard retry budget
+        (:data:`DEFAULT_MAX_ATTEMPTS`, :data:`DEFAULT_BACKOFF_SECONDS`)
+        so each method only has to supply the ``operation_name`` and
+        any extra log fields, keeping the retry boilerplate DRY.
+
+        Args:
+            operation: Zero-arg callable to execute and retry on
+                lock contention.
+            operation_name: Passed through to
+                :func:`retry_on_lock_contention` for log correlation.
+            **extra_log_fields: Additional structured log fields
+                (e.g. ``paper_id=...``) merged into every log event.
+
+        Returns:
+            Whatever ``operation()`` returns on its first successful
+            attempt.
+        """
+        return retry_on_lock_contention(
+            operation,
+            max_attempts=DEFAULT_MAX_ATTEMPTS,
+            backoff_seconds=DEFAULT_BACKOFF_SECONDS,
+            operation_name=operation_name,
+            **extra_log_fields,
+        )
+
     # ------------------------------------------------------------------
     # Writes
     # ------------------------------------------------------------------
@@ -237,10 +273,8 @@ class CitationInfluenceRepository:
             metrics: Single :class:`InfluenceMetrics` row to upsert.
         """
         try:
-            retry_on_lock_contention(
+            self._retry(
                 lambda: self._record_metrics_once(metrics),
-                max_attempts=DEFAULT_MAX_ATTEMPTS,
-                backoff_seconds=DEFAULT_BACKOFF_SECONDS,
                 operation_name="influence_record_metrics",
                 paper_id=metrics.paper_id,
             )
@@ -328,10 +362,8 @@ class CitationInfluenceRepository:
                     conn.rollback()
                     raise
 
-        return retry_on_lock_contention(
+        return self._retry(
             _delete_once,
-            max_attempts=DEFAULT_MAX_ATTEMPTS,
-            backoff_seconds=DEFAULT_BACKOFF_SECONDS,
             operation_name="influence_delete_stale",
             cutoff=older_than.isoformat(),
         )
@@ -422,10 +454,8 @@ class CitationInfluenceRepository:
                 computed_at=computed_at,
             )
 
-        return retry_on_lock_contention(
+        return self._retry(
             _get_once,
-            max_attempts=DEFAULT_MAX_ATTEMPTS,
-            backoff_seconds=DEFAULT_BACKOFF_SECONDS,
             operation_name="influence_get_metrics",
             paper_id=paper_id,
         )

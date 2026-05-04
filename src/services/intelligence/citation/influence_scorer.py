@@ -14,13 +14,25 @@ Computes per-paper influence metrics over the citation graph:
 Persistence
 -----------
 Results are cached in the ``citation_influence_metrics`` table
-introduced by V4 of the migration manager. ``compute_for_paper`` checks
+introduced by V4 of the migration manager. CRUD on that table is
+delegated to :class:`CitationInfluenceRepository` (issue #134) so the
+scorer no longer reaches around :class:`SQLiteGraphStore` to manage
+schemas the graph store does not own. ``compute_for_paper`` checks
 the cache first; if the row's ``computed_at`` is within ``CACHE_TTL``
 (7 days), the cached row is returned and the expensive PageRank /
 HITS work is skipped. ``compute_for_graph`` is the bulk variant: a
-single PageRank invocation covers all requested nodes, then the rows
-are upserted in one ``BEGIN IMMEDIATE`` transaction so partial-write
-recovery is straightforward.
+single PageRank invocation covers all requested nodes, then each row
+is upserted via the repository.
+
+Async safety
+------------
+The repository's read and write paths are SYNC (the write path uses
+:func:`retry_on_lock_contention` which calls ``time.sleep``). All
+calls into the repository from the async ``compute_for_paper`` /
+``compute_for_graph`` methods are wrapped in
+``await asyncio.to_thread(...)`` so contention backoff (or any
+incidental I/O) does not stall the event loop -- the canonical
+async-wrapping pattern documented in CLAUDE.md "SQLite write retry".
 
 Failure semantics
 -----------------
@@ -31,15 +43,14 @@ Failure semantics
   ``influence_scorer_velocity_skipped_missing_date`` and returns
   velocity = 0.0.
 - Cache write failures DO NOT cause the API call to fail — the
-  computed metrics are still returned to the caller. The cache miss
-  is logged via ``influence_scorer_cache_write_failed`` so ops can
-  investigate disk pressure / migration drift.
+  repository swallows non-contention ``sqlite3.Error`` after logging
+  ``citation_influence_repo_write_failed`` so the computed metrics are
+  still returned to the caller.
 """
 
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -51,12 +62,11 @@ from src.services.intelligence.citation._id_validation import (
     CANONICAL_NODE_ID_PATTERN,
     PAPER_ID_MAX_LENGTH,
 )
-from src.services.intelligence.models import EdgeType, NodeType
-from src.storage.intelligence_graph import (
-    GraphAlgorithms,
-    SQLiteGraphStore,
-    open_connection,
+from src.services.intelligence.citation.influence_repository import (
+    CitationInfluenceRepository,
 )
+from src.services.intelligence.models import EdgeType, NodeType
+from src.storage.intelligence_graph import GraphAlgorithms, SQLiteGraphStore
 
 logger = structlog.get_logger(__name__)
 
@@ -130,6 +140,7 @@ class InfluenceScorer:
         *,
         cache_ttl: timedelta = DEFAULT_CACHE_TTL,
         now: Optional[datetime] = None,
+        repo: Optional[CitationInfluenceRepository] = None,
     ) -> None:
         """Initialise the scorer.
 
@@ -142,10 +153,20 @@ class InfluenceScorer:
                 7 days per spec.
             now: Injectable "current time" for tests. Defaults to
                 ``datetime.now(timezone.utc)`` evaluated on each lookup.
+            repo: Pre-built :class:`CitationInfluenceRepository` for
+                dependency injection (tests, alternative wiring). When
+                ``None`` (the backward-compat default), a repository is
+                constructed against ``store.db_path`` and initialised --
+                preserving the legacy "scorer manages its own DB"
+                surface for callers that haven't migrated to explicit
+                injection yet.
         """
         self.store = store
         self.cache_ttl = cache_ttl
         self._now_override = now
+        if repo is None:
+            repo = CitationInfluenceRepository.from_path(store.db_path)
+        self._repo = repo
 
     @classmethod
     def from_paths(
@@ -154,10 +175,17 @@ class InfluenceScorer:
         db_path: Path | str,
         cache_ttl: timedelta = DEFAULT_CACHE_TTL,
     ) -> "InfluenceScorer":
-        """Convenience factory mirroring CitationCrawler.from_paths."""
+        """Convenience factory mirroring CitationCrawler.from_paths.
+
+        Constructs the underlying :class:`SQLiteGraphStore` *and* a
+        matching :class:`CitationInfluenceRepository` against the same
+        ``db_path`` (issue #134) so callers no longer need to know
+        the cache table exists.
+        """
         store = SQLiteGraphStore(db_path)
         store.initialize()
-        return cls(store=store, cache_ttl=cache_ttl)
+        repo = CitationInfluenceRepository.from_path(db_path)
+        return cls(store=store, cache_ttl=cache_ttl, repo=repo)
 
     def _now(self) -> datetime:
         """Return the current UTC time, honoring the test override."""
@@ -174,15 +202,29 @@ class InfluenceScorer:
 
         Cache hit: returns the stored row without invoking PageRank.
         Cache miss: runs PageRank + HITS over the whole graph, writes
-        the row, and returns the computed metrics.
+        the row via :class:`CitationInfluenceRepository`, and returns
+        the computed metrics.
+
+        Async safety:
+            The repository's read and write paths are SYNC (the write
+            path uses ``time.sleep`` for retry backoff). Both calls
+            below are wrapped in ``asyncio.to_thread`` so contention
+            does not stall the event loop -- canonical pattern from
+            CLAUDE.md "SQLite write retry".
 
         Raises:
             ValueError: If ``paper_id`` is malformed.
         """
         self._validate_paper_id(paper_id)
 
-        cached = self._read_cache(paper_id)
-        if cached is not None and self._is_fresh(cached.computed_at):
+        cached = await asyncio.to_thread(
+            self._repo.get_metrics,
+            paper_id,
+            self._max_age_days(),
+        )
+        if cached is not None:
+            # The repo's TTL filter already returned ``None`` for stale
+            # rows, so any non-None hit is fresh by construction.
             return cached
 
         # Cache miss → compute over the whole graph (PageRank is
@@ -193,14 +235,16 @@ class InfluenceScorer:
             paper_id,
             InfluenceMetrics(paper_id=paper_id, computed_at=self._now()),
         )
-        self._write_cache([metrics])
+        await asyncio.to_thread(self._repo.record_metrics, metrics)
         return metrics
 
     async def compute_for_graph(self, node_ids: list[str]) -> list[InfluenceMetrics]:
         """Bulk compute metrics for a set of papers.
 
-        One PageRank invocation; one HITS invocation; one batched
-        upsert. Returns metrics in the same order as ``node_ids``.
+        One PageRank invocation; one HITS invocation; one
+        ``record_metrics`` call per row (each in
+        ``asyncio.to_thread`` so the event loop is never blocked).
+        Returns metrics in the same order as ``node_ids``.
 
         Raises:
             ValueError: If any ``node_id`` is malformed.
@@ -222,8 +266,24 @@ class InfluenceScorer:
                 InfluenceMetrics(paper_id=nid, computed_at=self._now()),
             )
             out.append(metrics)
-        self._write_cache(out)
+        for metrics in out:
+            await asyncio.to_thread(self._repo.record_metrics, metrics)
         return out
+
+    def _max_age_days(self) -> int:
+        """Convert the scorer's ``cache_ttl`` to whole days for the repo.
+
+        The repository expresses freshness as an integer day count.
+        Round up so a TTL of (e.g.) 7 days + 1 second still treats a
+        7-day-old row as fresh -- preserves the original
+        ``timedelta``-based ``_is_fresh`` semantics for callers that
+        haven't moved off the legacy ``cache_ttl`` constructor arg.
+        Anything sub-day rounds up to 1 to keep the repo's
+        ``max_age_days > 0`` precondition satisfied.
+        """
+        seconds = self.cache_ttl.total_seconds()
+        days = int(-(-seconds // 86_400))  # ceil division on integers
+        return max(1, days)
 
     # ------------------------------------------------------------------
     # Internals
@@ -243,10 +303,6 @@ class InfluenceScorer:
                 f"Invalid paper_id format: {paper_id!r}. "
                 "Allowed: alphanumeric, colons, periods, hyphens, underscores."
             )
-
-    def _is_fresh(self, computed_at: datetime) -> bool:
-        """True iff ``computed_at`` is within the TTL window."""
-        return self._now() - computed_at < self.cache_ttl
 
     async def _compute_metrics_for_graph(
         self, target_ids: set[str]
@@ -429,87 +485,3 @@ class InfluenceScorer:
         if node is None:
             return 0
         return int((node.properties or {}).get("citation_count") or 0)
-
-    # ------------------------------------------------------------------
-    # Persistence
-    # ------------------------------------------------------------------
-
-    def _read_cache(self, paper_id: str) -> Optional[InfluenceMetrics]:
-        """Read a cached metrics row by paper_id; None if absent."""
-        with open_connection(self.store.db_path) as conn:
-            cursor = conn.execute(
-                """
-                SELECT paper_id, citation_count, citation_velocity,
-                       pagerank_score, hub_score, authority_score,
-                       computed_at
-                FROM citation_influence_metrics
-                WHERE paper_id = ?
-                """,
-                (paper_id,),
-            )
-            row = cursor.fetchone()
-        if row is None:
-            return None
-        return InfluenceMetrics(
-            paper_id=row["paper_id"],
-            citation_count=row["citation_count"],
-            citation_velocity=row["citation_velocity"],
-            pagerank_score=row["pagerank_score"],
-            hub_score=row["hub_score"],
-            authority_score=row["authority_score"],
-            computed_at=datetime.fromisoformat(row["computed_at"]),
-        )
-
-    def _write_cache(self, rows: list[InfluenceMetrics]) -> None:
-        """Upsert metrics rows in a single BEGIN IMMEDIATE transaction.
-
-        Failure here is logged but does NOT propagate — the computed
-        metrics are still returned to the caller. The next read will
-        see the cache miss and recompute.
-        """
-        if not rows:
-            return
-        payload = [
-            (
-                m.paper_id,
-                m.citation_count,
-                m.citation_velocity,
-                m.pagerank_score,
-                m.hub_score,
-                m.authority_score,
-                m.computed_at.isoformat(),
-            )
-            for m in rows
-        ]
-        try:
-            with open_connection(self.store.db_path) as conn:
-                # TODO(#134): wrap in retry_on_lock_contention
-                conn.execute("BEGIN IMMEDIATE")
-                conn.executemany(
-                    """
-                    INSERT INTO citation_influence_metrics (
-                        paper_id, citation_count, citation_velocity,
-                        pagerank_score, hub_score, authority_score,
-                        computed_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(paper_id) DO UPDATE SET
-                        citation_count = excluded.citation_count,
-                        citation_velocity = excluded.citation_velocity,
-                        pagerank_score = excluded.pagerank_score,
-                        hub_score = excluded.hub_score,
-                        authority_score = excluded.authority_score,
-                        computed_at = excluded.computed_at
-                    """,
-                    payload,
-                )
-                conn.commit()
-        except sqlite3.Error as exc:
-            # Audit-write the failure path so ops can grep for cache
-            # write outages. Returning the in-memory metrics preserves
-            # observability for the caller.
-            logger.error(
-                "influence_scorer_cache_write_failed",
-                row_count=len(rows),
-                error=str(exc),
-            )

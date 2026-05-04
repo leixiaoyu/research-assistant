@@ -298,6 +298,13 @@ class MonitoringPaperRecord(BaseModel):
 
     ``relevance_score`` and ``relevance_reasoning`` are populated by the
     Week 2 ``RelevanceScorer``; for Week 1 they remain ``None``.
+
+    ``source`` (issue #141) is REQUIRED — every record must carry the
+    discovery provider the paper came from so the audit log is honest
+    about provenance. The ``MultiProviderMonitor`` (PR #140) fans out
+    across arXiv + OpenAlex + HuggingFace + Semantic Scholar; before
+    this field existed the cycle-level ``MonitoringRun.source`` was
+    hardcoded to ARXIV which silently misattributed non-arXiv papers.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -317,6 +324,15 @@ class MonitoringPaperRecord(BaseModel):
         description=(
             "True if the paper was unknown to the global PaperRegistry "
             "before this cycle (i.e., not deduplicated)."
+        ),
+    )
+    source: PaperSource = Field(
+        ...,
+        description=(
+            "Discovery provider for this paper (issue #141). REQUIRED — "
+            "callers must specify the actual source rather than relying "
+            "on a default so multi-provider audit rows can never silently "
+            "fall back to a hardcoded value."
         ),
     )
     relevance_score: Optional[float] = Field(
@@ -377,6 +393,15 @@ class MonitoringPaperAudit(BaseModel):
             "True if the paper was newly registered with the global "
             "PaperRegistry during this run. Mirrors the ``is_new`` "
             "flag on ``MonitoringPaperRecord``."
+        ),
+    )
+    source: PaperSource = Field(
+        default=PaperSource.ARXIV,
+        description=(
+            "Discovery provider for this paper (issue #141). "
+            "Backwards-compatible default of ARXIV matches the V5 "
+            "schema's column default — pre-Tier-1 audit rows that have "
+            "no recorded source are arXiv by definition."
         ),
     )
     relevance_score: Optional[float] = Field(

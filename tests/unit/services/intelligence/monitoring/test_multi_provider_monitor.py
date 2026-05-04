@@ -931,3 +931,132 @@ def test_build_tier1_extras_returns_none_on_construction_failure(
     # When the factory is patched to always return (None, None), caller receives None.
     assert extra_providers is None
     assert query_expander is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #141: per-paper source provenance
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_records_actual_source_per_paper() -> None:
+    """Issue #141: ``MonitoringRun.papers`` carries the actual provider per paper.
+
+    The MVP subscription only allows ARXIV in ``sources``, so all papers
+    in this single-provider scenario must come back stamped
+    ``source=PaperSource.ARXIV`` -- never the silent default the V5
+    column would have given them.
+    """
+    sub = _make_subscription()
+    arxiv = _make_provider(return_papers=[_make_paper("p1")])
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=_make_registry(),
+    )
+    result = await monitor.check(sub)
+    assert result.run.papers_seen == 1
+    assert result.run.papers[0].source is PaperSource.ARXIV
+
+
+@pytest.mark.asyncio
+async def test_check_records_per_paper_source_for_each_provider() -> None:
+    """Issue #141: when a subscription allows multiple providers, each
+    paper's source field reflects the provider it actually came from --
+    NOT a hardcoded ``PaperSource.ARXIV`` (the lie #141 is fixing).
+
+    Subscription is constructed with ``sources=[ARXIV, OPENALEX, ...]``
+    bypassing the model-level allowlist via ``object.__setattr__`` so
+    this test focuses on the monitor's per-paper source threading
+    rather than the (separately-tested) model validator.
+    """
+    arxiv_paper = _make_paper("arxiv-paper-1", title="ArXiv paper")
+    openalex_paper = _make_paper("oa-paper-1", title="OpenAlex paper")
+    s2_paper = _make_paper("s2-paper-1", title="S2 paper")
+    hf_paper = _make_paper("hf-paper-1", title="HF paper")
+
+    arxiv = _make_provider(return_papers=[arxiv_paper])
+    openalex = _make_provider(return_papers=[openalex_paper])
+    s2 = _make_provider(return_papers=[s2_paper])
+    hf = _make_provider(return_papers=[hf_paper])
+
+    sub = _make_subscription()
+    # Bypass the model validator (which restricts MVP subscriptions to
+    # ARXIV-only) so we can exercise the multi-provider paper-tracking
+    # code path. This is exactly the path Tier 1 production builds will
+    # hit once the subscription validator is widened in a follow-up.
+    object.__setattr__(
+        sub,
+        "sources",
+        [
+            PaperSource.ARXIV,
+            PaperSource.OPENALEX,
+            PaperSource.SEMANTIC_SCHOLAR,
+            PaperSource.HUGGINGFACE,
+        ],
+    )
+
+    monitor = MultiProviderMonitor(
+        providers={
+            PaperSource.ARXIV: arxiv,
+            PaperSource.OPENALEX: openalex,
+            PaperSource.SEMANTIC_SCHOLAR: s2,
+            PaperSource.HUGGINGFACE: hf,
+        },
+        registry=_make_registry(),
+    )
+    result = await monitor.check(sub)
+
+    # Index the audit rows by paper_id for an unambiguous mapping
+    # assertion.
+    by_id = {p.paper_id: p for p in result.run.papers}
+    assert by_id["arxiv-paper-1"].source is PaperSource.ARXIV
+    assert by_id["oa-paper-1"].source is PaperSource.OPENALEX
+    assert by_id["s2-paper-1"].source is PaperSource.SEMANTIC_SCHOLAR
+    assert by_id["hf-paper-1"].source is PaperSource.HUGGINGFACE
+
+
+@pytest.mark.asyncio
+async def test_check_dedup_preserves_first_seen_source() -> None:
+    """When two providers return the same paper, the first-seen source wins.
+
+    Iteration order over the providers dict is insertion order in
+    Python 3.7+, so ``ARXIV`` (inserted first) is the source of the
+    deduplicated row -- not OPENALEX which came second.
+    """
+    shared = _make_paper("shared-paper")
+    arxiv = _make_provider(return_papers=[shared])
+    openalex = _make_provider(return_papers=[shared])
+
+    sub = _make_subscription()
+    object.__setattr__(sub, "sources", [PaperSource.ARXIV, PaperSource.OPENALEX])
+
+    monitor = MultiProviderMonitor(
+        providers={
+            PaperSource.ARXIV: arxiv,
+            PaperSource.OPENALEX: openalex,
+        },
+        registry=_make_registry(),
+    )
+    result = await monitor.check(sub)
+
+    assert result.run.papers_seen == 1
+    # First-seen wins; arXiv was iterated first.
+    assert result.run.papers[0].source is PaperSource.ARXIV
+
+
+@pytest.mark.asyncio
+async def test_check_records_source_for_deduplicated_papers() -> None:
+    """Even papers known to the registry (deduplicated) must carry their
+    provider source on the audit row -- not just freshly-registered ones.
+    """
+    sub = _make_subscription()
+    known = _make_paper("known-paper")
+    arxiv = _make_provider(return_papers=[known])
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=_make_registry(matched_paper_ids={"known-paper"}),
+    )
+    result = await monitor.check(sub)
+    assert result.run.papers_deduplicated == 1
+    assert result.run.papers[0].source is PaperSource.ARXIV
+    assert result.run.papers[0].is_new is False

@@ -283,5 +283,9 @@ class ArxivMonitor:
 
     @staticmethod
     def _to_record(paper: PaperMetadata, is_new: bool) -> MonitoringPaperRecord:
-        """Delegate to the shared :func:`to_paper_record` helper (H-C1)."""
-        return to_paper_record(paper, is_new)
+        """Delegate to the shared :func:`to_paper_record` helper (H-C1).
+
+        ArXiv-only monitor — every paper's ``source`` is by construction
+        :attr:`PaperSource.ARXIV` (issue #141).
+        """
+        return to_paper_record(paper, is_new=is_new, source=PaperSource.ARXIV)

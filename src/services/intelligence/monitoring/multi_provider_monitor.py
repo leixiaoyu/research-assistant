@@ -27,9 +27,12 @@ Backward compatibility:
 - Returns an :class:`ArxivMonitorResult` (same DTO as the legacy
   monitor) so :class:`MonitoringRunner._run_one` can consume either
   monitor implementation without branching.
-- The ``source`` field on the produced :class:`MonitoringRun` remains
-  ``PaperSource.ARXIV`` for now — Tier 1 keeps schema compat; a
-  future iteration will add per-source provenance tracking.
+- The cycle-level ``source`` field on the produced :class:`MonitoringRun`
+  remains ``PaperSource.ARXIV`` for backward compatibility — its
+  semantics are now "primary / first-seen source" rather than "all
+  sources". Per-paper provenance (issue #141) lives on each
+  :class:`~MonitoringPaperRecord`'s ``source`` field which is the
+  authoritative record of where each paper actually came from.
 
 Note on threshold-based ingestion: this monitor does the *discovery*
 half (find candidate papers, register them with ``discovery_only=True``).
@@ -212,11 +215,10 @@ class MultiProviderMonitor:
         """
         run = MonitoringRun(
             subscription_id=subscription.subscription_id,
-            # See Tier 1 schema-compat note in module docstring.
-            # TODO(issue #141): per-paper source tracking — add
-            # MonitoringPaperRecord.source field + schema migration so
-            # each paper records its actual discovery provider instead of
-            # hardcoding PaperSource.ARXIV for schema compatibility.
+            # Cycle-level source is kept as ARXIV for backward
+            # compatibility with the V1-V4 schema; per-paper provenance
+            # (issue #141, V5) lives on each MonitoringPaperRecord.source
+            # which is now the authoritative attribution.
             source=PaperSource.ARXIV,
         )
 
@@ -252,7 +254,12 @@ class MultiProviderMonitor:
         # providers would also complicate partial-failure accounting without
         # meaningful latency gains at small provider counts (≤4). Change
         # only after profiling confirms fan-out latency is the bottleneck.
-        fetched: list[PaperMetadata] = []
+        # ``fetched`` carries (paper, source) tuples so each paper retains
+        # the provenance of the provider it actually came from (issue #141).
+        # When the same paper_id appears from two providers, the dedup
+        # step below preserves the first-seen entry — including its
+        # source — to keep behavior deterministic.
+        fetched: list[tuple[PaperMetadata, PaperSource]] = []
         partial_failure = expansion_degraded  # H-C5: expander degradation → PARTIAL
         for variant in queries:
             for source, provider in self._providers.items():
@@ -275,7 +282,8 @@ class MultiProviderMonitor:
                         error=repr(str(exc)[:512]),
                     )
                     continue
-                fetched.extend(results)
+                for paper in results:
+                    fetched.append((paper, source))
 
         # Step 4: dedup by paper_id (preserving first-seen order so the
         # original-query results land first when relevance scoring caps
@@ -443,20 +451,28 @@ class MultiProviderMonitor:
         return build_topic(query, subscription.poll_interval_hours)
 
     @staticmethod
-    def _dedup_by_paper_id(papers: list[PaperMetadata]) -> list[PaperMetadata]:
-        """Dedup a list of papers by ``paper_id`` while preserving order."""
+    def _dedup_by_paper_id(
+        papers: list[tuple[PaperMetadata, PaperSource]],
+    ) -> list[tuple[PaperMetadata, PaperSource]]:
+        """Dedup ``(paper, source)`` tuples by ``paper_id``, preserving order.
+
+        First-seen wins — both the paper metadata AND its source come
+        from the earliest occurrence (issue #141). If arXiv and OpenAlex
+        both return the same paper and the iteration visited arXiv
+        first, the audit row records ``source=ARXIV``.
+        """
         seen: set[str] = set()
-        result: list[PaperMetadata] = []
-        for paper in papers:
+        result: list[tuple[PaperMetadata, PaperSource]] = []
+        for paper, source in papers:
             if paper.paper_id in seen:
                 continue
             seen.add(paper.paper_id)
-            result.append(paper)
+            result.append((paper, source))
         return result
 
     def _resolve_and_register(
         self,
-        papers: list[PaperMetadata],
+        papers: list[tuple[PaperMetadata, PaperSource]],
         subscription: ResearchSubscription,
         run: MonitoringRun,
     ) -> tuple[list[PaperMetadata], list[PaperMetadata], bool]:
@@ -467,13 +483,17 @@ class MultiProviderMonitor:
         True if any single paper triggered a registry / identity error
         — those are individually survivable but flag the overall cycle
         as PARTIAL.
+
+        Issue #141: each :class:`MonitoringPaperRecord` appended to
+        ``run.papers`` carries the actual discovery provider via the
+        ``source=`` argument threaded through ``to_paper_record``.
         """
         new_papers: list[PaperMetadata] = []
         deduped: list[PaperMetadata] = []
         partial_failure = False
         topic_slug = f"{self._config.topic_slug_prefix}-{subscription.subscription_id}"
 
-        for paper in papers:
+        for paper, source in papers:
             try:
                 match = self._registry.resolve_identity(paper)
             except Exception as exc:
@@ -482,13 +502,14 @@ class MultiProviderMonitor:
                     "monitor_identity_resolution_error",
                     subscription_id=subscription.subscription_id,
                     paper_id=paper.paper_id,
+                    source=source.value,
                     error=repr(str(exc)[:512]),
                 )
                 continue
 
             if match.matched:
                 deduped.append(paper)
-                run.papers.append(to_paper_record(paper, is_new=False))
+                run.papers.append(to_paper_record(paper, is_new=False, source=source))
                 continue
 
             try:
@@ -503,11 +524,12 @@ class MultiProviderMonitor:
                     "monitor_registry_write_error",
                     subscription_id=subscription.subscription_id,
                     paper_id=paper.paper_id,
+                    source=source.value,
                     error=repr(str(exc)[:512]),
                 )
                 continue
 
             new_papers.append(paper)
-            run.papers.append(to_paper_record(paper, is_new=True))
+            run.papers.append(to_paper_record(paper, is_new=True, source=source))
 
         return new_papers, deduped, partial_failure

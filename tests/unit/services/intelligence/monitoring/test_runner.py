@@ -746,12 +746,14 @@ class TestScorerIntegration:
             title="Paper 1",
             is_new=True,
             url="https://arxiv.org/abs/p1",
+            source=PaperSource.ARXIV,
         )
         paper2 = MonitoringPaperRecord(
             paper_id="p2",
             title="Paper 2",
             is_new=True,
             url="https://arxiv.org/abs/p2",
+            source=PaperSource.ARXIV,
         )
         run_obj = _make_run(subscription_id="sub-scorer")
         run_obj = run_obj.model_copy(update={"papers": [paper1, paper2]})
@@ -808,12 +810,14 @@ class TestScorerIntegration:
             title="Paper 1",
             is_new=True,
             url="https://arxiv.org/abs/p1",
+            source=PaperSource.ARXIV,
         )
         paper2 = MonitoringPaperRecord(
             paper_id="p2",
             title="Paper 2",
             is_new=True,
             url="https://arxiv.org/abs/p2",
+            source=PaperSource.ARXIV,
         )
         run_obj = _make_run(subscription_id="sub-scorer2")
         run_obj = run_obj.model_copy(update={"papers": [paper1, paper2]})
@@ -862,7 +866,9 @@ class TestScorerIntegration:
         from src.services.intelligence.monitoring.runner import MonitoringRunner
 
         sub = _make_subscription(subscription_id="sub-no-scorer")
-        paper = MonitoringPaperRecord(paper_id="p1", title="Paper 1", is_new=True)
+        paper = MonitoringPaperRecord(
+            paper_id="p1", title="Paper 1", is_new=True, source=PaperSource.ARXIV
+        )
         run_obj = _make_run(subscription_id="sub-no-scorer")
         run_obj = run_obj.model_copy(update={"papers": [paper]})
         result = ArxivMonitorResult(run=run_obj, new_papers=[], deduplicated_papers=[])
@@ -902,13 +908,20 @@ class TestScorerIntegration:
 
         sub = _make_subscription(subscription_id="sub-nourl")
         paper_no_url = MonitoringPaperRecord(
-            paper_id="p-nourl", title="No URL Paper", is_new=True, url=None
+            paper_id="p-nourl",
+            title="No URL Paper",
+            is_new=True,
+            url=None,
+            # Issue #141: a non-arXiv paper missing its URL is the
+            # exact case the source-aware skip log was added to surface.
+            source=PaperSource.OPENALEX,
         )
         paper_with_url = MonitoringPaperRecord(
             paper_id="p-url",
             title="Has URL Paper",
             is_new=True,
             url="https://arxiv.org/abs/p-url",
+            source=PaperSource.ARXIV,
         )
         run_obj = _make_run(subscription_id="sub-nourl")
         run_obj = run_obj.model_copy(update={"papers": [paper_no_url, paper_with_url]})
@@ -959,6 +972,9 @@ class TestScorerIntegration:
         ]
         assert len(skip_events) == 1
         assert skip_events[0]["paper_id"] == "p-nourl"
+        # Issue #141: skip log carries the actual provider so ops can
+        # query "skipped papers from openalex" without joining audits.
+        assert skip_events[0]["source"] == PaperSource.OPENALEX.value
 
 
 # ---------------------------------------------------------------------------
@@ -1061,6 +1077,7 @@ class TestLLMBudgetCap:
                 title=f"Paper {i}",
                 is_new=True,
                 url=f"https://arxiv.org/abs/p{i}",
+                source=PaperSource.ARXIV,
             )
             for i in range(3)
         ]

@@ -111,6 +111,7 @@ def _make_record(
     is_new: bool = True,
     relevance_score: float | None = None,
     relevance_reasoning: str | None = None,
+    source: PaperSource = PaperSource.ARXIV,
 ) -> MonitoringPaperRecord:
     return MonitoringPaperRecord(
         paper_id=paper_id,
@@ -118,11 +119,12 @@ def _make_record(
         # in-memory MonitoringPaperRecord round-trip only -- the
         # repository's read path returns MonitoringPaperAudit which
         # carries only the persisted columns (paper_id, registered,
-        # relevance_score, relevance_reasoning).
+        # relevance_score, relevance_reasoning, source).
         title=paper_id,
         is_new=is_new,
         relevance_score=relevance_score,
         relevance_reasoning=relevance_reasoning,
+        source=source,
     )
 
 
@@ -273,12 +275,13 @@ class TestRoundTrip:
 
     def test_record_and_get_with_papers(self, repo: MonitoringRunRepository) -> None:
         records = [
-            _make_record(paper_id="2301.0001", is_new=True),
+            _make_record(paper_id="2301.0001", is_new=True, source=PaperSource.ARXIV),
             _make_record(
                 paper_id="2301.0002",
                 is_new=False,
                 relevance_score=0.85,
                 relevance_reasoning="strong match",
+                source=PaperSource.OPENALEX,
             ),
         ]
         run = _make_run(papers_seen=2, papers_new=1, papers=records)
@@ -308,6 +311,9 @@ class TestRoundTrip:
         assert fetched.papers[0].relevance_reasoning is None
         assert fetched.papers[1].relevance_score == 0.85
         assert fetched.papers[1].relevance_reasoning == "strong match"
+        # Issue #141: per-paper source round-trips through the V5 column.
+        assert fetched.papers[0].source is PaperSource.ARXIV
+        assert fetched.papers[1].source is PaperSource.OPENALEX
 
     def test_record_persists_finished_at_and_error(
         self, repo: MonitoringRunRepository

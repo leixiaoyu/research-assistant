@@ -440,9 +440,19 @@ class TestRelevanceScorerScore:
             await scorer.score(_make_subscription(), _make_paper())
 
     @pytest.mark.asyncio
-    async def test_structlog_relevance_scored_event_emitted(self) -> None:
+    async def test_structlog_relevance_scored_event_emitted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """H-T1: ``relevance_scored`` structlog event is emitted on success."""
+        import structlog
         import structlog.testing
+        from src.services.intelligence.monitoring import relevance_scorer as rs_mod
+
+        # Rebind the module-level logger before entering capture_logs() so
+        # the cached production logger is replaced and events are intercepted.
+        # Required because cache_logger_on_first_use=True freezes the bound
+        # logger at first call, bypassing the capture_logs() processor swap.
+        monkeypatch.setattr(rs_mod, "logger", structlog.get_logger())
 
         llm = _make_llm('{"score": 0.75, "reasoning": "Good match"}')
         scorer = RelevanceScorer(llm)

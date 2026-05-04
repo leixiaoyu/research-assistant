@@ -620,9 +620,18 @@ class TestOutputRootEnvVar:
     def test_structlog_monitoring_digest_written(
         self,
         tmp_output: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """H-T1: ``monitoring_digest_written`` is logged by DigestGenerator."""
+        import structlog
         import structlog.testing
+        from src.services.intelligence.monitoring import digest_generator as dg_mod
+
+        # Rebind the module-level logger before entering capture_logs() so
+        # the cached production logger is replaced and events are intercepted.
+        # Required because cache_logger_on_first_use=True freezes the bound
+        # logger at first call, bypassing the capture_logs() processor swap.
+        monkeypatch.setattr(dg_mod, "logger", structlog.get_logger())
 
         gen = DigestGenerator(tmp_output)
         sub = _make_subscription()

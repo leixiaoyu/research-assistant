@@ -93,7 +93,7 @@ class TestResearchSubscriptionConstruction:
         assert sub.status is SubscriptionStatus.PAUSED
 
     def test_extra_fields_forbidden(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
             ResearchSubscription(
                 name="x", query="q", junk="bad"  # type: ignore[call-arg]
             )

@@ -552,6 +552,94 @@ class TestRetryOnLockContention:
 
 
 # ---------------------------------------------------------------------------
+# get_metrics retry / contention
+# ---------------------------------------------------------------------------
+
+
+class TestGetMetricsRetry:
+    def test_get_metrics_uses_retry_helper(
+        self, repo: CitationInfluenceRepository, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``get_metrics`` must route through ``retry_on_lock_contention``
+        with the canonical operation_name + paper_id extra log field.
+        """
+        captured: dict[str, object] = {}
+
+        def _spy(operation, **kwargs):  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            return operation()
+
+        monkeypatch.setattr(repo_mod, "retry_on_lock_contention", _spy)
+        repo.get_metrics("paper:s2:spy-read")
+        assert captured.get("operation_name") == "influence_get_metrics"
+        assert captured.get("paper_id") == "paper:s2:spy-read"
+
+    def test_get_metrics_succeeds_after_retry_on_lock_contention(
+        self, repo: CitationInfluenceRepository, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Transient SQLITE_BUSY on the read path is retried; the row is
+        returned on the second attempt. Mirrors
+        ``test_record_metrics_succeeds_after_retry_on_lock_contention``.
+
+        ``get_metrics`` issues a SELECT (not BEGIN IMMEDIATE), so we
+        inject contention by raising an OperationalError with
+        SQLITE_BUSY errorcode on the first SELECT attempt.
+        """
+        # Pre-populate a row so there is something to read back.
+        m = _metrics("paper:s2:read-retry")
+        repo.record_metrics(m)
+
+        real_open = conn_mod.open_connection
+        select_attempts: dict[str, int] = {"n": 0, "failures": 0}
+        max_select_failures = 1
+
+        class _SelectFailProxy:
+            def __init__(self, real_conn: sqlite3.Connection) -> None:
+                self._real = real_conn
+
+            def execute(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+                if (
+                    "citation_influence_metrics" in sql
+                    and select_attempts["failures"] < max_select_failures
+                ):
+                    select_attempts["failures"] += 1
+                    exc = sqlite3.OperationalError("database is busy")
+                    exc.sqlite_errorcode = (  # type: ignore[attr-defined]
+                        conn_mod._SQLITE_BUSY
+                    )
+                    raise exc
+                return self._real.execute(sql, *args, **kwargs)
+
+            def executemany(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+                return self._real.executemany(sql, *args, **kwargs)
+
+            def commit(self) -> None:
+                self._real.commit()
+
+            def rollback(self) -> None:
+                self._real.rollback()
+
+        @contextmanager
+        def fake_open(p: Path) -> Iterator[_SelectFailProxy]:
+            with real_open(p) as conn:
+                select_attempts["n"] += 1
+                yield _SelectFailProxy(conn)
+
+        monkeypatch.setattr(repo_mod, "open_connection", fake_open)
+        monkeypatch.setattr(
+            "src.storage.intelligence_graph.connection.time.sleep",
+            lambda _s: None,
+        )
+
+        result = repo.get_metrics("paper:s2:read-retry")
+        # Retry fired before success.
+        assert select_attempts["failures"] == max_select_failures
+        # The row was returned despite the initial contention.
+        assert result is not None
+        assert result.paper_id == "paper:s2:read-retry"
+
+
+# ---------------------------------------------------------------------------
 # Path safety
 # ---------------------------------------------------------------------------
 

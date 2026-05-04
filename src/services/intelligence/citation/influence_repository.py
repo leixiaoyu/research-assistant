@@ -331,6 +331,13 @@ class CitationInfluenceRepository:
             recompute and overwrite, and a future Phase 10 cleanup
             hook calls :meth:`delete_stale` on a schedule.
 
+        Concurrency:
+            Wrapped in :func:`retry_on_lock_contention` so transient
+            SQLITE_BUSY/SQLITE_LOCKED contention from a colliding
+            writer does not cause a spurious cache miss. Async callers
+            MUST wrap this call in ``asyncio.to_thread(...)`` -- the
+            retry helper sleeps via ``time.sleep``.
+
         Args:
             paper_id: The canonical paper id (validated by the
                 scorer before reaching this layer).
@@ -354,30 +361,49 @@ class CitationInfluenceRepository:
 
         if max_age_days <= 0:
             raise ValueError("max_age_days must be positive")
-        with self._connect() as conn:
-            cursor = conn.execute(
-                """
-                SELECT paper_id, citation_count, citation_velocity,
-                       pagerank_score, hub_score, authority_score,
-                       computed_at
-                FROM citation_influence_metrics
-                WHERE paper_id = ?
-                """,
-                (paper_id,),
+
+        def _get_once() -> Optional["InfluenceMetrics"]:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    """
+                    SELECT paper_id, citation_count, citation_velocity,
+                           pagerank_score, hub_score, authority_score,
+                           computed_at
+                    FROM citation_influence_metrics
+                    WHERE paper_id = ?
+                    """,
+                    (paper_id,),
+                )
+                row = cursor.fetchone()
+            if row is None:
+                return None
+            computed_at = datetime.fromisoformat(row["computed_at"])
+            # H-1: ensure both sides of the comparison are timezone-aware
+            # UTC datetimes. ``computed_at`` is stored via
+            # ``.isoformat()`` from a ``datetime.now(timezone.utc)`` so
+            # it carries the "+00:00" suffix on Python 3.11+. Force UTC
+            # if the parsed value is somehow naive (older SQLite rows,
+            # test fixtures without tz suffix) so the comparison is
+            # always apples-to-apples.
+            if computed_at.tzinfo is None:
+                computed_at = computed_at.replace(tzinfo=timezone.utc)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+            if computed_at < cutoff:
+                return None
+            return InfluenceMetrics(
+                paper_id=row["paper_id"],
+                citation_count=row["citation_count"],
+                citation_velocity=row["citation_velocity"],
+                pagerank_score=row["pagerank_score"],
+                hub_score=row["hub_score"],
+                authority_score=row["authority_score"],
+                computed_at=computed_at,
             )
-            row = cursor.fetchone()
-        if row is None:
-            return None
-        computed_at = datetime.fromisoformat(row["computed_at"])
-        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
-        if computed_at < cutoff:
-            return None
-        return InfluenceMetrics(
-            paper_id=row["paper_id"],
-            citation_count=row["citation_count"],
-            citation_velocity=row["citation_velocity"],
-            pagerank_score=row["pagerank_score"],
-            hub_score=row["hub_score"],
-            authority_score=row["authority_score"],
-            computed_at=computed_at,
+
+        return retry_on_lock_contention(
+            _get_once,
+            max_attempts=DEFAULT_MAX_ATTEMPTS,
+            backoff_seconds=DEFAULT_BACKOFF_SECONDS,
+            operation_name="influence_get_metrics",
+            paper_id=paper_id,
         )

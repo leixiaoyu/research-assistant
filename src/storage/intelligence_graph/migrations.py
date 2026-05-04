@@ -411,13 +411,71 @@ MIGRATION_V4_CITATION_INFLUENCE_METRICS = Migration(
 )
 
 
+# Schema version 5: Per-paper source provenance on monitoring_papers.
+# Phase 9.1 Tier 1 follow-up — Issue #141.
+#
+# Background
+# ----------
+# PR #140 shipped ``MultiProviderMonitor`` (arXiv + OpenAlex + HuggingFace
+# + Semantic Scholar fan-out) but kept ``MonitoringRun.source =
+# PaperSource.ARXIV`` hardcoded for schema-compatibility. The audit log
+# silently misattributed any paper that came from a non-arXiv provider.
+#
+# This migration adds a per-paper ``source`` column to
+# ``monitoring_papers`` so each row records its actual discovery
+# provider. The cycle-level ``monitoring_runs.source`` column is left
+# alone (semantics widened in code: it now means "primary / first-seen
+# source", not "all sources" — the per-paper row is the source of
+# truth).
+#
+# Backfill
+# --------
+# Existing rows default to ``'arxiv'``. This is correct because every
+# paper persisted before PR #140 came from arXiv (the monitor was
+# arXiv-only). Pre-Tier-1 audit rows that fell into the gap between
+# PR #140 and this migration are also backfilled to arXiv — at worst,
+# a handful of OpenAlex/HF/S2 papers from a few PR #140 cycles get
+# attributed to arXiv. That's the same lie that prompted #141, but
+# bounded to a small cohort and easy to identify (those rows have
+# the V5 default rather than an explicit per-source write).
+#
+# Why ``DEFAULT 'arxiv'`` (not NULL)
+# ----------------------------------
+# A NULL source would force every consumer (digest generator, future
+# CLI / REST surface) to handle "unknown source" as a special case.
+# Using a sentinel default means downstream code can treat the column
+# as required without a None branch. The PaperSource enum already has
+# ``ARXIV`` so the default lines up with the enum's first member.
+MIGRATION_V5_PAPER_SOURCE_TRACKING = Migration(
+    version=5,
+    name="paper_source_tracking",
+    description=(
+        "Add monitoring_papers.source column for per-paper provenance "
+        "(Phase 9.1 Tier 1 follow-up / Issue #141). Backfills existing "
+        "rows to 'arxiv' since pre-Tier-1 monitoring was arXiv-only."
+    ),
+    up="""
+    ALTER TABLE monitoring_papers
+        ADD COLUMN source TEXT NOT NULL DEFAULT 'arxiv';
+    """,
+)
+
+
 # All migrations in order
 ALL_MIGRATIONS: list[Migration] = [
     MIGRATION_V1_INITIAL,
     MIGRATION_V2_MONITORING_RUNS,
     MIGRATION_V3_MONITORING_RUNS_FK,
     MIGRATION_V4_CITATION_INFLUENCE_METRICS,
+    MIGRATION_V5_PAPER_SOURCE_TRACKING,
 ]
+
+
+# The latest migration version known to the codebase. Modules that
+# need to assert "we are on the canonical schema" import this rather
+# than counting ``ALL_MIGRATIONS`` so a future migration addition is
+# a single-line update.
+LATEST_MIGRATION_VERSION = 5
 
 
 class MigrationManager:

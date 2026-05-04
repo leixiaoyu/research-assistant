@@ -27,10 +27,10 @@ Backward compatibility:
 - Returns an :class:`ArxivMonitorResult` (same DTO as the legacy
   monitor) so :class:`MonitoringRunner._run_one` can consume either
   monitor implementation without branching.
-- The cycle-level ``source`` field on the produced :class:`MonitoringRun`
-  remains ``PaperSource.ARXIV`` for backward compatibility — its
-  semantics are now "primary / first-seen source" rather than "all
-  sources". Per-paper provenance (issue #141) lives on each
+- :attr:`MonitoringRun.source` (in-memory only — no ``monitoring_runs.source``
+  column exists) is left alone; its semantics are widened in code to
+  mean "primary / first-seen source" rather than "all sources".
+  Per-paper provenance (issue #141) lives on each
   :class:`~MonitoringPaperRecord`'s ``source`` field which is the
   authoritative record of where each paper actually came from.
 

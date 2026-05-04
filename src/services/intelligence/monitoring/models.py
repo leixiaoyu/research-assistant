@@ -469,7 +469,17 @@ class MonitoringRun(BaseModel):
         max_length=64,
     )
     subscription_id: str = Field(..., min_length=1, max_length=64)
-    source: PaperSource = Field(default=PaperSource.ARXIV)
+    source: PaperSource = Field(
+        default=PaperSource.ARXIV,
+        description=(
+            "Primary / first-seen source for this monitoring cycle; "
+            "in-memory only — never persisted to the database (no "
+            "``monitoring_runs.source`` column exists). Per-paper "
+            "provenance lives on ``MonitoringPaperRecord.source``, "
+            "which is the authoritative record of where each paper "
+            "actually came from."
+        ),
+    )
     started_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
     )

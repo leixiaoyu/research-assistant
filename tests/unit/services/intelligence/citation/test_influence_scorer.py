@@ -204,7 +204,7 @@ async def test_non_string_paper_id_raises(store):
 @pytest.mark.asyncio
 async def test_compute_for_graph_validates_each_id(store):
     s = InfluenceScorer(store=store)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Invalid paper_id"):
         await s.compute_for_graph(["paper:s2:ok", "bad space"])
 
 
@@ -754,14 +754,14 @@ def test_influence_metrics_defaults():
 def test_influence_metrics_pagerank_clamped_to_one():
     from pydantic import ValidationError
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="pagerank_score"):
         InfluenceMetrics(paper_id="paper:s2:x", pagerank_score=1.5)
 
 
 def test_influence_metrics_rejects_extra_fields():
     from pydantic import ValidationError
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         InfluenceMetrics(paper_id="paper:s2:x", foo=1)
 
 

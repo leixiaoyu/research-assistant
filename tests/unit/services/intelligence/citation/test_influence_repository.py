@@ -561,5 +561,5 @@ class TestPathSafety:
         """Paths outside approved bases raise ``SecurityError``."""
         from src.utils.security import SecurityError
 
-        with pytest.raises(SecurityError):
+        with pytest.raises(SecurityError, match="outside approved storage roots"):
             CitationInfluenceRepository("/etc/passwd")

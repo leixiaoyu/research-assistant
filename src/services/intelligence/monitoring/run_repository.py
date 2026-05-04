@@ -408,17 +408,29 @@ class MonitoringRunRepository:
             """,
             (run_id,),
         )
-        result: list[MonitoringPaperAudit] = [
-            MonitoringPaperAudit(
-                paper_id=row["paper_id"],
-                registered=bool(row["registered"]),
-                relevance_score=row["relevance_score"],
-                relevance_reasoning=row["relevance_reasoning"],
-                # V5 / issue #141: per-paper provenance round-trip.
-                source=PaperSource(row["source"]),
+        rows = cursor.fetchall()
+        result: list[MonitoringPaperAudit] = []
+        for row in rows:
+            raw_source = row["source"]
+            try:
+                source = PaperSource(raw_source)
+            except ValueError:
+                logger.error(
+                    "monitoring_paper_unknown_source",
+                    paper_id=row["paper_id"],
+                    raw_value=raw_source,
+                )
+                raise
+            result.append(
+                MonitoringPaperAudit(
+                    paper_id=row["paper_id"],
+                    registered=bool(row["registered"]),
+                    relevance_score=row["relevance_score"],
+                    relevance_reasoning=row["relevance_reasoning"],
+                    # V5 / issue #141: per-paper provenance round-trip.
+                    source=source,
+                )
             )
-            for row in cursor.fetchall()
-        ]
         # Defense-in-depth: pin the typed-DTO contract so a future
         # refactor (e.g., introducing a "fast path" that returns rows
         # directly) cannot silently leak dicts to the caller.

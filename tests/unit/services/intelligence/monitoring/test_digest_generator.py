@@ -31,6 +31,7 @@ from src.services.intelligence.monitoring.digest_generator import (
     DigestGenerator,
     REASONING_TRUNCATE_CHARS,
 )
+from src.services.intelligence.models.monitoring import PaperSource
 from src.services.intelligence.monitoring.models import (
     MonitoringPaperAudit,
     MonitoringRunAudit,
@@ -63,12 +64,14 @@ def _make_paper_audit(
     relevance_score: Optional[float] = 0.8,
     relevance_reasoning: Optional[str] = "Highly relevant",
     registered: bool = False,
+    source: PaperSource = PaperSource.ARXIV,
 ) -> MonitoringPaperAudit:
     return MonitoringPaperAudit(
         paper_id=paper_id,
         registered=registered,
         relevance_score=relevance_score,
         relevance_reasoning=relevance_reasoning,
+        source=source,
     )
 
 
@@ -572,6 +575,8 @@ class TestRenderedSnapshot:
         assert "Direct match on PEFT keyword." in text
         assert "## Stats\n" in text
         assert text.endswith("\n")
+        # M-4 / issue #141: per-paper Source: line must appear in the digest.
+        assert "Source: `arxiv`" in text
 
 
 # ---------------------------------------------------------------------------

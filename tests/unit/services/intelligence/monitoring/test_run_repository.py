@@ -776,3 +776,62 @@ class TestCascadeDelete:
                 (run.run_id,),
             ).fetchone()[0]
         assert paper_count == 0
+
+
+class TestUnknownSourceFailLoud:
+    """M-6: ``_fetch_papers`` re-raises on unrecognised source values.
+
+    A ``monitoring_papers`` row whose ``source`` column contains a
+    value not in the ``PaperSource`` enum must (a) emit a structured
+    ``monitoring_paper_unknown_source`` log event and (b) re-raise the
+    ``ValueError`` so the caller learns about schema drift rather than
+    silently swallowing it.
+    """
+
+    def test_fetch_papers_unknown_source_logs_and_reraises(
+        self, repo: MonitoringRunRepository, db_path: Path
+    ) -> None:
+        import sqlite3 as _sqlite3
+        import structlog
+        import structlog.testing
+
+        from src.services.intelligence.monitoring import run_repository as rr_mod
+
+        # Record a run with a valid paper so the FK constraint is satisfied.
+        run = _make_run(
+            run_id="run-unknown-src",
+            papers_seen=1,
+            papers_new=1,
+            papers=[_make_record(paper_id="paper:bad:001")],
+        )
+        repo.record_run(run)
+
+        # Corrupt the source column directly -- bypass the CHECK constraint
+        # to simulate future schema drift (e.g., a new PaperSource enum value
+        # was added to the DB but not yet to this Python version).
+        # We must disable CHECK constraints for this raw write because the
+        # schema guard from H-3 would otherwise prevent the corrupt value.
+        with _sqlite3.connect(str(db_path)) as conn:
+            conn.execute("PRAGMA ignore_check_constraints = ON")
+            conn.execute(
+                "UPDATE monitoring_papers SET source = ? WHERE paper_id = ?",
+                ("not_a_real_source", "paper:bad:001"),
+            )
+            conn.commit()
+
+        with structlog.testing.capture_logs() as logs:
+            # Rebind module-level logger so capture_logs() intercepts it.
+            original_logger = rr_mod.logger
+            rr_mod.logger = structlog.get_logger()
+            try:
+                with pytest.raises(ValueError):
+                    repo.get_run("run-unknown-src")
+            finally:
+                rr_mod.logger = original_logger
+
+        error_events = [
+            e for e in logs if e.get("event") == "monitoring_paper_unknown_source"
+        ]
+        assert len(error_events) == 1
+        assert error_events[0].get("paper_id") == "paper:bad:001"
+        assert error_events[0].get("raw_value") == "not_a_real_source"

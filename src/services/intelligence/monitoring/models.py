@@ -396,12 +396,13 @@ class MonitoringPaperAudit(BaseModel):
         ),
     )
     source: PaperSource = Field(
-        default=PaperSource.ARXIV,
+        ...,
         description=(
             "Discovery provider for this paper (issue #141). "
-            "Backwards-compatible default of ARXIV matches the V5 "
-            "schema's column default — pre-Tier-1 audit rows that have "
-            "no recorded source are arXiv by definition."
+            "Required — callers must always pass the per-paper provenance "
+            "explicitly so the audit log is never ambiguous. The V5 schema "
+            "backfills legacy rows to 'arxiv'; the repository read-path must "
+            "pass PaperSource.ARXIV for those rows."
         ),
     )
     relevance_score: Optional[float] = Field(

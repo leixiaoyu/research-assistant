@@ -152,17 +152,39 @@ class CitationInfluenceRepository:
         self._initialized = True
 
     @classmethod
-    def from_path(cls, db_path: Path | str) -> "CitationInfluenceRepository":
-        """Construct + initialise in one call.
+    def connect(cls, db_path: Path | str) -> "CitationInfluenceRepository":
+        """Construct, run pending migrations, and return a ready repo.
 
-        Convenience factory mirroring
-        :meth:`MonitoringRunner.from_paths`. Used by
-        :meth:`InfluenceScorer.from_paths` when no repository is
-        injected by the caller.
+        Side effects (disclosed):
+            1. Calls :meth:`initialize` which invokes
+               :class:`~src.storage.intelligence_graph.migrations.MigrationManager`
+               ``migrate()`` -- applies any pending schema migrations up
+               to the latest version (including V4 ``citation_influence_metrics``
+               if the DB was created by an older version of the code).
+            2. Issues PRAGMA statements (via :func:`open_connection`) to
+               configure WAL mode, foreign-key enforcement, and busy
+               timeout on a temporary connection opened during
+               ``migrate()``.
+
+        This is the intended entry-point for production callers. Use
+        direct :class:`CitationInfluenceRepository` construction + a
+        separate :meth:`initialize` call only when you need finer
+        control (e.g. test fixtures that isolate migration side-effects).
+
+        Mirrors :meth:`MonitoringRunner.from_paths`.
         """
         repo = cls(db_path)
         repo.initialize()
         return repo
+
+    @classmethod
+    def from_path(cls, db_path: Path | str) -> "CitationInfluenceRepository":
+        """Alias for :meth:`connect` (backward compatibility).
+
+        Prefer :meth:`connect` for new call sites -- it discloses the
+        migration + PRAGMA side-effects in its docstring (H-3).
+        """
+        return cls.connect(db_path)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:

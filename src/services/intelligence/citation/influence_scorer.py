@@ -144,6 +144,17 @@ class InfluenceScorer:
     ) -> None:
         """Initialise the scorer.
 
+        Disk I/O note (M-3):
+            When ``repo`` is ``None`` (the backward-compat default),
+            this constructor opens a SQLite connection to
+            ``store.db_path`` to run pending schema migrations.  The
+            cost is small (one ``SELECT COUNT(*)`` per migration version
+            already applied), but callers that construct many
+            ``InfluenceScorer`` instances in a tight loop should inject
+            a pre-built ``repo`` to avoid repeated I/O. The recommended
+            production path is :meth:`from_paths`, which performs
+            migration exactly once.
+
         Args:
             store: A ``SQLiteGraphStore`` whose schema is at V4 or later.
                 We rely on ``citation_influence_metrics`` (V4) and on
@@ -165,7 +176,7 @@ class InfluenceScorer:
         self.cache_ttl = cache_ttl
         self._now_override = now
         if repo is None:
-            repo = CitationInfluenceRepository.from_path(store.db_path)
+            repo = CitationInfluenceRepository.connect(store.db_path)
         self._repo = repo
 
     @classmethod
@@ -179,12 +190,23 @@ class InfluenceScorer:
 
         Constructs the underlying :class:`SQLiteGraphStore` *and* a
         matching :class:`CitationInfluenceRepository` against the same
-        ``db_path`` (issue #134) so callers no longer need to know
-        the cache table exists.
+        ``db_path`` (issue #134) so callers no longer need to know the
+        cache table exists.
+
+        Migration (M-2 / single entry point):
+            ``store.initialize()`` runs :class:`MigrationManager`
+            ``migrate()`` which applies *all* pending migrations (V1
+            through V4). The subsequent
+            :meth:`CitationInfluenceRepository.connect` call also calls
+            ``migrate()``, but the manager is idempotent -- a second
+            pass applies 0 migrations and returns immediately. Both
+            calls are kept intentionally so each component correctly
+            tracks its own initialized state, at the cost of one extra
+            ``SELECT COUNT(*)`` per version.
         """
         store = SQLiteGraphStore(db_path)
         store.initialize()
-        repo = CitationInfluenceRepository.from_path(db_path)
+        repo = CitationInfluenceRepository.connect(db_path)
         return cls(store=store, cache_ttl=cache_ttl, repo=repo)
 
     def _now(self) -> datetime:

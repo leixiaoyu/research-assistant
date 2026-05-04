@@ -383,10 +383,16 @@ class MonitoringRunner:
         from src.models.paper import PaperMetadata
 
         if paper.url is None:
+            # Issue #141: include per-paper source so "why was this
+            # paper skipped?" queries can pivot on provider — non-arXiv
+            # papers more frequently land here because their feeds may
+            # not include URLs that pass PaperMetadata's HttpUrl
+            # validator.
             logger.info(
                 "monitoring_relevance_score_skipped_no_url",
                 subscription_id=subscription.subscription_id,
                 paper_id=paper.paper_id,
+                source=paper.source.value,
             )
             return
 

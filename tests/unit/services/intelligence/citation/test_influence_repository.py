@@ -148,6 +148,11 @@ class TestInitialize:
             r.get_metrics("paper:s2:x")
 
     def test_initialize_is_idempotent(self, db_path: Path) -> None:
+        # Smoke-only: verify that calling initialize() twice does not
+        # raise and leaves the repo in a usable state. Behavioral
+        # assertions (migration count, log events) live in
+        # test_initialize_logs_when_migrations_apply and
+        # test_initialize_no_log_when_no_migrations_pending.
         r = CitationInfluenceRepository(db_path)
         r.initialize()
         r.initialize()  # second call does nothing surprising
@@ -364,6 +369,9 @@ class TestDeleteStale:
                         if sql.lstrip().startswith("DELETE"):
                             raise sqlite3.OperationalError("disk corruption")
                         return self._c.execute(sql, *args, **kw)
+
+                    def executemany(self, sql: str, *args: Any, **kw: Any) -> Any:
+                        return self._c.executemany(sql, *args, **kw)
 
                     def commit(self) -> None:
                         self._c.commit()

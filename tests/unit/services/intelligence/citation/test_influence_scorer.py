@@ -126,8 +126,12 @@ def test_constructor_accepts_custom_now(store):
 
 def test_now_defaults_to_real_clock(store):
     s = InfluenceScorer(store=store)
-    # Just check we get a real datetime within reason.
-    assert isinstance(s._now(), datetime)
+    now = s._now()
+    # Check we get a real datetime within reason.
+    assert isinstance(now, datetime)
+    # Must be timezone-aware (UTC) so callers can compare with
+    # timezone-aware timestamps without TypeError.
+    assert now.tzinfo is not None
 
 
 def test_init_accepts_injected_repo(store):
@@ -559,26 +563,57 @@ async def test_cache_write_failure_logs_event_but_returns_metrics(store, monkeyp
     """A repository write failure must NOT bubble to the scorer caller.
 
     The new repository owns the failure-path logging; the scorer just
-    delegates. Verify that an injected repo whose ``record_metrics``
-    raises a non-contention ``sqlite3.Error`` (handled inside the
-    repo's outer ``try``) does not crash ``compute_for_paper`` -- the
-    in-memory metrics still flow back to the caller.
+    delegates. Verify that when ``open_connection`` raises a non-contention
+    ``sqlite3.Error`` on BEGIN IMMEDIATE (propagates straight through the
+    retry helper, lands in the repo's outer ``try``, is logged via
+    ``citation_influence_repo_write_failed``, and is swallowed) the scorer
+    caller still receives its in-memory metrics.
+
+    Mirrors ``test_record_metrics_propagates_non_lock_sqlite_error`` in
+    ``test_influence_repository.py`` -- patches ``open_connection`` with
+    a non-BUSY error so the full retry/failure path is exercised rather
+    than bypassing ``retry_on_lock_contention`` via a private-method patch.
     """
     n = _node("cw", citation_count=1, year=2020)
     _persist_chain(store, n)
 
-    # Build a repo wired to the same DB, then make ``record_metrics``
-    # raise. We use the real repo's outer ``try`` to swallow the
-    # ``sqlite3.Error`` and emit the audit-trail log event so the
-    # scorer caller never sees the exception (the contract preserved
-    # from the original ``_write_cache``).
     repo = CitationInfluenceRepository.from_path(store.db_path)
     monkeypatch.setattr(repo_module, "logger", structlog.get_logger())
 
-    def _raise_on_record(_metrics):
-        raise sqlite3.OperationalError("disk full")
+    from contextlib import contextmanager
+    from pathlib import Path
+    from src.storage.intelligence_graph import connection as conn_mod_scorer
 
-    monkeypatch.setattr(repo, "_record_metrics_once", _raise_on_record)
+    real_open = conn_mod_scorer.open_connection
+    write_attempts: list[int] = []
+
+    class _FailProxy:
+        def __init__(self, real_conn: sqlite3.Connection) -> None:
+            self._real = real_conn
+
+        def execute(self, sql: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if sql == "BEGIN IMMEDIATE":
+                write_attempts.append(1)
+                raise sqlite3.OperationalError("disk full")
+            return self._real.execute(sql, *args, **kwargs)
+
+        def executemany(  # type: ignore[no-untyped-def]
+            self, sql: str, *args, **kwargs
+        ):
+            return self._real.executemany(sql, *args, **kwargs)
+
+        def commit(self) -> None:
+            self._real.commit()
+
+        def rollback(self) -> None:
+            self._real.rollback()
+
+    @contextmanager
+    def fake_open(p: Path):  # type: ignore[no-untyped-def]
+        with real_open(p) as conn:
+            yield _FailProxy(conn)
+
+    monkeypatch.setattr(repo_module, "open_connection", fake_open)
     s = InfluenceScorer(store=store, repo=repo)
 
     with structlog.testing.capture_logs() as logs:
@@ -608,7 +643,6 @@ async def test_compute_for_paper_wraps_writes_in_to_thread(store, monkeypatch):
     s = InfluenceScorer(store=store, repo=repo)
 
     record_calls: list[object] = []
-    get_calls: list[object] = []
     real_to_thread = scorer_module.asyncio.to_thread
 
     async def spy_to_thread(func, *args, **kwargs):
@@ -619,8 +653,6 @@ async def test_compute_for_paper_wraps_writes_in_to_thread(store, monkeypatch):
         underlying = getattr(func, "__func__", func)
         if underlying is CitationInfluenceRepository.record_metrics:
             record_calls.append(args[0])
-        elif underlying is CitationInfluenceRepository.get_metrics:
-            get_calls.append(args[0])
         return await real_to_thread(func, *args, **kwargs)
 
     monkeypatch.setattr(scorer_module.asyncio, "to_thread", spy_to_thread)
@@ -710,7 +742,7 @@ async def test_compute_for_paper_uses_repo_get_metrics(store):
 
     out = await s.compute_for_paper(n.paper_id)
     assert out is sentinel
-    mock_repo.get_metrics.assert_called_once()
+    mock_repo.get_metrics.assert_called_once_with(n.paper_id, s._max_age_days())
     # Cache HIT path: record_metrics must NOT be called.
     mock_repo.record_metrics.assert_not_called()
 
@@ -875,6 +907,10 @@ async def test_pagerank_skipped_when_graph_exceeds_limit(store, monkeypatch):
     Monkeypatch MAX_GRAPH_NODES_FOR_PAGERANK to 2, insert 3 nodes, verify the
     warning is logged and the returned pagerank_score is 0.0 (empty dict fallback).
     """
+    # Rebind logger before capture_logs() so the cached production
+    # logger picks up the testing processor swap (mirrors line 302 pattern
+    # from test_hits_skipped_for_oversize_graph_logs_event).
+    monkeypatch.setattr(scorer_module, "logger", structlog.get_logger())
     # Lower the limit so 3 nodes trip it.
     monkeypatch.setattr(scorer_module, "MAX_GRAPH_NODES_FOR_PAGERANK", 2)
 

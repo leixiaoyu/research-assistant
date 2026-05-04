@@ -623,6 +623,8 @@ async def test_check_identity_resolution_error_emits_log(monkeypatch) -> None:
     events = [e for e in logs if e.get("event") == "monitor_identity_resolution_error"]
     assert len(events) == 1
     assert events[0].get("paper_id") == "p1"
+    # H-4: source field must be present so a future drop of source= is caught.
+    assert events[0].get("source") == PaperSource.ARXIV.value
 
 
 @pytest.mark.asyncio
@@ -641,6 +643,8 @@ async def test_check_registry_write_error_emits_log(monkeypatch) -> None:
     events = [e for e in logs if e.get("event") == "monitor_registry_write_error"]
     assert len(events) == 1
     assert events[0].get("paper_id") == "p1"
+    # H-4: source field must be present so a future drop of source= is caught.
+    assert events[0].get("source") == PaperSource.ARXIV.value
 
 
 # ---------------------------------------------------------------------------
@@ -1069,20 +1073,23 @@ async def test_check_records_per_paper_source_for_each_provider() -> None:
     s2 = _make_provider(return_papers=[s2_paper])
     hf = _make_provider(return_papers=[hf_paper])
 
-    sub = _make_subscription()
+    sub_base = _make_subscription()
     # Bypass the model validator (which restricts MVP subscriptions to
     # ARXIV-only) so we can exercise the multi-provider paper-tracking
     # code path. This is exactly the path Tier 1 production builds will
     # hit once the subscription validator is widened in a follow-up.
-    object.__setattr__(
-        sub,
-        "sources",
-        [
-            PaperSource.ARXIV,
-            PaperSource.OPENALEX,
-            PaperSource.SEMANTIC_SCHOLAR,
-            PaperSource.HUGGINGFACE,
-        ],
+    # Use model_construct (the Pydantic API for validation-free construction)
+    # rather than object.__setattr__ to avoid coupling to Pydantic internals.
+    sub = ResearchSubscription.model_construct(
+        **{
+            **sub_base.model_dump(),
+            "sources": [
+                PaperSource.ARXIV,
+                PaperSource.OPENALEX,
+                PaperSource.SEMANTIC_SCHOLAR,
+                PaperSource.HUGGINGFACE,
+            ],
+        }
     )
 
     monitor = MultiProviderMonitor(
@@ -1117,8 +1124,15 @@ async def test_check_dedup_preserves_first_seen_source() -> None:
     arxiv = _make_provider(return_papers=[shared])
     openalex = _make_provider(return_papers=[shared])
 
-    sub = _make_subscription()
-    object.__setattr__(sub, "sources", [PaperSource.ARXIV, PaperSource.OPENALEX])
+    sub_base = _make_subscription()
+    # Use model_construct to bypass the ARXIV-only validator (Pydantic API
+    # rather than object.__setattr__ to avoid coupling to internals).
+    sub = ResearchSubscription.model_construct(
+        **{
+            **sub_base.model_dump(),
+            "sources": [PaperSource.ARXIV, PaperSource.OPENALEX],
+        }
+    )
 
     monitor = MultiProviderMonitor(
         providers={

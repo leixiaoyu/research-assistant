@@ -339,6 +339,46 @@ class TestDeleteStale:
         # Cutoff predates the row → nothing to delete.
         assert repo.delete_stale(now - timedelta(days=365)) == 0
 
+    def test_delete_stale_rolls_back_on_failure(
+        self, repo: CitationInfluenceRepository, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If the DELETE itself raises (e.g. disk corruption), the
+        transaction must roll back AND the exception must propagate
+        so callers see the failure -- ``delete_stale`` is invoked
+        from a Phase 10 cleanup hook that wants to know if it failed.
+        """
+        now = datetime.now(timezone.utc)
+        repo.record_metrics(_metrics("paper:s2:rb", computed_at=now))
+        rollback_calls: list[int] = []
+        real_open = conn_mod.open_connection
+
+        @contextmanager
+        def fake_open(p: Path):  # type: ignore[no-untyped-def]
+            with real_open(p) as conn:
+
+                class _Proxy:
+                    def __init__(self, c: sqlite3.Connection) -> None:
+                        self._c = c
+
+                    def execute(self, sql: str, *args: Any, **kw: Any) -> Any:
+                        if sql.lstrip().startswith("DELETE"):
+                            raise sqlite3.OperationalError("disk corruption")
+                        return self._c.execute(sql, *args, **kw)
+
+                    def commit(self) -> None:
+                        self._c.commit()
+
+                    def rollback(self) -> None:
+                        rollback_calls.append(1)
+                        self._c.rollback()
+
+                yield _Proxy(conn)
+
+        monkeypatch.setattr(repo_mod, "open_connection", fake_open)
+        with pytest.raises(sqlite3.OperationalError, match="disk corruption"):
+            repo.delete_stale(now)
+        assert rollback_calls == [1]
+
 
 # ---------------------------------------------------------------------------
 # Retry / failure semantics

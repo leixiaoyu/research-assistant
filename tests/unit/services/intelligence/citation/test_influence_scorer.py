@@ -6,13 +6,17 @@ import sqlite3
 import tempfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import structlog
 import structlog.testing
 
+from src.services.intelligence.citation import influence_repository as repo_module
 from src.services.intelligence.citation import influence_scorer as scorer_module
+from src.services.intelligence.citation.influence_repository import (
+    CitationInfluenceRepository,
+)
 from src.services.intelligence.citation.influence_scorer import (
     DEFAULT_CACHE_TTL,
     MAX_GRAPH_NODES_FOR_HITS,
@@ -103,6 +107,17 @@ def test_from_paths_factory_initialises_store(temp_db):
     assert s.cache_ttl == DEFAULT_CACHE_TTL
 
 
+def test_from_paths_factory_constructs_repo(temp_db):
+    """``from_paths`` must build the repository alongside the store
+    (issue #134) so callers don't need to know the cache table exists.
+    """
+    s = InfluenceScorer.from_paths(db_path=temp_db)
+    assert isinstance(s._repo, CitationInfluenceRepository)
+    # And it should be initialised (record_metrics doesn't raise
+    # "not initialized").
+    s._repo.record_metrics(InfluenceMetrics(paper_id="paper:s2:from-paths-test"))
+
+
 def test_constructor_accepts_custom_now(store):
     fixed = datetime(2026, 1, 1, tzinfo=timezone.utc)
     s = InfluenceScorer(store=store, now=fixed)
@@ -113,6 +128,44 @@ def test_now_defaults_to_real_clock(store):
     s = InfluenceScorer(store=store)
     # Just check we get a real datetime within reason.
     assert isinstance(s._now(), datetime)
+
+
+def test_init_accepts_injected_repo(store):
+    """DI seam (issue #134): callers may inject their own repo
+    (tests, alternative backends) and the scorer must use that
+    instance verbatim instead of constructing a default.
+    """
+    repo = CitationInfluenceRepository.from_path(store.db_path)
+    s = InfluenceScorer(store=store, repo=repo)
+    assert s._repo is repo
+
+
+def test_init_builds_default_repo_when_none_passed(store):
+    """Backward compatibility (issue #134): callers that haven't
+    migrated to explicit injection must keep working -- the scorer
+    constructs a repo against ``store.db_path`` and initialises it.
+    """
+    s = InfluenceScorer(store=store)
+    assert isinstance(s._repo, CitationInfluenceRepository)
+    # And the constructed repo points at the store's DB.
+    assert s._repo.db_path == store.db_path
+    # And it is initialised (record_metrics doesn't raise
+    # "not initialized").
+    s._repo.record_metrics(InfluenceMetrics(paper_id="paper:s2:default-repo-test"))
+
+
+def test_max_age_days_rounds_up_from_subday_ttl(store):
+    """``cache_ttl`` is a ``timedelta`` (legacy); the repo expects an
+    integer day count. ``_max_age_days`` ceiling-divides so a 7-day
+    TTL doesn't reject a 7-day-old row, and any sub-day TTL still
+    satisfies the repo's ``max_age_days > 0`` precondition.
+    """
+    s = InfluenceScorer(store=store, cache_ttl=timedelta(seconds=10))
+    assert s._max_age_days() == 1
+    s = InfluenceScorer(store=store, cache_ttl=timedelta(days=7))
+    assert s._max_age_days() == 7
+    s = InfluenceScorer(store=store, cache_ttl=timedelta(days=7, seconds=1))
+    assert s._max_age_days() == 8
 
 
 # ---------------------------------------------------------------------------
@@ -382,17 +435,24 @@ def test_velocity_helper_handles_invalid_year(store):
 
 @pytest.mark.asyncio
 async def test_persistence_cache_hit_within_ttl(store):
-    """Second call within TTL reuses cached row; PageRank not re-invoked."""
+    """Second call within TTL reuses cached row; PageRank not re-invoked.
+
+    The cache is now owned by ``CitationInfluenceRepository``; when the
+    repo returns a fresh row the scorer must short-circuit before
+    invoking ``GraphAlgorithms.pagerank``.
+    """
     n = _node("c1", citation_count=5, year=2020)
     _persist_chain(store, n)
 
-    fixed_now = datetime(2025, 1, 1, tzinfo=timezone.utc)
-    s = _frozen_scorer(store, fixed_now)
+    # ``now`` defaults to the real clock so the row written on the
+    # first call is genuinely "fresh" (within max_age_days=7) on the
+    # second call -- the repo's TTL filter is wall-clock based.
+    s = InfluenceScorer(store=store)
 
     first = await s.compute_for_paper(n.paper_id)
 
     # Patch GraphAlgorithms.pagerank: if the second call invokes it,
-    # we'll know.
+    # we'll know the cache short-circuit failed.
     with patch.object(scorer_module.GraphAlgorithms, "pagerank") as mock_pr:
         second = await s.compute_for_paper(n.paper_id)
     mock_pr.assert_not_called()
@@ -496,44 +556,184 @@ async def test_compute_for_paper_unknown_node_returns_baseline(store):
 
 @pytest.mark.asyncio
 async def test_cache_write_failure_logs_event_but_returns_metrics(store, monkeypatch):
-    monkeypatch.setattr(scorer_module, "logger", structlog.get_logger())
+    """A repository write failure must NOT bubble to the scorer caller.
+
+    The new repository owns the failure-path logging; the scorer just
+    delegates. Verify that an injected repo whose ``record_metrics``
+    raises a non-contention ``sqlite3.Error`` (handled inside the
+    repo's outer ``try``) does not crash ``compute_for_paper`` -- the
+    in-memory metrics still flow back to the caller.
+    """
     n = _node("cw", citation_count=1, year=2020)
     _persist_chain(store, n)
 
-    s = InfluenceScorer(store=store)
+    # Build a repo wired to the same DB, then make ``record_metrics``
+    # raise. We use the real repo's outer ``try`` to swallow the
+    # ``sqlite3.Error`` and emit the audit-trail log event so the
+    # scorer caller never sees the exception (the contract preserved
+    # from the original ``_write_cache``).
+    repo = CitationInfluenceRepository.from_path(store.db_path)
+    monkeypatch.setattr(repo_module, "logger", structlog.get_logger())
 
-    def _raise(*args, **kwargs):
+    def _raise_on_record(_metrics):
         raise sqlite3.OperationalError("disk full")
 
-    # Patch open_connection inside the scorer module so the cache write
-    # path raises but the read path stays untouched (it ran before).
-    call_count = {"n": 0}
-    real_open = scorer_module.open_connection
-
-    from contextlib import contextmanager
-
-    @contextmanager
-    def fake_open(path):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            with real_open(path) as c:
-                yield c
-        else:
-            raise sqlite3.OperationalError("disk full")
-
-    monkeypatch.setattr(scorer_module, "open_connection", fake_open)
+    monkeypatch.setattr(repo, "_record_metrics_once", _raise_on_record)
+    s = InfluenceScorer(store=store, repo=repo)
 
     with structlog.testing.capture_logs() as logs:
         metrics = await s.compute_for_paper(n.paper_id)
     # Caller still receives in-memory metrics.
     assert metrics.paper_id == n.paper_id
-    assert any(e.get("event") == "influence_scorer_cache_write_failed" for e in logs)
+    # Repo's failure-path event must be present.
+    assert any(e.get("event") == "citation_influence_repo_write_failed" for e in logs)
 
 
-def test_write_cache_no_op_on_empty_input(store):
-    s = InfluenceScorer(store=store)
-    # Should not raise and should not open any connection.
-    s._write_cache([])
+# ---------------------------------------------------------------------------
+# Async wrapping (issue #134)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_compute_for_paper_wraps_writes_in_to_thread(store, monkeypatch):
+    """``record_metrics`` is sync (uses ``time.sleep`` for retry); the
+    scorer MUST wrap it in ``asyncio.to_thread`` so contention backoff
+    does not block the event loop. Spy on ``asyncio.to_thread`` to
+    confirm the write goes through the thread pool.
+    """
+    n = _node("at1", citation_count=1, year=2020)
+    _persist_chain(store, n)
+
+    repo = CitationInfluenceRepository.from_path(store.db_path)
+    s = InfluenceScorer(store=store, repo=repo)
+
+    record_calls: list[object] = []
+    get_calls: list[object] = []
+    real_to_thread = scorer_module.asyncio.to_thread
+
+    async def spy_to_thread(func, *args, **kwargs):
+        # Bound-method identity (``func is repo.record_metrics``) is
+        # unreliable because Python rebuilds the bound method on every
+        # attribute access; compare ``__func__`` against the unbound
+        # method instead.
+        underlying = getattr(func, "__func__", func)
+        if underlying is CitationInfluenceRepository.record_metrics:
+            record_calls.append(args[0])
+        elif underlying is CitationInfluenceRepository.get_metrics:
+            get_calls.append(args[0])
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(scorer_module.asyncio, "to_thread", spy_to_thread)
+    await s.compute_for_paper(n.paper_id)
+    # The repo's record_metrics was invoked exactly once via
+    # asyncio.to_thread.
+    assert len(record_calls) == 1
+    assert record_calls[0].paper_id == n.paper_id
+
+
+@pytest.mark.asyncio
+async def test_compute_for_paper_wraps_reads_in_to_thread(store, monkeypatch):
+    """``get_metrics`` is sync; the scorer MUST wrap the cache lookup
+    in ``asyncio.to_thread`` for the same reason -- a colliding writer
+    could hold the lock long enough to matter on the read path too.
+    """
+    n = _node("at2", citation_count=1, year=2020)
+    _persist_chain(store, n)
+
+    repo = CitationInfluenceRepository.from_path(store.db_path)
+    s = InfluenceScorer(store=store, repo=repo)
+
+    get_calls: list[object] = []
+    real_to_thread = scorer_module.asyncio.to_thread
+
+    async def spy_to_thread(func, *args, **kwargs):
+        underlying = getattr(func, "__func__", func)
+        if underlying is CitationInfluenceRepository.get_metrics:
+            get_calls.append(args[0])
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(scorer_module.asyncio, "to_thread", spy_to_thread)
+    await s.compute_for_paper(n.paper_id)
+    # The repo's get_metrics was invoked exactly once via
+    # asyncio.to_thread.
+    assert get_calls == [n.paper_id]
+
+
+@pytest.mark.asyncio
+async def test_compute_for_graph_wraps_each_write_in_to_thread(store, monkeypatch):
+    """``compute_for_graph`` writes one row per requested paper -- each
+    must be wrapped in ``asyncio.to_thread``.
+    """
+    nodes = [_node(f"atg{i}", citation_count=i, year=2020) for i in range(3)]
+    _persist_chain(store, *nodes)
+
+    repo = CitationInfluenceRepository.from_path(store.db_path)
+    s = InfluenceScorer(store=store, repo=repo)
+
+    record_calls: list[object] = []
+    real_to_thread = scorer_module.asyncio.to_thread
+
+    async def spy_to_thread(func, *args, **kwargs):
+        underlying = getattr(func, "__func__", func)
+        if underlying is CitationInfluenceRepository.record_metrics:
+            record_calls.append(args[0])
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(scorer_module.asyncio, "to_thread", spy_to_thread)
+    await s.compute_for_graph([n.paper_id for n in nodes])
+    assert len(record_calls) == 3
+    assert {m.paper_id for m in record_calls} == {n.paper_id for n in nodes}
+
+
+@pytest.mark.asyncio
+async def test_compute_for_paper_uses_repo_get_metrics(store):
+    """The cache hit path must come from ``repo.get_metrics`` -- not
+    a private scorer method. Inject a mock repo whose ``get_metrics``
+    returns a recognizable sentinel and verify the scorer returns
+    that exact instance.
+    """
+    n = _node("rg", citation_count=1, year=2020)
+    _persist_chain(store, n)
+
+    sentinel = InfluenceMetrics(
+        paper_id=n.paper_id,
+        citation_count=999,
+        citation_velocity=88.0,
+        pagerank_score=0.42,
+        hub_score=0.5,
+        authority_score=0.6,
+        computed_at=datetime.now(timezone.utc),
+    )
+    mock_repo = MagicMock(spec=CitationInfluenceRepository)
+    mock_repo.get_metrics.return_value = sentinel
+    s = InfluenceScorer(store=store, repo=mock_repo)
+
+    out = await s.compute_for_paper(n.paper_id)
+    assert out is sentinel
+    mock_repo.get_metrics.assert_called_once()
+    # Cache HIT path: record_metrics must NOT be called.
+    mock_repo.record_metrics.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_compute_for_paper_calls_repo_record_metrics_on_miss(store):
+    """On cache miss the scorer must call ``repo.record_metrics`` --
+    not any private write method on itself. Inject a mock repo that
+    returns ``None`` (miss) and verify ``record_metrics`` is invoked.
+    """
+    n = _node("rm", citation_count=2, year=2020)
+    _persist_chain(store, n)
+
+    mock_repo = MagicMock(spec=CitationInfluenceRepository)
+    mock_repo.get_metrics.return_value = None  # cache miss
+    s = InfluenceScorer(store=store, repo=mock_repo)
+
+    out = await s.compute_for_paper(n.paper_id)
+    mock_repo.record_metrics.assert_called_once()
+    written = mock_repo.record_metrics.call_args.args[0]
+    assert written.paper_id == n.paper_id
+    # Returned metrics match what was just written.
+    assert out.paper_id == n.paper_id
 
 
 # ---------------------------------------------------------------------------

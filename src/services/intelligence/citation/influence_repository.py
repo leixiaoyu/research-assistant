@@ -77,6 +77,7 @@ import structlog
 from src.storage.intelligence_graph.connection import (
     DEFAULT_BACKOFF_SECONDS,
     DEFAULT_MAX_ATTEMPTS,
+    _trunc,
     open_connection,
     retry_on_lock_contention,
 )
@@ -229,7 +230,7 @@ class CitationInfluenceRepository:
             logger.error(
                 "citation_influence_repo_write_failed",
                 paper_id=metrics.paper_id,
-                error=str(exc),
+                error=_trunc(exc),
             )
 
     def _record_metrics_once(self, metrics: "InfluenceMetrics") -> None:

@@ -631,3 +631,59 @@ class TestOutputRootEnvVar:
         assert len(written_events) == 1
         assert written_events[0].get("run_id") == run.run_id
         assert written_events[0].get("subscription_id") == sub.subscription_id
+
+
+# ---------------------------------------------------------------------------
+# Issue #141: per-paper source rendering
+# ---------------------------------------------------------------------------
+
+
+class TestDigestSourceRendering:
+    """The Top Papers section must surface each paper's source provider."""
+
+    def test_per_paper_source_appears_in_markdown(self, tmp_output: Path) -> None:
+        """Each Top Papers entry includes a ``Source: ...`` line.
+
+        Issue #141: a digest reader can immediately see that paper X came
+        from arXiv and paper Y came from OpenAlex without round-tripping
+        through the audit DB.
+        """
+        from src.services.intelligence.models.monitoring import PaperSource
+
+        gen = DigestGenerator(tmp_output)
+        sub = _make_subscription()
+        run = _make_run(
+            papers_seen=2,
+            papers_new=2,
+            papers=[
+                MonitoringPaperAudit(
+                    paper_id="arxiv-1",
+                    registered=True,
+                    relevance_score=0.9,
+                    source=PaperSource.ARXIV,
+                ),
+                MonitoringPaperAudit(
+                    paper_id="oa-1",
+                    registered=True,
+                    relevance_score=0.85,
+                    source=PaperSource.OPENALEX,
+                ),
+            ],
+        )
+        path = gen.generate(run, sub)
+        text = path.read_text(encoding="utf-8")
+
+        # Both source labels must appear under their respective papers.
+        assert "Source: `arxiv`" in text
+        assert "Source: `openalex`" in text
+
+    def test_source_line_omitted_when_no_papers(self, tmp_output: Path) -> None:
+        """The empty-papers code path must not render any source lines."""
+        gen = DigestGenerator(tmp_output)
+        sub = _make_subscription()
+        run = _make_run()  # no papers
+        text = gen.generate(run, sub).read_text(encoding="utf-8")
+        # The empty section's "no papers" sentinel is present...
+        assert "_No papers were seen in this run._" in text
+        # ...and no spurious Source line was rendered.
+        assert "Source:" not in text

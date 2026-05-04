@@ -423,10 +423,10 @@ MIGRATION_V4_CITATION_INFLUENCE_METRICS = Migration(
 #
 # This migration adds a per-paper ``source`` column to
 # ``monitoring_papers`` so each row records its actual discovery
-# provider. The cycle-level ``monitoring_runs.source`` column is left
-# alone (semantics widened in code: it now means "primary / first-seen
-# source", not "all sources" — the per-paper row is the source of
-# truth).
+# provider. ``MonitoringRun.source`` (in-memory only — no
+# ``monitoring_runs.source`` column exists) is left alone; its semantics
+# are widened in code to mean "primary / first-seen source" rather than
+# "all sources". The per-paper row is the authoritative record.
 #
 # Backfill
 # --------
@@ -446,17 +446,54 @@ MIGRATION_V4_CITATION_INFLUENCE_METRICS = Migration(
 # Using a sentinel default means downstream code can treat the column
 # as required without a None branch. The PaperSource enum already has
 # ``ARXIV`` so the default lines up with the enum's first member.
+#
+# Why table-swap (not ALTER TABLE ADD COLUMN)
+# -------------------------------------------
+# SQLite's ``ALTER TABLE ... ADD COLUMN`` cannot add a column with a
+# CHECK constraint. The table-swap pattern (CREATE new → INSERT from old
+# → DROP old → RENAME) is the only SQLite-portable way to add a CHECK to
+# an existing table. Mirrors the approach used in V3.
+#
+# CHECK constraint mirrors ``PaperSource`` enum exactly so that any future
+# enum addition that forgets a corresponding V6 widening is caught at
+# INSERT time rather than silently storing garbage. The drift-guard test
+# ``test_migrate_v5_check_constraint_matches_paper_source_enum`` pins the
+# enum-vs-CHECK pairing.
 MIGRATION_V5_PAPER_SOURCE_TRACKING = Migration(
     version=5,
     name="paper_source_tracking",
     description=(
         "Add monitoring_papers.source column for per-paper provenance "
         "(Phase 9.1 Tier 1 follow-up / Issue #141). Backfills existing "
-        "rows to 'arxiv' since pre-Tier-1 monitoring was arXiv-only."
+        "rows to 'arxiv' since pre-Tier-1 monitoring was arXiv-only. "
+        "Uses table-swap to add CHECK (source IN (...)) constraint."
     ),
     up="""
-    ALTER TABLE monitoring_papers
-        ADD COLUMN source TEXT NOT NULL DEFAULT 'arxiv';
+    CREATE TABLE monitoring_papers_new (
+        run_id TEXT NOT NULL,
+        paper_id TEXT NOT NULL,
+        registered INTEGER NOT NULL DEFAULT 0,
+        relevance_score REAL,
+        relevance_reasoning TEXT,
+        source TEXT NOT NULL DEFAULT 'arxiv'
+            CHECK (source IN (
+                'arxiv', 'semantic_scholar', 'huggingface', 'openalex'
+            )),
+        PRIMARY KEY (run_id, paper_id),
+        FOREIGN KEY (run_id) REFERENCES monitoring_runs(run_id)
+            ON DELETE CASCADE
+    );
+
+    INSERT INTO monitoring_papers_new (
+        run_id, paper_id, registered, relevance_score, relevance_reasoning, source
+    )
+    SELECT
+        run_id, paper_id, registered, relevance_score, relevance_reasoning, 'arxiv'
+    FROM monitoring_papers;
+
+    DROP TABLE monitoring_papers;
+
+    ALTER TABLE monitoring_papers_new RENAME TO monitoring_papers;
     """,
 )
 

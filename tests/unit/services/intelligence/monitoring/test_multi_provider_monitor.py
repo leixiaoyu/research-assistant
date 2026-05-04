@@ -915,22 +915,112 @@ def test_build_tier1_extras_returns_none_when_no_llm() -> None:
     assert query_expander is None
 
 
-def test_build_tier1_extras_returns_none_on_construction_failure(
-    monkeypatch,
+def test_build_tier1_extras_returns_none_when_provider_construction_raises(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """H-C4: If provider construction fails, build_tier1_extras returns (None, None)."""
-    # Patch the factory to simulate a construction failure.
-    monkeypatch.setattr(
-        "src.services.intelligence.monitoring._tier1_factory.build_tier1_extras",
-        lambda llm: (None, None),
-    )
+    """C-2/H-C4: If a provider constructor raises, build_tier1_extras catches
+    the exception, logs monitor_tier1_init_failed, and returns (None, None).
 
+    Patches OpenAlexProvider (a *dependency* of build_tier1_extras, not the
+    function under test) so the production code path is actually executed.
+    """
+    import structlog
+    import structlog.testing
+
+    import src.services.intelligence.monitoring._tier1_factory as factory_module
     from src.services.intelligence.monitoring._tier1_factory import build_tier1_extras
 
-    extra_providers, query_expander = build_tier1_extras(MagicMock())
-    # When the factory is patched to always return (None, None), caller receives None.
+    monkeypatch.setattr(factory_module, "logger", structlog.get_logger())
+    monkeypatch.setattr(
+        "src.services.providers.openalex.OpenAlexProvider",
+        MagicMock(side_effect=RuntimeError("network unreachable")),
+    )
+
+    with structlog.testing.capture_logs() as logs:
+        extra_providers, query_expander = build_tier1_extras(MagicMock())
+
     assert extra_providers is None
     assert query_expander is None
+
+    failed_events = [e for e in logs if e.get("event") == "monitor_tier1_init_failed"]
+    assert len(failed_events) == 1
+    assert "network unreachable" in failed_events[0].get("error", "")
+
+
+def test_build_tier1_extras_happy_path_returns_providers_and_expander(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C-2/H-C4: When all providers construct successfully, build_tier1_extras
+    returns a non-None providers dict and a QueryExpander.
+
+    Patches OpenAlexProvider, HuggingFaceProvider, and QueryExpander so
+    the real try-block (lines 60-79) is exercised without network I/O.
+    SEMANTIC_SCHOLAR_API_KEY is unset so the optional S2 branch is skipped.
+    """
+    from src.services.intelligence.monitoring._tier1_factory import build_tier1_extras
+    from src.services.intelligence.monitoring.models import PaperSource
+
+    fake_openalex = MagicMock()
+    fake_hf = MagicMock()
+    fake_expander = MagicMock()
+
+    monkeypatch.setattr(
+        "src.services.providers.openalex.OpenAlexProvider",
+        MagicMock(return_value=fake_openalex),
+    )
+    monkeypatch.setattr(
+        "src.services.providers.huggingface.HuggingFaceProvider",
+        MagicMock(return_value=fake_hf),
+    )
+    monkeypatch.setattr(
+        "src.utils.query_expander.QueryExpander",
+        MagicMock(return_value=fake_expander),
+    )
+    # Ensure no S2 key is present for this test.
+    monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+
+    extra_providers, query_expander = build_tier1_extras(MagicMock())
+
+    assert extra_providers is not None
+    assert PaperSource.OPENALEX in extra_providers
+    assert PaperSource.HUGGINGFACE in extra_providers
+    assert PaperSource.SEMANTIC_SCHOLAR not in extra_providers
+    assert query_expander is fake_expander
+
+
+def test_build_tier1_extras_includes_semantic_scholar_when_api_key_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C-2/H-C4: When SEMANTIC_SCHOLAR_API_KEY is set, SemanticScholarProvider
+    is included in the returned providers dict (line 73 branch).
+    """
+    from src.services.intelligence.monitoring._tier1_factory import build_tier1_extras
+    from src.services.intelligence.monitoring.models import PaperSource
+
+    fake_s2 = MagicMock()
+
+    monkeypatch.setattr(
+        "src.services.providers.openalex.OpenAlexProvider",
+        MagicMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr(
+        "src.services.providers.huggingface.HuggingFaceProvider",
+        MagicMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr(
+        "src.services.providers.semantic_scholar.SemanticScholarProvider",
+        MagicMock(return_value=fake_s2),
+    )
+    monkeypatch.setattr(
+        "src.utils.query_expander.QueryExpander",
+        MagicMock(return_value=MagicMock()),
+    )
+    monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "test-key-123")
+
+    extra_providers, _ = build_tier1_extras(MagicMock())
+
+    assert extra_providers is not None
+    assert PaperSource.SEMANTIC_SCHOLAR in extra_providers
 
 
 # ---------------------------------------------------------------------------

@@ -596,15 +596,14 @@ class CitationRecommender:
             # Count how many distinct distant nodes cite each r2 candidate.
             # "Cite" in the backward direction means: the distant node
             # references the candidate (outgoing edge from distant → candidate).
+            # Use a single bulk SQL query instead of one traverse per node.
+            distant_to_targets = self._store._list_outgoing_edges_for_nodes(
+                distant_nodes,
+                edge_type_values=[EdgeType.CITES.value],
+            )
             bridge_counts: dict[str, int] = {}
-            for distant in distant_nodes:
-                # What does this distant node reference?
-                cited_by_distant = self._get_bfs_neighbors(
-                    distant,
-                    radius=1,
-                    direction="outgoing",
-                )
-                for cited in cited_by_distant:
+            for cited_list in distant_to_targets.values():
+                for cited in cited_list:
                     if cited in r2_set:
                         bridge_counts[cited] = bridge_counts.get(cited, 0) + 1
 

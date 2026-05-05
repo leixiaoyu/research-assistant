@@ -501,11 +501,11 @@ async def test_recommend_bridge_papers_identifies_connectors(monkeypatch) -> Non
     r2_nodes = [_make_graph_node(_P1), _make_graph_node(_P2), _make_graph_node(_P3)]
     r3_nodes = r2_nodes + [_make_graph_node(_P4), _make_graph_node(_P5)]
 
-    # Store.traverse is called multiple times:
+    # Store.traverse is called twice:
     # 1st call: radius=2 outgoing → r2_nodes (candidates)
     # 2nd call: radius=3 outgoing → r3_nodes (frontier)
-    # 3rd call: radius=1 outgoing from P4 → [P1, P2] (P4 → P1, P4 → P2)
-    # 4th call: radius=1 outgoing from P5 → [P1] (P5 → P1)
+    # Then _list_outgoing_edges_for_nodes is called once with [P4, P5]:
+    #   P4 → [P1, P2], P5 → [P1]
 
     call_count = [0]
 
@@ -513,20 +513,18 @@ async def test_recommend_bridge_papers_identifies_connectors(monkeypatch) -> Non
         call_count[0] += 1
         c = call_count[0]
         if c == 1:
-            # radius-2 backward: candidates
             return r2_nodes
         elif c == 2:
-            # radius-3 backward: full frontier
             return r3_nodes
-        elif c == 3 and node_id == _P4:
-            return [_make_graph_node(_P1), _make_graph_node(_P2)]
-        elif c == 4 and node_id == _P5:
-            return [_make_graph_node(_P1)]
         return []
 
     mock_store = MagicMock()
     mock_store.traverse = MagicMock(side_effect=_traverse_side_effect)
     mock_store.get_node = MagicMock(return_value=None)
+    # Bulk query: P4 cites P1+P2, P5 cites P1
+    mock_store._list_outgoing_edges_for_nodes = MagicMock(
+        return_value={_P4: [_P1, _P2], _P5: [_P1]}
+    )
 
     rec = CitationRecommender(
         coupling=AsyncMock(),
@@ -581,14 +579,13 @@ async def test_recommend_bridge_papers_no_bridges_below_threshold(
             return r2_nodes
         elif c == 2:
             return r3_nodes
-        elif c == 3:
-            # P4 only references P1 once (count=1 < threshold of 2)
-            return [_make_graph_node(_P1)]
         return []
 
     mock_store = MagicMock()
     mock_store.traverse = MagicMock(side_effect=_traverse_se)
     mock_store.get_node = MagicMock(return_value=None)
+    # P4 only references P1 once (count=1 < threshold of 2)
+    mock_store._list_outgoing_edges_for_nodes = MagicMock(return_value={_P4: [_P1]})
 
     rec = CitationRecommender(
         coupling=AsyncMock(),
@@ -777,7 +774,7 @@ def test_score_normalization_preserves_ordering() -> None:
 async def test_recommend_bridge_no_distant_nodes(monkeypatch) -> None:
     """When radius-3 frontier equals radius-2 (no distant nodes), return empty."""
     r2_nodes = [_make_graph_node(_P1), _make_graph_node(_P2)]
-    # r3 == r2 → no distant nodes → no bridges
+    # r3 == r2 → no distant nodes → _list_outgoing_edges_for_nodes called with []
     call_count = [0]
 
     def _traverse_se(node_id, edge_types, max_depth, direction="both"):
@@ -789,6 +786,7 @@ async def test_recommend_bridge_no_distant_nodes(monkeypatch) -> None:
     mock_store = MagicMock()
     mock_store.traverse = MagicMock(side_effect=_traverse_se)
     mock_store.get_node = MagicMock(return_value=None)
+    mock_store._list_outgoing_edges_for_nodes = MagicMock(return_value={})
 
     rec = CitationRecommender(
         coupling=AsyncMock(),
@@ -1182,14 +1180,13 @@ async def test_recommend_bridge_distant_cites_outside_r2_ignored(
             return r2_nodes
         elif c == 2:
             return r3_nodes
-        elif c == 3 and node_id == _P4:
-            # P4 cites P5 only (not in r2) → the false branch at 488->487
-            return [_make_graph_node(_P5)]
         return []
 
     mock_store = MagicMock()
     mock_store.traverse = MagicMock(side_effect=_traverse_se)
     mock_store.get_node = MagicMock(return_value=None)
+    # P4 cites P5 only (not in r2) → count stays 0
+    mock_store._list_outgoing_edges_for_nodes = MagicMock(return_value={_P4: [_P5]})
 
     rec = CitationRecommender(
         coupling=AsyncMock(),

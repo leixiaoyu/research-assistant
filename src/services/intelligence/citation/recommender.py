@@ -58,6 +58,7 @@ from src.services.intelligence.citation.models import (
     Recommendation,
     RecommendationStrategy,
 )
+from src.storage.intelligence_graph.connection import _trunc
 from src.storage.intelligence_graph.unified_graph import SQLiteGraphStore
 
 logger = structlog.get_logger(__name__)
@@ -219,7 +220,7 @@ class CitationRecommender:
                 "recommender_strategy_failed",
                 seed_id=seed_id,
                 strategy=strategy.value,
-                error=repr(str(exc)[:512]),
+                error=_trunc(exc),
             )
             raise
 
@@ -308,7 +309,7 @@ class CitationRecommender:
                 "recommender_strategy_failed",
                 seed_id=seed_id,
                 strategy=strategy.value,
-                error=repr(str(exc)[:512]),
+                error=_trunc(exc),
             )
             raise
 
@@ -414,7 +415,7 @@ class CitationRecommender:
                 "recommender_strategy_failed",
                 seed_id=seed_id,
                 strategy=strategy.value,
-                error=repr(str(exc)[:512]),
+                error=_trunc(exc),
             )
             raise
 
@@ -540,7 +541,7 @@ class CitationRecommender:
                 "recommender_strategy_failed",
                 seed_id=seed_id,
                 strategy=strategy.value,
-                error=repr(str(exc)[:512]),
+                error=_trunc(exc),
             )
             raise
 

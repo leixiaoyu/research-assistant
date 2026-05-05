@@ -31,7 +31,7 @@ from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from src.services.intelligence.citation._id_validation import (
     CANONICAL_NODE_ID_PATTERN,
@@ -394,3 +394,103 @@ class CitationEdge(BaseModel):
             target_id=self.cited_paper_id,
             properties=properties,
         )
+
+
+class CouplingResult(BaseModel):
+    """Result of bibliographic coupling analysis (REQ-9.2.3 / Issue #128).
+
+    Represents the Jaccard similarity between two papers based on their
+    shared references.  The pair is directional at the model level but
+    stored canonically (min_id, max_id) at the persistence layer.
+
+    Pydantic V2 strict — extra fields are forbidden so mis-spelled
+    kwargs fail loudly at construction time instead of being silently
+    ignored.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    paper_a_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=512,
+        description="First paper (canonical graph node id).",
+    )
+    paper_b_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=512,
+        description=(
+            "Second paper (canonical graph node id). Must differ from paper_a_id."
+        ),
+    )
+    shared_references: list[str] = Field(
+        default_factory=list,
+        description="Sorted, deduplicated paper IDs cited by both papers.",
+    )
+    coupling_strength: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Jaccard similarity of the two reference sets.",
+    )
+    co_citation_count: int = Field(
+        default=0,
+        ge=0,
+        description="Times both papers are cited together in a third paper.",
+    )
+
+    @field_validator("paper_a_id", "paper_b_id")
+    @classmethod
+    def _validate_paper_id(cls, v: str) -> str:
+        """Enforce the canonical node-id character set (post-normalization)."""
+        v = v.strip()
+        if not v:
+            raise ValueError("paper_id cannot be empty")
+        if not CANONICAL_NODE_ID_PATTERN.match(v):
+            raise ValueError(
+                f"Invalid paper_id format: {v!r}. "
+                "Allowed: alphanumeric, colons, periods, hyphens, underscores."
+            )
+        return v
+
+    @field_validator("paper_b_id")
+    @classmethod
+    def _reject_self_pair(cls, v: str, info: ValidationInfo) -> str:
+        """Reject a self-pair (paper_a_id == paper_b_id).
+
+        This guard runs *after* ``_validate_paper_id`` because validators
+        execute in field-declaration order and ``paper_b_id`` is declared
+        after ``paper_a_id``. By the time this validator fires,
+        ``info.data`` already contains the validated ``paper_a_id``.
+        """
+        paper_a = info.data.get("paper_a_id")
+        if paper_a is not None and v == paper_a:
+            raise ValueError(
+                f"paper_a_id and paper_b_id must differ; got {v!r} for both."
+            )
+        return v
+
+    @field_validator("shared_references")
+    @classmethod
+    def _validate_shared_references(cls, v: list[str]) -> list[str]:
+        """Ensure each reference ID matches the canonical pattern.
+
+        The list is also deduped and sorted here so callers that
+        build it via set operations don't need to remember to sort.
+        """
+        seen: set[str] = set()
+        validated: list[str] = []
+        for ref in v:
+            ref = ref.strip()
+            if not ref:
+                raise ValueError("shared_references entries must be non-empty strings")
+            if not CANONICAL_NODE_ID_PATTERN.match(ref):
+                raise ValueError(
+                    f"Invalid shared reference id: {ref!r}. "
+                    "Allowed: alphanumeric, colons, periods, hyphens, underscores."
+                )
+            if ref not in seen:
+                seen.add(ref)
+                validated.append(ref)
+        return sorted(validated)

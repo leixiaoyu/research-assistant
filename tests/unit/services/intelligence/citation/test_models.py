@@ -1,4 +1,4 @@
-"""Tests for citation domain models (Milestone 9.2 — Week 1)."""
+"""Tests for citation domain models (Milestone 9.2 — Week 1 + 2)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from src.services.intelligence.citation.models import (
     CitationDirection,
     CitationEdge,
     CitationNode,
+    CouplingResult,
     CrawlDirection,
     LegacyCitationDirection,
     _normalize_id_segment,
@@ -541,3 +542,161 @@ def test_citation_direction_backward_compat_alias():
     assert CitationDirection.OUT.value == "out"
     assert CitationDirection.IN.value == "in"
     assert CitationDirection.BOTH.value == "both"
+
+
+# ---------------------------------------------------------------------------
+# CouplingResult (REQ-9.2.3 / Issue #128)
+# ---------------------------------------------------------------------------
+
+
+class TestCouplingResult:
+    """Tests for :class:`CouplingResult` Pydantic V2 strict model."""
+
+    def test_coupling_result_basic_construction(self) -> None:
+        """Happy-path construction with minimal fields."""
+        result = CouplingResult(
+            paper_a_id="paper:s2:aaa",
+            paper_b_id="paper:s2:bbb",
+            shared_references=["paper:s2:r1"],
+            coupling_strength=0.5,
+            co_citation_count=0,
+        )
+        assert result.coupling_strength == 0.5
+        assert result.paper_a_id == "paper:s2:aaa"
+        assert result.paper_b_id == "paper:s2:bbb"
+
+    def test_coupling_result_shared_references_sorted(self) -> None:
+        """shared_references is sorted and deduped at validation time."""
+        result = CouplingResult(
+            paper_a_id="paper:s2:aaa",
+            paper_b_id="paper:s2:bbb",
+            shared_references=["paper:s2:zzz", "paper:s2:aaa", "paper:s2:aaa"],
+            coupling_strength=0.3,
+            co_citation_count=0,
+        )
+        # Deduped: only 2 unique, sorted.
+        assert result.shared_references == ["paper:s2:aaa", "paper:s2:zzz"]
+
+    def test_coupling_result_rejects_self_pair(self) -> None:
+        """paper_a_id == paper_b_id raises ValidationError."""
+        with pytest.raises(ValidationError, match="must differ"):
+            CouplingResult(
+                paper_a_id="paper:s2:same",
+                paper_b_id="paper:s2:same",
+                shared_references=[],
+                coupling_strength=0.0,
+                co_citation_count=0,
+            )
+
+    def test_coupling_result_rejects_invalid_paper_id(self) -> None:
+        """paper_a_id with disallowed chars raises ValidationError."""
+        with pytest.raises(ValidationError, match="Invalid paper_id format"):
+            CouplingResult(
+                paper_a_id="paper:s2:a b",  # space is disallowed
+                paper_b_id="paper:s2:bbb",
+                shared_references=[],
+                coupling_strength=0.0,
+                co_citation_count=0,
+            )
+
+    def test_coupling_result_rejects_invalid_shared_reference(self) -> None:
+        """Shared reference with disallowed chars raises ValidationError."""
+        with pytest.raises(ValidationError, match="Invalid shared reference"):
+            CouplingResult(
+                paper_a_id="paper:s2:aaa",
+                paper_b_id="paper:s2:bbb",
+                shared_references=["bad id with spaces"],
+                coupling_strength=0.0,
+                co_citation_count=0,
+            )
+
+    def test_coupling_result_rejects_negative_co_citation_count(self) -> None:
+        """co_citation_count < 0 raises ValidationError."""
+        with pytest.raises(ValidationError, match="greater than or equal to 0"):
+            CouplingResult(
+                paper_a_id="paper:s2:aaa",
+                paper_b_id="paper:s2:bbb",
+                shared_references=[],
+                coupling_strength=0.0,
+                co_citation_count=-1,
+            )
+
+    def test_coupling_result_rejects_coupling_strength_above_one(self) -> None:
+        """coupling_strength > 1.0 raises ValidationError."""
+        with pytest.raises(ValidationError, match="less than or equal to 1"):
+            CouplingResult(
+                paper_a_id="paper:s2:aaa",
+                paper_b_id="paper:s2:bbb",
+                shared_references=[],
+                coupling_strength=1.1,
+                co_citation_count=0,
+            )
+
+    def test_coupling_result_rejects_coupling_strength_below_zero(self) -> None:
+        """coupling_strength < 0.0 raises ValidationError."""
+        with pytest.raises(ValidationError, match="greater than or equal to 0"):
+            CouplingResult(
+                paper_a_id="paper:s2:aaa",
+                paper_b_id="paper:s2:bbb",
+                shared_references=[],
+                coupling_strength=-0.1,
+                co_citation_count=0,
+            )
+
+    def test_coupling_result_rejects_extra_fields(self) -> None:
+        """Extra fields are forbidden (extra='forbid')."""
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            CouplingResult(
+                paper_a_id="paper:s2:aaa",
+                paper_b_id="paper:s2:bbb",
+                shared_references=[],
+                coupling_strength=0.0,
+                co_citation_count=0,
+                unknown_field="bad",  # type: ignore[call-arg]
+            )
+
+    def test_coupling_result_boundary_strength_zero(self) -> None:
+        """coupling_strength=0.0 is accepted (boundary value)."""
+        result = CouplingResult(
+            paper_a_id="paper:s2:aaa",
+            paper_b_id="paper:s2:bbb",
+            shared_references=[],
+            coupling_strength=0.0,
+            co_citation_count=0,
+        )
+        assert result.coupling_strength == 0.0
+
+    def test_coupling_result_boundary_strength_one(self) -> None:
+        """coupling_strength=1.0 is accepted (boundary value)."""
+        result = CouplingResult(
+            paper_a_id="paper:s2:aaa",
+            paper_b_id="paper:s2:bbb",
+            shared_references=["paper:s2:r1"],
+            coupling_strength=1.0,
+            co_citation_count=0,
+        )
+        assert result.coupling_strength == 1.0
+
+    def test_coupling_result_rejects_whitespace_paper_id(self) -> None:
+        """Whitespace-only paper_a_id raises ValidationError (empty after strip)."""
+        with pytest.raises(ValidationError, match="paper_id cannot be empty"):
+            CouplingResult(
+                paper_a_id="   ",
+                paper_b_id="paper:s2:bbb",
+                shared_references=[],
+                coupling_strength=0.0,
+                co_citation_count=0,
+            )
+
+    def test_coupling_result_rejects_empty_shared_reference_string(self) -> None:
+        """Whitespace-only shared reference raises ValidationError."""
+        with pytest.raises(
+            ValidationError, match="shared_references entries must be non-empty"
+        ):
+            CouplingResult(
+                paper_a_id="paper:s2:aaa",
+                paper_b_id="paper:s2:bbb",
+                shared_references=["   "],
+                coupling_strength=0.0,
+                co_citation_count=0,
+            )

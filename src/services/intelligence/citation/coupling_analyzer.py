@@ -17,9 +17,17 @@ Computed pairs are cached in the ``citation_coupling`` table introduced by
 :class:`CitationCouplingRepository` so the analyzer never touches the
 DB schema directly.  ``analyze_pair`` checks the cache first; a cache
 miss computes Jaccard and upserts the result via the repository.
-``analyze_for_paper`` does not consult the cache (it is a bulk scatter
-call; caching is left to the underlying ``analyze_pair`` calls if the
-caller wishes to compose them).
+``analyze_for_paper`` uses the cache indirectly — each underlying
+``analyze_pair`` call checks the cache and writes the result if a repo
+is wired in.
+
+Async safety
+------------
+Both public methods are ``async def`` wrapping sync DB/graph work via
+``asyncio.to_thread`` — the canonical pattern from CLAUDE.md "SQLite
+write retry" and mirroring :meth:`InfluenceScorer.compute_for_paper`.
+``analyze_for_paper`` fans out concurrent pair evaluations using
+``asyncio.gather`` with a bounded semaphore (concurrency 10).
 
 Failure semantics
 -----------------
@@ -27,10 +35,13 @@ Failure semantics
 - Invalid paper id → :class:`ValueError` with a clear message.
 - Cache write failure → swallowed (logged at ERROR level), in-memory
   result still returned.
+- ``candidates`` exceeds :data:`MAX_CANDIDATES` → :class:`ValueError`.
+- ``top_k`` exceeds :data:`MAX_TOP_K` → clamped to ``MAX_TOP_K``.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Optional
 
 import structlog
@@ -42,6 +53,7 @@ from src.services.intelligence.citation._id_validation import (
 from src.services.intelligence.citation.models import CouplingResult
 from src.services.intelligence.models import EdgeType
 from src.storage.intelligence_graph import SQLiteGraphStore
+from src.storage.intelligence_graph.connection import _trunc
 
 if TYPE_CHECKING:
     from src.services.intelligence.citation.coupling_repository import (
@@ -53,6 +65,19 @@ logger = structlog.get_logger(__name__)
 # Strict allow-list mirrored from _id_validation (single source of truth).
 _PAPER_ID_PATTERN = CANONICAL_NODE_ID_PATTERN
 _PAPER_ID_MAX_LENGTH = PAPER_ID_MAX_LENGTH
+
+# DoS guard: maximum number of candidates accepted by analyze_for_paper.
+MAX_CANDIDATES: int = 10_000
+
+# DoS guard: maximum top_k that may be requested.
+MAX_TOP_K: int = 1_000
+
+# Bounded concurrency for analyze_for_paper fan-out (mirrors MultiProviderMonitor).
+_ANALYZE_FOR_PAPER_CONCURRENCY: int = 10
+
+# DoS guard: cap on the number of outgoing CITES edges fetched per paper.
+# Reference sets larger than this are truncated after emitting an audit log.
+_MAX_REFERENCES: int = 50_000
 
 
 def _validate_paper_id(paper_id: str) -> None:
@@ -114,7 +139,7 @@ class CouplingAnalyzer:
     # Public API
     # ------------------------------------------------------------------
 
-    def analyze_pair(
+    async def analyze_pair(
         self,
         paper_a_id: str,
         paper_b_id: str,
@@ -124,6 +149,12 @@ class CouplingAnalyzer:
         Reads ``EdgeType.CITES`` outgoing edges for each paper from the
         graph store to obtain their reference sets, then computes the
         Jaccard similarity.
+
+        Async safety:
+            All repository and graph-store calls are wrapped in
+            ``asyncio.to_thread`` so synchronous DB/graph work does not
+            stall the event loop — mirrors
+            :meth:`InfluenceScorer.compute_for_paper`.
 
         Args:
             paper_a_id: Canonical node id of the first paper.
@@ -146,27 +177,27 @@ class CouplingAnalyzer:
 
         # Consult cache first (if a repo is wired in).
         if self._repo is not None:
-            cached = self._repo.get(paper_a_id, paper_b_id)
+            cached = await asyncio.to_thread(self._repo.get, paper_a_id, paper_b_id)
             if cached is not None:
                 return cached
 
-        result = self._compute_pair(paper_a_id, paper_b_id)
+        result = await asyncio.to_thread(self._compute_pair, paper_a_id, paper_b_id)
 
         # Persist to cache (swallow errors so the caller still gets the result).
         if self._repo is not None:
             try:
-                self._repo.record(result)
+                await asyncio.to_thread(self._repo.record, result)
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "coupling_analyzer_cache_write_failed",
                     paper_a_id=paper_a_id,
                     paper_b_id=paper_b_id,
-                    error=str(exc)[:200],
+                    error=_trunc(exc),
                 )
 
         return result
 
-    def analyze_for_paper(
+    async def analyze_for_paper(
         self,
         paper_id: str,
         candidates: list[str],
@@ -175,8 +206,10 @@ class CouplingAnalyzer:
         """Find the top-K most coupled papers from a candidate list.
 
         Computes ``analyze_pair(paper_id, candidate)`` for each entry in
-        ``candidates``, then returns the ``top_k`` results sorted
-        descending by ``coupling_strength``.
+        ``candidates`` concurrently (bounded to
+        :data:`_ANALYZE_FOR_PAPER_CONCURRENCY` simultaneous tasks via a
+        semaphore), then returns the ``top_k`` results sorted descending
+        by ``coupling_strength``.
 
         Papers whose coupling strength is 0.0 are included in the sort
         so the caller has full visibility; it is their responsibility to
@@ -187,8 +220,9 @@ class CouplingAnalyzer:
             candidates: Other papers to compare with. Must not contain
                 ``paper_id`` itself (each element is validated; the
                 self-pair check in ``analyze_pair`` will raise if one
-                slips through).
+                slips through). Must not exceed :data:`MAX_CANDIDATES`.
             top_k: Maximum number of results to return. Must be >= 1.
+                Values above :data:`MAX_TOP_K` are clamped silently.
 
         Returns:
             Up to ``top_k`` :class:`CouplingResult` objects sorted by
@@ -196,16 +230,28 @@ class CouplingAnalyzer:
             ascending for a stable tie-break.
 
         Raises:
-            ValueError: If ``paper_id`` is malformed, or ``top_k < 1``.
+            ValueError: If ``paper_id`` is malformed, ``top_k < 1``, or
+                ``len(candidates)`` exceeds :data:`MAX_CANDIDATES`.
         """
         _validate_paper_id(paper_id)
         if top_k < 1:
             raise ValueError(f"top_k must be >= 1, got {top_k}")
+        if len(candidates) > MAX_CANDIDATES:
+            raise ValueError(
+                f"candidates length {len(candidates)} exceeds MAX_CANDIDATES "
+                f"({MAX_CANDIDATES})"
+            )
+        top_k = min(top_k, MAX_TOP_K)
 
-        results: list[CouplingResult] = []
-        for candidate in candidates:
-            result = self.analyze_pair(paper_id, candidate)
-            results.append(result)
+        sem = asyncio.Semaphore(_ANALYZE_FOR_PAPER_CONCURRENCY)
+
+        async def _bounded(candidate: str) -> CouplingResult:
+            async with sem:
+                return await self.analyze_pair(paper_id, candidate)
+
+        results: list[CouplingResult] = list(
+            await asyncio.gather(*[_bounded(c) for c in candidates])
+        )
 
         results.sort(key=lambda r: (-r.coupling_strength, r.paper_b_id))
         return results[:top_k]
@@ -220,6 +266,11 @@ class CouplingAnalyzer:
         Reads outgoing ``CITES`` edges from the graph store.  Each such
         edge's ``target_id`` is one reference.
 
+        If the edge count exceeds :data:`_MAX_REFERENCES`, the list is
+        truncated and a ``coupling_references_truncated`` audit event is
+        emitted so operators can monitor unexpectedly dense reference
+        sets.
+
         Args:
             paper_id: Canonical node id.
 
@@ -232,6 +283,14 @@ class CouplingAnalyzer:
             direction="outgoing",
             edge_type=EdgeType.CITES,
         )
+        if len(edges) > _MAX_REFERENCES:
+            logger.warning(
+                "coupling_references_truncated",
+                paper_id=paper_id,
+                fetched=len(edges),
+                cap=_MAX_REFERENCES,
+            )
+            edges = edges[:_MAX_REFERENCES]
         return frozenset(edge.target_id for edge in edges)
 
     def _compute_pair(
@@ -275,6 +334,10 @@ class CouplingAnalyzer:
             coupling_strength=strength,
         )
 
+        # TODO(issue #150): co_citation_count not yet computed; always 0.
+        # Full implementation requires a reverse-edge walk: find all papers
+        # with outgoing CITES edges to BOTH paper_a_id AND paper_b_id.
+        # Filed as a follow-up to keep this PR focused on Jaccard coupling.
         return CouplingResult(
             paper_a_id=paper_a_id,
             paper_b_id=paper_b_id,

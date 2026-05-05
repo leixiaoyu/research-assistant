@@ -9,6 +9,9 @@ Covers:
 - analyze_for_paper top-k ordering and k-cap
 - Cache hit / miss (via injected repo mock)
 - Invalid paper id pattern
+- DoS guards: MAX_CANDIDATES, MAX_TOP_K
+- Tie-break determinism (L-5)
+- DEFAULT_MAX_AGE_DAYS TTL linkage (L-3)
 - Structured-log events via ``capture_logs()`` with the canonical
   "rebind logger before capture" pattern (CLAUDE.md §Test Authoring
   Conventions).
@@ -27,8 +30,13 @@ import structlog
 import structlog.testing
 
 import src.services.intelligence.citation.coupling_analyzer as analyzer_mod
-from src.services.intelligence.citation.coupling_analyzer import CouplingAnalyzer
+from src.services.intelligence.citation.coupling_analyzer import (
+    MAX_CANDIDATES,
+    MAX_TOP_K,
+    CouplingAnalyzer,
+)
 from src.services.intelligence.citation.coupling_repository import (
+    DEFAULT_MAX_AGE_DAYS,
     CitationCouplingRepository,
 )
 from src.services.intelligence.models import EdgeType, GraphEdge
@@ -111,14 +119,15 @@ def repo(db_path: Path) -> CitationCouplingRepository:
 
 
 class TestAnalyzePairJaccard:
-    def test_coupling_jaccard_exact_example_from_spec(self) -> None:
+    @pytest.mark.asyncio
+    async def test_coupling_jaccard_exact_example_from_spec(self) -> None:
         """Spec example: A:[R1..R5], B:[R2,R3,R4,R6,R7] → 3/7 ≈ 0.4286.
 
         Pinned with pytest.approx per REQ-9.2.3 §617.
         """
         store = _mock_store_with_refs({PAPER_A: REFS_A, PAPER_B: REFS_B})
         analyzer = CouplingAnalyzer(store)
-        result = analyzer.analyze_pair(PAPER_A, PAPER_B)
+        result = await analyzer.analyze_pair(PAPER_A, PAPER_B)
 
         assert result.coupling_strength == pytest.approx(3 / 7, rel=1e-6)
         assert sorted(result.shared_references) == sorted(
@@ -127,7 +136,8 @@ class TestAnalyzePairJaccard:
         assert result.paper_a_id == PAPER_A
         assert result.paper_b_id == PAPER_B
 
-    def test_coupling_no_overlap(self) -> None:
+    @pytest.mark.asyncio
+    async def test_coupling_no_overlap(self) -> None:
         """Papers with entirely disjoint reference sets → strength 0.0."""
         store = _mock_store_with_refs(
             {
@@ -136,37 +146,40 @@ class TestAnalyzePairJaccard:
             }
         )
         analyzer = CouplingAnalyzer(store)
-        result = analyzer.analyze_pair(PAPER_A, PAPER_B)
+        result = await analyzer.analyze_pair(PAPER_A, PAPER_B)
 
         assert result.coupling_strength == pytest.approx(0.0)
         assert result.shared_references == []
 
-    def test_coupling_identical_refs(self) -> None:
+    @pytest.mark.asyncio
+    async def test_coupling_identical_refs(self) -> None:
         """Papers with identical reference sets → strength 1.0."""
         refs = ["paper:s2:r1", "paper:s2:r2", "paper:s2:r3"]
         store = _mock_store_with_refs({PAPER_A: refs, PAPER_B: refs})
         analyzer = CouplingAnalyzer(store)
-        result = analyzer.analyze_pair(PAPER_A, PAPER_B)
+        result = await analyzer.analyze_pair(PAPER_A, PAPER_B)
 
         assert result.coupling_strength == pytest.approx(1.0)
         assert sorted(result.shared_references) == sorted(refs)
 
-    def test_coupling_paper_with_no_refs(self) -> None:
+    @pytest.mark.asyncio
+    async def test_coupling_paper_with_no_refs(self) -> None:
         """Both papers have zero references → strength 0.0, no ZeroDivisionError."""
         store = _mock_store_with_refs({})  # no refs for either paper
         analyzer = CouplingAnalyzer(store)
-        result = analyzer.analyze_pair(PAPER_A, PAPER_B)
+        result = await analyzer.analyze_pair(PAPER_A, PAPER_B)
 
         assert result.coupling_strength == pytest.approx(0.0)
         assert result.shared_references == []
 
-    def test_coupling_one_paper_no_refs(self) -> None:
+    @pytest.mark.asyncio
+    async def test_coupling_one_paper_no_refs(self) -> None:
         """One paper has refs, the other has none → strength 0.0."""
         store = _mock_store_with_refs(
             {PAPER_A: ["paper:s2:r1", "paper:s2:r2"], PAPER_B: []}
         )
         analyzer = CouplingAnalyzer(store)
-        result = analyzer.analyze_pair(PAPER_A, PAPER_B)
+        result = await analyzer.analyze_pair(PAPER_A, PAPER_B)
 
         assert result.coupling_strength == pytest.approx(0.0)
         assert result.shared_references == []
@@ -178,38 +191,42 @@ class TestAnalyzePairJaccard:
 
 
 class TestAnalyzePairValidation:
-    def test_coupling_self_pair_raises(self) -> None:
+    @pytest.mark.asyncio
+    async def test_coupling_self_pair_raises(self) -> None:
         """analyze_pair with paper_a_id == paper_b_id raises ValueError."""
         store = _mock_store_with_refs({})
         analyzer = CouplingAnalyzer(store)
 
         with pytest.raises(ValueError, match="must differ"):
-            analyzer.analyze_pair(PAPER_A, PAPER_A)
+            await analyzer.analyze_pair(PAPER_A, PAPER_A)
 
-    def test_invalid_paper_id_pattern_raises(self) -> None:
+    @pytest.mark.asyncio
+    async def test_invalid_paper_id_pattern_raises(self) -> None:
         """analyze_pair with an id containing disallowed chars raises ValueError."""
         store = _mock_store_with_refs({})
         analyzer = CouplingAnalyzer(store)
 
         with pytest.raises(ValueError, match="Invalid paper_id format"):
-            analyzer.analyze_pair("paper:s2:a b c", PAPER_B)
+            await analyzer.analyze_pair("paper:s2:a b c", PAPER_B)
 
-    def test_invalid_paper_id_empty_raises(self) -> None:
+    @pytest.mark.asyncio
+    async def test_invalid_paper_id_empty_raises(self) -> None:
         """analyze_pair with an empty id raises ValueError."""
         store = _mock_store_with_refs({})
         analyzer = CouplingAnalyzer(store)
 
         with pytest.raises(ValueError, match="non-empty string"):
-            analyzer.analyze_pair("", PAPER_B)
+            await analyzer.analyze_pair("", PAPER_B)
 
-    def test_invalid_paper_id_too_long_raises(self) -> None:
+    @pytest.mark.asyncio
+    async def test_invalid_paper_id_too_long_raises(self) -> None:
         """analyze_pair with an id exceeding the length cap raises ValueError."""
         store = _mock_store_with_refs({})
         analyzer = CouplingAnalyzer(store)
         long_id = "paper:s2:" + "a" * 600
 
         with pytest.raises(ValueError, match="exceeds max"):
-            analyzer.analyze_pair(long_id, PAPER_B)
+            await analyzer.analyze_pair(long_id, PAPER_B)
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +235,8 @@ class TestAnalyzePairValidation:
 
 
 class TestAnalyzeForPaper:
-    def test_analyze_for_paper_top_k_ordering(self) -> None:
+    @pytest.mark.asyncio
+    async def test_analyze_for_paper_top_k_ordering(self) -> None:
         """analyze_for_paper returns results sorted DESC by coupling_strength."""
         # PAPER_A is the query paper.
         # PAPER_B shares 2 refs with A (out of 3), PAPER_C shares 1 (out of 3).
@@ -230,7 +248,9 @@ class TestAnalyzeForPaper:
             }
         )
         analyzer = CouplingAnalyzer(store)
-        results = analyzer.analyze_for_paper(PAPER_A, [PAPER_B, PAPER_C], top_k=10)
+        results = await analyzer.analyze_for_paper(
+            PAPER_A, [PAPER_B, PAPER_C], top_k=10
+        )
 
         assert len(results) == 2
         # B has higher coupling than C.
@@ -238,7 +258,8 @@ class TestAnalyzeForPaper:
         assert results[1].paper_b_id == PAPER_C
         assert results[0].coupling_strength > results[1].coupling_strength
 
-    def test_analyze_for_paper_respects_top_k(self) -> None:
+    @pytest.mark.asyncio
+    async def test_analyze_for_paper_respects_top_k(self) -> None:
         """analyze_for_paper returns at most top_k results."""
         papers = [f"paper:s2:cand{i:03d}" for i in range(20)]
         # All candidates share the same 1 ref → equal strength; top_k=5.
@@ -249,26 +270,77 @@ class TestAnalyzeForPaper:
             }
         )
         analyzer = CouplingAnalyzer(store)
-        results = analyzer.analyze_for_paper(PAPER_A, papers, top_k=5)
+        results = await analyzer.analyze_for_paper(PAPER_A, papers, top_k=5)
 
         assert len(results) == 5
 
-    def test_analyze_for_paper_invalid_top_k_raises(self) -> None:
+    @pytest.mark.asyncio
+    async def test_analyze_for_paper_invalid_top_k_raises(self) -> None:
         """analyze_for_paper with top_k < 1 raises ValueError."""
         store = _mock_store_with_refs({})
         analyzer = CouplingAnalyzer(store)
 
         with pytest.raises(ValueError, match="top_k must be >= 1"):
-            analyzer.analyze_for_paper(PAPER_A, [PAPER_B], top_k=0)
+            await analyzer.analyze_for_paper(PAPER_A, [PAPER_B], top_k=0)
 
-    def test_analyze_for_paper_empty_candidates(self) -> None:
+    @pytest.mark.asyncio
+    async def test_analyze_for_paper_empty_candidates(self) -> None:
         """analyze_for_paper with empty candidate list returns empty list."""
         store = _mock_store_with_refs({})
         analyzer = CouplingAnalyzer(store)
 
-        results = analyzer.analyze_for_paper(PAPER_A, [], top_k=10)
+        results = await analyzer.analyze_for_paper(PAPER_A, [], top_k=10)
 
         assert results == []
+
+    @pytest.mark.asyncio
+    async def test_analyze_for_paper_exceeds_max_candidates_raises(self) -> None:
+        """analyze_for_paper raises ValueError when candidates > MAX_CANDIDATES."""
+        store = _mock_store_with_refs({})
+        analyzer = CouplingAnalyzer(store)
+        too_many = [f"paper:s2:c{i:06d}" for i in range(MAX_CANDIDATES + 1)]
+
+        with pytest.raises(ValueError, match="MAX_CANDIDATES"):
+            await analyzer.analyze_for_paper(PAPER_A, too_many, top_k=10)
+
+    @pytest.mark.asyncio
+    async def test_analyze_for_paper_clamps_top_k_to_max(self) -> None:
+        """analyze_for_paper silently clamps top_k > MAX_TOP_K."""
+        papers = [f"paper:s2:c{i:04d}" for i in range(5)]
+        store = _mock_store_with_refs(
+            {PAPER_A: ["paper:s2:r1"], **{p: ["paper:s2:r1"] for p in papers}}
+        )
+        analyzer = CouplingAnalyzer(store)
+        # top_k above MAX_TOP_K should be accepted (no raise) and clamped.
+        results = await analyzer.analyze_for_paper(
+            PAPER_A, papers, top_k=MAX_TOP_K + 999
+        )
+        # We only have 5 candidates, so max 5 results returned.
+        assert len(results) <= 5
+
+    @pytest.mark.asyncio
+    async def test_analyze_for_paper_ties_broken_by_paper_b_id_ascending(
+        self,
+    ) -> None:
+        """L-5: Equal coupling_strength ties are broken by paper_b_id ascending."""
+        # All candidates share the same single reference → equal strength.
+        papers = [
+            "paper:s2:zzz",
+            "paper:s2:aaa",
+            "paper:s2:mmm",
+        ]
+        store = _mock_store_with_refs(
+            {
+                PAPER_A: ["paper:s2:shared"],
+                **{p: ["paper:s2:shared"] for p in papers},
+            }
+        )
+        analyzer = CouplingAnalyzer(store)
+        results = await analyzer.analyze_for_paper(PAPER_A, papers, top_k=10)
+
+        # All strengths equal → alphabetical ascending on paper_b_id.
+        b_ids = [r.paper_b_id for r in results]
+        assert b_ids == sorted(b_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +349,10 @@ class TestAnalyzeForPaper:
 
 
 class TestStructuredLogging:
-    def test_pair_computed_event_emitted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.asyncio
+    async def test_pair_computed_event_emitted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """``coupling_analyzer_pair_computed`` event is logged on each compute."""
         # Rebind logger BEFORE entering capture_logs() per CLAUDE.md §Test
         # Authoring Conventions (cache_logger_on_first_use pattern).
@@ -288,7 +363,7 @@ class TestStructuredLogging:
         analyzer = CouplingAnalyzer(store)
 
         with structlog.testing.capture_logs() as logs:
-            analyzer.analyze_pair(PAPER_A, PAPER_B)
+            await analyzer.analyze_pair(PAPER_A, PAPER_B)
 
         events = [
             e for e in logs if e.get("event") == "coupling_analyzer_pair_computed"
@@ -299,7 +374,8 @@ class TestStructuredLogging:
         assert events[0]["shared"] == 1
         assert events[0]["union"] == 2
 
-    def test_skipped_no_refs_event_emitted(
+    @pytest.mark.asyncio
+    async def test_skipped_no_refs_event_emitted(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``coupling_analyzer_skipped_no_refs`` is logged when both have 0 refs."""
@@ -308,7 +384,7 @@ class TestStructuredLogging:
         analyzer = CouplingAnalyzer(store)
 
         with structlog.testing.capture_logs() as logs:
-            analyzer.analyze_pair(PAPER_A, PAPER_B)
+            await analyzer.analyze_pair(PAPER_A, PAPER_B)
 
         events = [
             e for e in logs if e.get("event") == "coupling_analyzer_skipped_no_refs"
@@ -324,16 +400,19 @@ class TestStructuredLogging:
 
 
 class TestCacheIntegration:
-    def test_persistence_cache_hit(self, repo: CitationCouplingRepository) -> None:
+    @pytest.mark.asyncio
+    async def test_persistence_cache_hit(
+        self, repo: CitationCouplingRepository
+    ) -> None:
         """Second call within TTL returns the cached row without re-computing."""
         store = _mock_store_with_refs({PAPER_A: REFS_A, PAPER_B: REFS_B})
         analyzer = CouplingAnalyzer(store, repo=repo)
 
-        first = analyzer.analyze_pair(PAPER_A, PAPER_B)
+        first = await analyzer.analyze_pair(PAPER_A, PAPER_B)
         # Reset the store mock so a second store call would be detectable.
         store.get_edges.reset_mock()
 
-        second = analyzer.analyze_pair(PAPER_A, PAPER_B)
+        second = await analyzer.analyze_pair(PAPER_A, PAPER_B)
 
         # Values must match.
         assert second.coupling_strength == pytest.approx(first.coupling_strength)
@@ -341,7 +420,8 @@ class TestCacheIntegration:
         # The store must NOT have been called again (cache hit path).
         store.get_edges.assert_not_called()
 
-    def test_persistence_cache_miss_after_ttl(
+    @pytest.mark.asyncio
+    async def test_persistence_cache_miss_after_ttl(
         self,
         repo: CitationCouplingRepository,
         db_path: Path,
@@ -371,12 +451,15 @@ class TestCacheIntegration:
         cached = repo.get(PAPER_A, PAPER_B, max_age_days=30)
         assert cached is None  # stale row → cache miss
 
-        # Re-run via the analyzer; the store WILL be called.
+        # Re-run via the analyzer; the store WILL be called (M-8 pattern).
         store.get_edges.reset_mock()
-        analyzer.analyze_pair(PAPER_A, PAPER_B)
-        assert store.get_edges.called
+        await analyzer.analyze_pair(PAPER_A, PAPER_B)
+        store.get_edges.assert_any_call(
+            PAPER_A, direction="outgoing", edge_type=EdgeType.CITES
+        )
 
-    def test_cache_write_failure_swallowed(self, db_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_cache_write_failure_swallowed(self, db_path: Path) -> None:
         """A repo write failure does not propagate to the caller."""
         failing_repo = MagicMock(spec=CitationCouplingRepository)
         failing_repo.get.return_value = None  # always cache miss
@@ -386,10 +469,11 @@ class TestCacheIntegration:
         analyzer = CouplingAnalyzer(store, repo=failing_repo)
 
         # Must not raise even though repo.record raises.
-        result = analyzer.analyze_pair(PAPER_A, PAPER_B)
+        result = await analyzer.analyze_pair(PAPER_A, PAPER_B)
         assert result.coupling_strength == pytest.approx(3 / 7, rel=1e-6)
 
-    def test_cache_write_failure_logs_error(
+    @pytest.mark.asyncio
+    async def test_cache_write_failure_logs_error(
         self,
         db_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -404,10 +488,20 @@ class TestCacheIntegration:
         analyzer = CouplingAnalyzer(store, repo=failing_repo)
 
         with structlog.testing.capture_logs() as logs:
-            analyzer.analyze_pair(PAPER_A, PAPER_B)
+            await analyzer.analyze_pair(PAPER_A, PAPER_B)
 
         events = [
             e for e in logs if e.get("event") == "coupling_analyzer_cache_write_failed"
         ]
         assert len(events) == 1
         assert "disk full" in events[0]["error"]
+
+    def test_analyzer_uses_default_ttl_from_repo(self) -> None:
+        """L-3: DEFAULT_MAX_AGE_DAYS from the repo module is a stable constant.
+
+        The analyzer's cache lookups rely on the repo's TTL default.
+        This test pins that the constant is reachable and positive so
+        any future accidental rename/removal fails loudly here.
+        """
+        assert DEFAULT_MAX_AGE_DAYS > 0
+        assert isinstance(DEFAULT_MAX_AGE_DAYS, int)

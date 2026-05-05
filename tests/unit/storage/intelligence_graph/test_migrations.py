@@ -19,10 +19,12 @@ from src.storage.intelligence_graph.migrations import (
     MigrationManager,
     Migration,
     ALL_MIGRATIONS,
+    LATEST_MIGRATION_VERSION,
     MIGRATION_V1_INITIAL,
     MIGRATION_V2_MONITORING_RUNS,
     MIGRATION_V3_MONITORING_RUNS_FK,
     MIGRATION_V4_CITATION_INFLUENCE_METRICS,
+    MIGRATION_V5_PAPER_SOURCE_TRACKING,
 )
 from src.utils.security import SecurityError
 
@@ -209,7 +211,7 @@ class TestMigrationManager:
         conn.execute("PRAGMA foreign_keys = ON")
         try:
             # Try to insert edge without valid nodes - should fail
-            with pytest.raises(sqlite3.IntegrityError):
+            with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
                 conn.execute("""
                     INSERT INTO edges (edge_id, edge_type, source_id, target_id)
                     VALUES ('edge:1', 'cites', 'invalid:source', 'invalid:target')
@@ -554,7 +556,7 @@ class TestMigrationAdditionalEdgeCases:
         conn = manager._get_connection()
         try:
             manager._ensure_migrations_table(conn)
-            with pytest.raises(sqlite3.OperationalError):
+            with pytest.raises(sqlite3.OperationalError, match="syntax error"):
                 manager.apply_migration(conn, bad_migration)
         finally:
             conn.close()
@@ -628,7 +630,7 @@ class TestMigrationTransactionRollback:
 
         conn = manager._get_connection()
         try:
-            with pytest.raises(sqlite3.OperationalError):
+            with pytest.raises(sqlite3.OperationalError, match="no such table"):
                 manager.apply_migration(conn, bad_migration)
         finally:
             conn.close()
@@ -679,7 +681,7 @@ class TestMigrationTransactionRollback:
 
         conn = manager._get_connection()
         try:
-            with pytest.raises(sqlite3.OperationalError):
+            with pytest.raises(sqlite3.OperationalError, match="no such table"):
                 manager.apply_migration(conn, ddl_then_failure)
         finally:
             conn.close()
@@ -795,7 +797,7 @@ class TestMigrationV3MonitoringRunsFk:
             )
             conn.commit()
 
-            with pytest.raises(sqlite3.IntegrityError):
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
                 conn.execute(
                     """
                     INSERT INTO monitoring_runs (
@@ -835,7 +837,7 @@ class TestMigrationV3MonitoringRunsFk:
                 ("sub-empty", "alice", "Sub", "{}"),
             )
             conn.commit()
-            with pytest.raises(sqlite3.IntegrityError):
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
                 conn.execute(
                     """
                     INSERT INTO monitoring_runs (
@@ -875,7 +877,7 @@ class TestMigrationV3MonitoringRunsFk:
                 ("sub-null", "alice", "Sub", "{}"),
             )
             conn.commit()
-            with pytest.raises(sqlite3.IntegrityError):
+            with pytest.raises(sqlite3.IntegrityError, match="NOT NULL"):
                 conn.execute(
                     """
                     INSERT INTO monitoring_runs (
@@ -915,7 +917,7 @@ class TestMigrationV3MonitoringRunsFk:
                 ("sub-omit", "alice", "Sub", "{}"),
             )
             conn.commit()
-            with pytest.raises(sqlite3.IntegrityError):
+            with pytest.raises(sqlite3.IntegrityError, match="NOT NULL"):
                 # Note: status column is omitted from the column list.
                 conn.execute(
                     """
@@ -1279,3 +1281,392 @@ class TestMigrationV4CitationInfluenceMetrics:
             assert run_row["status"] == "success"
             assert run_row["papers_found"] == 5
             assert run_row["papers_new"] == 2
+
+
+class TestMigrationV5PaperSourceTracking:
+    """Tests for ``MIGRATION_V5_PAPER_SOURCE_TRACKING`` (Issue #141).
+
+    Pinned scenarios (every test name follows
+    ``test_migrate_v5_<scenario>`` per the naming convention from V3):
+
+    - V5 adds a ``source`` column to ``monitoring_papers``.
+    - The new column is ``NOT NULL DEFAULT 'arxiv'``.
+    - Pre-V5 rows survive the migration with ``source='arxiv'`` so the
+      audit log treats legacy papers as arXiv (the only provider before
+      Tier 1).
+    - The migration is recorded in ``schema_migrations``.
+    - ``LATEST_MIGRATION_VERSION`` is bumped to 5.
+    - All other tables and rows survive untouched (V5 isolation).
+    """
+
+    def test_migrate_v5_adds_source_column(self, temp_db: Path) -> None:
+        """The ``monitoring_papers`` table must gain a ``source`` column."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            cursor = conn.execute("PRAGMA table_info(monitoring_papers)")
+            cols = {row["name"]: row for row in cursor.fetchall()}
+        assert "source" in cols, "V5 did not add the source column"
+        assert cols["source"]["notnull"] == 1, "source column must be NOT NULL"
+        # Default value reads back as the string literal 'arxiv'.
+        # SQLite stringifies the DEFAULT clause; PRAGMA returns it
+        # verbatim including the surrounding quotes.
+        assert "arxiv" in cols["source"]["dflt_value"]
+
+    def test_migrate_v5_backfills_existing_rows_to_arxiv(self, temp_db: Path) -> None:
+        """Pre-V5 monitoring_papers rows must end up with source='arxiv'.
+
+        Apply only V1-V4, insert a paper row under the V4 schema (no
+        source column), then apply V5. The backfilled column must be
+        'arxiv' for the legacy row -- this is the bounded "lie" the
+        V5 docstring documents.
+        """
+        manager = MigrationManager(temp_db)
+        # Apply only V1-V4 -- stop short of V5 so we can write a row
+        # under the legacy schema and verify the backfill.
+        conn = manager._get_connection()
+        try:
+            manager._ensure_migrations_table(conn)
+            manager.apply_migration(conn, MIGRATION_V1_INITIAL)
+            manager.apply_migration(conn, MIGRATION_V2_MONITORING_RUNS)
+            manager.apply_migration(conn, MIGRATION_V3_MONITORING_RUNS_FK)
+            manager.apply_migration(conn, MIGRATION_V4_CITATION_INFLUENCE_METRICS)
+        finally:
+            conn.close()
+
+        # Insert a parent run + a paper under the pre-V5 schema (no
+        # ``source`` column in the column list).
+        with open_connection(temp_db) as conn:
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-v4-legacy", "alice", "Legacy", "{}"),
+            )
+            conn.execute(
+                """
+                INSERT INTO monitoring_runs (
+                    run_id, subscription_id, user_id,
+                    started_at, status
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "run-v4-legacy",
+                    "sub-v4-legacy",
+                    "alice",
+                    "2024-06-01T00:00:00+00:00",
+                    "success",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO monitoring_papers (
+                    run_id, paper_id, registered,
+                    relevance_score, relevance_reasoning
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "run-v4-legacy",
+                    "paper:legacy:001",
+                    1,
+                    0.8,
+                    "legacy reasoning",
+                ),
+            )
+            conn.commit()
+
+        # Now apply V5 in isolation -- must add the column AND backfill
+        # the legacy row to 'arxiv'.
+        conn = manager._get_connection()
+        try:
+            manager._ensure_migrations_table(conn)
+            manager.apply_migration(conn, MIGRATION_V5_PAPER_SOURCE_TRACKING)
+        finally:
+            conn.close()
+
+        with open_connection(temp_db) as conn:
+            row = conn.execute(
+                "SELECT source FROM monitoring_papers WHERE paper_id = ?",
+                ("paper:legacy:001",),
+            ).fetchone()
+            assert row is not None, "legacy row was destroyed by V5"
+            # Backfill must produce 'arxiv'.
+            assert row["source"] == "arxiv"
+
+            # H-5: subscriptions and monitoring_runs rows must also survive V5.
+            sub_row = conn.execute(
+                "SELECT subscription_id FROM subscriptions "
+                "WHERE subscription_id = ?",
+                ("sub-v4-legacy",),
+            ).fetchone()
+            assert sub_row is not None, "subscription row was destroyed by V5"
+
+            run_row = conn.execute(
+                "SELECT run_id, status FROM monitoring_runs WHERE run_id = ?",
+                ("run-v4-legacy",),
+            ).fetchone()
+            assert run_row is not None, "monitoring_run row was destroyed by V5"
+            assert run_row["status"] == "success"
+
+    def test_migrate_v5_records_version(self, temp_db: Path) -> None:
+        """V5 must appear in ``schema_migrations`` after a full migrate()."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        applied_versions = {m["version"] for m in manager.get_applied_migrations()}
+        assert 5 in applied_versions
+
+    def test_migrate_v5_round_trips_each_paper_source(self, temp_db: Path) -> None:
+        """Pin that every PaperSource value can be stored + read back.
+
+        Defense against a future schema-level CHECK that forgets a
+        member of the enum (the same drift class V3 guards against
+        for ``MonitoringRunStatus``). This test stores one row per
+        enum value and asserts the column accepts it without raising.
+        """
+        from src.services.intelligence.models.monitoring import PaperSource
+
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-v5-enum", "alice", "Enum", "{}"),
+            )
+            conn.execute(
+                """
+                INSERT INTO monitoring_runs (
+                    run_id, subscription_id, user_id, started_at, status
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "run-v5-enum",
+                    "sub-v5-enum",
+                    "alice",
+                    "2024-06-01T00:00:00+00:00",
+                    "success",
+                ),
+            )
+            for src in PaperSource:
+                conn.execute(
+                    """
+                    INSERT INTO monitoring_papers (
+                        run_id, paper_id, source
+                    ) VALUES (?, ?, ?)
+                    """,
+                    ("run-v5-enum", f"paper:{src.value}:001", src.value),
+                )
+            conn.commit()
+
+            stored = {
+                row["source"]
+                for row in conn.execute(
+                    "SELECT source FROM monitoring_papers WHERE run_id = ?",
+                    ("run-v5-enum",),
+                ).fetchall()
+            }
+        assert stored == {src.value for src in PaperSource}
+
+    def test_migrate_v5_rejects_unknown_source_via_check(self, temp_db: Path) -> None:
+        """H-3: V5 CHECK constraint must reject unknown source strings.
+
+        Any value not in PaperSource must cause an IntegrityError at
+        insert time, not silently corrupt the audit trail.
+        """
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-v5-check", "alice", "Check", "{}"),
+            )
+            conn.execute(
+                """
+                INSERT INTO monitoring_runs (
+                    run_id, subscription_id, user_id, started_at, status
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "run-v5-check",
+                    "sub-v5-check",
+                    "alice",
+                    "2024-06-01T00:00:00+00:00",
+                    "success",
+                ),
+            )
+            conn.commit()
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+                conn.execute(
+                    """
+                    INSERT INTO monitoring_papers (
+                        run_id, paper_id, source
+                    ) VALUES (?, ?, ?)
+                    """,
+                    ("run-v5-check", "paper:bogus:001", "BOGUS_SOURCE"),
+                )
+
+    def test_migrate_v5_check_constraint_matches_paper_source_enum(self) -> None:
+        """H-3: Enum-vs-CHECK exhaustive drift guard.
+
+        If PaperSource gains a new member, the V5 CHECK constraint must
+        also widen — otherwise ``record_run`` would produce an
+        IntegrityError on the new value at runtime. This test catches
+        the drift at import-time so the missing migration (V6 widening
+        the CHECK) is obvious before any live insert fails. Pure
+        SQL-string scan, no DB needed.
+
+        Mirrors ``test_migrate_v3_check_constraint_matches_monitoring_run_status_enum``.
+        """
+        from src.services.intelligence.models.monitoring import PaperSource
+
+        sql = MIGRATION_V5_PAPER_SOURCE_TRACKING.up
+        assert isinstance(sql, str)
+        for member in PaperSource:
+            assert f"'{member.value}'" in sql, (
+                f"PaperSource.{member.name} = {member.value!r} "
+                "is not present in MIGRATION_V5 CHECK constraint. "
+                "Add MIGRATION_V6 widening the CHECK list."
+            )
+
+    def test_migrate_v5_preserves_data_inserted_under_v4_schema(
+        self, temp_db: Path
+    ) -> None:
+        """H-1: V5 isolation upgrade test.
+
+        Apply V1+V2+V3+V4 only, insert known rows into ``nodes``,
+        ``monitoring_runs``, ``monitoring_papers``, and
+        ``subscriptions``, then apply V5 in isolation. V5 must (a)
+        add the ``source`` column to ``monitoring_papers`` and (b) not
+        disturb any pre-existing rows in any table. Mirrors the V4
+        regression guard at
+        ``test_migrate_v4_preserves_data_inserted_under_v3_schema``.
+        """
+        manager = MigrationManager(temp_db)
+        # Apply only V1-V4 -- stop short of V5.
+        conn = manager._get_connection()
+        try:
+            manager._ensure_migrations_table(conn)
+            manager.apply_migration(conn, MIGRATION_V1_INITIAL)
+            manager.apply_migration(conn, MIGRATION_V2_MONITORING_RUNS)
+            manager.apply_migration(conn, MIGRATION_V3_MONITORING_RUNS_FK)
+            manager.apply_migration(conn, MIGRATION_V4_CITATION_INFLUENCE_METRICS)
+        finally:
+            conn.close()
+
+        # Insert rows into all four tables under the V4 schema.
+        with open_connection(temp_db) as conn:
+            conn.execute(
+                """
+                INSERT INTO nodes (
+                    node_id, node_type, properties, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "paper:s2:v4node",
+                    "paper",
+                    "{}",
+                    "2024-07-01T00:00:00+00:00",
+                    "2024-07-01T00:00:00+00:00",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-v4-iso", "alice", "V4 Iso Sub", "{}"),
+            )
+            conn.execute(
+                """
+                INSERT INTO monitoring_runs (
+                    run_id, subscription_id, user_id,
+                    started_at, status
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    "run-v4-iso",
+                    "sub-v4-iso",
+                    "alice",
+                    "2024-07-01T00:00:00+00:00",
+                    "success",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO monitoring_papers (
+                    run_id, paper_id, registered,
+                    relevance_score, relevance_reasoning
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                ("run-v4-iso", "paper:v4:iso001", 1, 0.75, "V4 reasoning"),
+            )
+            conn.commit()
+
+        # Now apply V5 in isolation -- must (a) add the source column
+        # and (b) not destroy anything that was already there.
+        conn = manager._get_connection()
+        try:
+            manager._ensure_migrations_table(conn)
+            manager.apply_migration(conn, MIGRATION_V5_PAPER_SOURCE_TRACKING)
+        finally:
+            conn.close()
+
+        with open_connection(temp_db) as conn:
+            # (a) source column now present on monitoring_papers
+            cursor = conn.execute("PRAGMA table_info(monitoring_papers)")
+            cols = {row["name"] for row in cursor.fetchall()}
+            assert "source" in cols
+
+            # (b) All V4 rows survive intact
+            node_row = conn.execute(
+                "SELECT node_id, node_type FROM nodes WHERE node_id = ?",
+                ("paper:s2:v4node",),
+            ).fetchone()
+            assert node_row is not None
+            assert node_row["node_type"] == "paper"
+
+            sub_row = conn.execute(
+                "SELECT subscription_id FROM subscriptions WHERE subscription_id = ?",
+                ("sub-v4-iso",),
+            ).fetchone()
+            assert sub_row is not None
+
+            run_row = conn.execute(
+                "SELECT run_id, status FROM monitoring_runs WHERE run_id = ?",
+                ("run-v4-iso",),
+            ).fetchone()
+            assert run_row is not None
+            assert run_row["status"] == "success"
+
+            paper_row = conn.execute(
+                "SELECT paper_id, source FROM monitoring_papers WHERE paper_id = ?",
+                ("paper:v4:iso001",),
+            ).fetchone()
+            assert paper_row is not None
+            # V5 backfill must have set source to 'arxiv'.
+            assert paper_row["source"] == "arxiv"
+
+
+class TestLatestMigrationVersion:
+    """``LATEST_MIGRATION_VERSION`` mirrors the highest entry in
+    ``ALL_MIGRATIONS`` so callers (or future cross-references) have
+    a single line to bump when a new migration is added.
+    """
+
+    def test_latest_version_constant_matches_all_migrations(self) -> None:
+        assert LATEST_MIGRATION_VERSION == max(m.version for m in ALL_MIGRATIONS)
+
+    def test_latest_version_is_5(self) -> None:
+        # Pinned literal so an accidental version bump shows up in
+        # review even if ``ALL_MIGRATIONS`` is also extended.
+        assert LATEST_MIGRATION_VERSION == 5

@@ -93,7 +93,7 @@ class TestResearchSubscriptionConstruction:
         assert sub.status is SubscriptionStatus.PAUSED
 
     def test_extra_fields_forbidden(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
             ResearchSubscription(
                 name="x", query="q", junk="bad"  # type: ignore[call-arg]
             )
@@ -297,7 +297,12 @@ class TestRangeValidators:
 
 class TestMonitoringPaperRecord:
     def test_paper_record_minimal(self) -> None:
-        rec = MonitoringPaperRecord(paper_id="2301.12345", title="A Paper", is_new=True)
+        rec = MonitoringPaperRecord(
+            paper_id="2301.12345",
+            title="A Paper",
+            is_new=True,
+            source=PaperSource.ARXIV,
+        )
         assert rec.paper_id == "2301.12345"
         assert rec.title == "A Paper"
         assert rec.is_new is True
@@ -306,6 +311,7 @@ class TestMonitoringPaperRecord:
         assert rec.published_at is None
         assert rec.relevance_score is None
         assert rec.relevance_reasoning is None
+        assert rec.source is PaperSource.ARXIV
 
     def test_paper_record_full(self) -> None:
         rec = MonitoringPaperRecord(
@@ -317,9 +323,25 @@ class TestMonitoringPaperRecord:
             is_new=False,
             relevance_score=0.9,
             relevance_reasoning="strong match",
+            source=PaperSource.OPENALEX,
         )
         assert rec.url == "https://arxiv.org/abs/2301.12345"
         assert rec.relevance_score == 0.9
+        assert rec.source is PaperSource.OPENALEX
+
+    def test_paper_record_source_required(self) -> None:
+        """Issue #141: ``source`` has no default — callers must specify it.
+
+        Pinning the required-ness here means a future refactor that
+        re-introduces a default (e.g. PaperSource.ARXIV) fails loudly,
+        catching exactly the silent-misattribution regression we're
+        guarding against.
+        """
+        with pytest.raises(ValidationError) as excinfo:
+            MonitoringPaperRecord(  # type: ignore[call-arg]
+                paper_id="x", title="t", is_new=True
+            )
+        assert "source" in str(excinfo.value)
 
     def test_paper_record_extra_forbidden(self) -> None:
         with pytest.raises(ValidationError):
@@ -327,14 +349,27 @@ class TestMonitoringPaperRecord:
                 paper_id="x",
                 title="t",
                 is_new=True,
+                source=PaperSource.ARXIV,
                 junk="bad",  # type: ignore[call-arg]
             )
 
     def test_paper_record_relevance_score_out_of_range(self) -> None:
         with pytest.raises(ValidationError):
             MonitoringPaperRecord(
-                paper_id="x", title="t", is_new=True, relevance_score=1.5
+                paper_id="x",
+                title="t",
+                is_new=True,
+                source=PaperSource.ARXIV,
+                relevance_score=1.5,
             )
+
+    def test_paper_record_accepts_each_paper_source(self) -> None:
+        """Issue #141: every ``PaperSource`` enum member is a valid value."""
+        for src in PaperSource:
+            rec = MonitoringPaperRecord(
+                paper_id="x", title="t", is_new=True, source=src
+            )
+            assert rec.source is src
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +390,9 @@ class TestMonitoringRun:
 
     def test_monitoring_run_below_paper_cap(self) -> None:
         records = [
-            MonitoringPaperRecord(paper_id=f"p-{i}", title="t", is_new=True)
+            MonitoringPaperRecord(
+                paper_id=f"p-{i}", title="t", is_new=True, source=PaperSource.ARXIV
+            )
             for i in range(3)
         ]
         run = MonitoringRun(subscription_id="sub-1", papers=records)
@@ -363,7 +400,9 @@ class TestMonitoringRun:
 
     def test_monitoring_run_at_paper_cap_accepted(self) -> None:
         records = [
-            MonitoringPaperRecord(paper_id=f"p-{i}", title="t", is_new=True)
+            MonitoringPaperRecord(
+                paper_id=f"p-{i}", title="t", is_new=True, source=PaperSource.ARXIV
+            )
             for i in range(MAX_PAPERS_PER_CYCLE)
         ]
         run = MonitoringRun(subscription_id="sub-1", papers=records)
@@ -371,7 +410,9 @@ class TestMonitoringRun:
 
     def test_monitoring_run_above_paper_cap_raises(self) -> None:
         records = [
-            MonitoringPaperRecord(paper_id=f"p-{i}", title="t", is_new=True)
+            MonitoringPaperRecord(
+                paper_id=f"p-{i}", title="t", is_new=True, source=PaperSource.ARXIV
+            )
             for i in range(MAX_PAPERS_PER_CYCLE + 1)
         ]
         with pytest.raises(ValidationError) as excinfo:
@@ -428,11 +469,13 @@ class TestMonitoringPaperAudit:
     """
 
     def test_audit_minimal_defaults(self) -> None:
-        rec = MonitoringPaperAudit(paper_id="2301.12345")
+        rec = MonitoringPaperAudit(paper_id="2301.12345", source=PaperSource.ARXIV)
         assert rec.paper_id == "2301.12345"
         assert rec.registered is False
         assert rec.relevance_score is None
         assert rec.relevance_reasoning is None
+        # Issue #141: source is now required; callers must always supply it.
+        assert rec.source is PaperSource.ARXIV
 
     def test_audit_full_construction(self) -> None:
         rec = MonitoringPaperAudit(
@@ -440,19 +483,32 @@ class TestMonitoringPaperAudit:
             registered=True,
             relevance_score=0.9,
             relevance_reasoning="strong match",
+            source=PaperSource.OPENALEX,
         )
         assert rec.paper_id == "2301.12345"
         assert rec.registered is True
         assert rec.relevance_score == 0.9
         assert rec.relevance_reasoning == "strong match"
+        assert rec.source is PaperSource.OPENALEX
+
+    def test_audit_accepts_each_paper_source(self) -> None:
+        """Issue #141: all PaperSource enum members are accepted."""
+        for src in PaperSource:
+            rec = MonitoringPaperAudit(paper_id="x", source=src)
+            assert rec.source is src
+
+    def test_audit_source_is_required(self) -> None:
+        """M-2: source is required — omitting it must raise ValidationError."""
+        with pytest.raises(ValidationError, match="source"):
+            MonitoringPaperAudit(paper_id="2301.12345")  # type: ignore[call-arg]
 
     def test_audit_paper_id_rejects_empty(self) -> None:
         with pytest.raises(ValidationError, match="at least 1 character"):
-            MonitoringPaperAudit(paper_id="")
+            MonitoringPaperAudit(paper_id="")  # type: ignore[call-arg]
 
     def test_audit_paper_id_at_boundary_accepted(self) -> None:
         # 512 chars exactly -- the post-#S6 cap.
-        rec = MonitoringPaperAudit(paper_id="x" * 512)
+        rec = MonitoringPaperAudit(paper_id="x" * 512, source=PaperSource.ARXIV)
         assert len(rec.paper_id) == 512
 
     def test_audit_paper_id_above_boundary_rejected(self) -> None:
@@ -462,26 +518,36 @@ class TestMonitoringPaperAudit:
 
     def test_audit_relevance_score_below_range_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            MonitoringPaperAudit(paper_id="x", relevance_score=-0.01)
+            MonitoringPaperAudit(
+                paper_id="x", source=PaperSource.ARXIV, relevance_score=-0.01
+            )
 
     def test_audit_relevance_score_above_range_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            MonitoringPaperAudit(paper_id="x", relevance_score=1.01)
+            MonitoringPaperAudit(
+                paper_id="x", source=PaperSource.ARXIV, relevance_score=1.01
+            )
 
     def test_audit_relevance_reasoning_at_boundary_accepted(self) -> None:
-        rec = MonitoringPaperAudit(paper_id="x", relevance_reasoning="r" * 4096)
+        rec = MonitoringPaperAudit(
+            paper_id="x", source=PaperSource.ARXIV, relevance_reasoning="r" * 4096
+        )
         assert len(rec.relevance_reasoning or "") == 4096
 
     def test_audit_relevance_reasoning_above_boundary_rejected(self) -> None:
         with pytest.raises(ValidationError, match="at most 4096 character"):
-            MonitoringPaperAudit(paper_id="x", relevance_reasoning="r" * 4097)
+            MonitoringPaperAudit(
+                paper_id="x", source=PaperSource.ARXIV, relevance_reasoning="r" * 4097
+            )
 
     def test_audit_extra_field_forbidden(self) -> None:
         # Pinning ``extra="forbid"`` -- unknown fields like ``unknown=...``
         # must raise so callers can't silently smuggle data the audit
         # table cannot store.
         with pytest.raises(ValidationError):
-            MonitoringPaperAudit(paper_id="x", unknown="y")  # type: ignore[call-arg]
+            MonitoringPaperAudit(  # type: ignore[call-arg]
+                paper_id="x", source=PaperSource.ARXIV, unknown="y"
+            )
 
 
 class TestMonitoringRunAudit:
@@ -516,13 +582,20 @@ class TestMonitoringRunAudit:
         assert run.error is None
 
     def test_audit_run_with_one_paper(self) -> None:
-        papers = [MonitoringPaperAudit(paper_id="2301.0001", registered=True)]
+        papers = [
+            MonitoringPaperAudit(
+                paper_id="2301.0001", registered=True, source=PaperSource.ARXIV
+            )
+        ]
         run = self._audit(papers=papers)
         assert len(run.papers) == 1
         assert run.papers[0].paper_id == "2301.0001"
 
     def test_audit_run_with_many_papers(self) -> None:
-        papers = [MonitoringPaperAudit(paper_id=f"p-{i}") for i in range(5)]
+        papers = [
+            MonitoringPaperAudit(paper_id=f"p-{i}", source=PaperSource.ARXIV)
+            for i in range(5)
+        ]
         run = self._audit(papers=papers)
         assert len(run.papers) == 5
 
@@ -532,7 +605,10 @@ class TestMonitoringRunAudit:
         # values, but a record carries fields like ``title`` that the
         # audit type forbids -- so the coercion fails.
         record = MonitoringPaperRecord(
-            paper_id="2301.0001", title="Some Paper", is_new=True
+            paper_id="2301.0001",
+            title="Some Paper",
+            is_new=True,
+            source=PaperSource.ARXIV,
         )
         with pytest.raises(ValidationError):
             MonitoringRunAudit(
@@ -569,11 +645,14 @@ class TestMonitoringRunAudit:
     def test_audit_run_round_trip_via_model_dump(self) -> None:
         original = self._audit(
             papers=[
-                MonitoringPaperAudit(paper_id="p-1", registered=True),
+                MonitoringPaperAudit(
+                    paper_id="p-1", registered=True, source=PaperSource.ARXIV
+                ),
                 MonitoringPaperAudit(
                     paper_id="p-2",
                     relevance_score=0.5,
                     relevance_reasoning="ok",
+                    source=PaperSource.ARXIV,
                 ),
             ]
         )

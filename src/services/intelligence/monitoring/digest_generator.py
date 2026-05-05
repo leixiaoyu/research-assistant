@@ -342,6 +342,10 @@ class DigestGenerator:
                 f"{index}. **{score_str}** -- {link}{new_marker} "
                 f"(`{paper.paper_id}`)"
             )
+            # Issue #141: surface per-paper provenance so a digest reader
+            # can immediately see which provider each paper came from
+            # without round-tripping through the audit DB.
+            lines.append(f"   - Source: `{paper.source.value}`")
         lines.append("")
         return lines
 

@@ -298,6 +298,13 @@ class MonitoringPaperRecord(BaseModel):
 
     ``relevance_score`` and ``relevance_reasoning`` are populated by the
     Week 2 ``RelevanceScorer``; for Week 1 they remain ``None``.
+
+    ``source`` (issue #141) is REQUIRED — every record must carry the
+    discovery provider the paper came from so the audit log is honest
+    about provenance. The ``MultiProviderMonitor`` (PR #140) fans out
+    across arXiv + OpenAlex + HuggingFace + Semantic Scholar; before
+    this field existed the cycle-level ``MonitoringRun.source`` was
+    hardcoded to ARXIV which silently misattributed non-arXiv papers.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -317,6 +324,15 @@ class MonitoringPaperRecord(BaseModel):
         description=(
             "True if the paper was unknown to the global PaperRegistry "
             "before this cycle (i.e., not deduplicated)."
+        ),
+    )
+    source: PaperSource = Field(
+        ...,
+        description=(
+            "Discovery provider for this paper (issue #141). REQUIRED — "
+            "callers must specify the actual source rather than relying "
+            "on a default so multi-provider audit rows can never silently "
+            "fall back to a hardcoded value."
         ),
     )
     relevance_score: Optional[float] = Field(
@@ -377,6 +393,16 @@ class MonitoringPaperAudit(BaseModel):
             "True if the paper was newly registered with the global "
             "PaperRegistry during this run. Mirrors the ``is_new`` "
             "flag on ``MonitoringPaperRecord``."
+        ),
+    )
+    source: PaperSource = Field(
+        ...,
+        description=(
+            "Discovery provider for this paper (issue #141). "
+            "Required — callers must always pass the per-paper provenance "
+            "explicitly so the audit log is never ambiguous. The V5 schema "
+            "backfills legacy rows to 'arxiv'; the repository read-path must "
+            "pass PaperSource.ARXIV for those rows."
         ),
     )
     relevance_score: Optional[float] = Field(
@@ -443,7 +469,17 @@ class MonitoringRun(BaseModel):
         max_length=64,
     )
     subscription_id: str = Field(..., min_length=1, max_length=64)
-    source: PaperSource = Field(default=PaperSource.ARXIV)
+    source: PaperSource = Field(
+        default=PaperSource.ARXIV,
+        description=(
+            "Primary / first-seen source for this monitoring cycle; "
+            "in-memory only — never persisted to the database (no "
+            "``monitoring_runs.source`` column exists). Per-paper "
+            "provenance lives on ``MonitoringPaperRecord.source``, "
+            "which is the authoritative record of where each paper "
+            "actually came from."
+        ),
+    )
     started_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
     )

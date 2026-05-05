@@ -28,6 +28,7 @@ from src.services.intelligence.monitoring.models import (
     MonitoringPaperRecord,
     MonitoringRun,
     MonitoringRunStatus,
+    PaperSource,
     ResearchSubscription,
 )
 
@@ -83,6 +84,7 @@ def _make_paper_record(
         title=title,
         is_new=is_new,
         relevance_score=relevance_score,
+        source=PaperSource.ARXIV,
     )
 
 

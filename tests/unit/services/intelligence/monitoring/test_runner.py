@@ -746,12 +746,14 @@ class TestScorerIntegration:
             title="Paper 1",
             is_new=True,
             url="https://arxiv.org/abs/p1",
+            source=PaperSource.ARXIV,
         )
         paper2 = MonitoringPaperRecord(
             paper_id="p2",
             title="Paper 2",
             is_new=True,
             url="https://arxiv.org/abs/p2",
+            source=PaperSource.ARXIV,
         )
         run_obj = _make_run(subscription_id="sub-scorer")
         run_obj = run_obj.model_copy(update={"papers": [paper1, paper2]})
@@ -808,12 +810,14 @@ class TestScorerIntegration:
             title="Paper 1",
             is_new=True,
             url="https://arxiv.org/abs/p1",
+            source=PaperSource.ARXIV,
         )
         paper2 = MonitoringPaperRecord(
             paper_id="p2",
             title="Paper 2",
             is_new=True,
             url="https://arxiv.org/abs/p2",
+            source=PaperSource.ARXIV,
         )
         run_obj = _make_run(subscription_id="sub-scorer2")
         run_obj = run_obj.model_copy(update={"papers": [paper1, paper2]})
@@ -862,7 +866,9 @@ class TestScorerIntegration:
         from src.services.intelligence.monitoring.runner import MonitoringRunner
 
         sub = _make_subscription(subscription_id="sub-no-scorer")
-        paper = MonitoringPaperRecord(paper_id="p1", title="Paper 1", is_new=True)
+        paper = MonitoringPaperRecord(
+            paper_id="p1", title="Paper 1", is_new=True, source=PaperSource.ARXIV
+        )
         run_obj = _make_run(subscription_id="sub-no-scorer")
         run_obj = run_obj.model_copy(update={"papers": [paper]})
         result = ArxivMonitorResult(run=run_obj, new_papers=[], deduplicated_papers=[])
@@ -886,29 +892,43 @@ class TestScorerIntegration:
         assert runs[0].papers[0].relevance_score is None
 
     @pytest.mark.asyncio
-    async def test_scorer_skips_paper_with_no_url(self) -> None:
+    async def test_scorer_skips_paper_with_no_url(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """C-2: Papers with url=None are skipped before scoring rather than
         fabricating an arXiv URL for non-arXiv papers.
         The ``monitoring_relevance_score_skipped_no_url`` event is emitted.
         """
+        import structlog
         import structlog.testing
         from unittest.mock import AsyncMock as _AsyncMock, MagicMock as _MagicMock
 
+        import src.services.intelligence.monitoring.runner as runner_module
         from src.services.intelligence.monitoring.models import MonitoringPaperRecord
         from src.services.intelligence.monitoring.relevance_scorer import (
             RelevanceScoreResult,
         )
         from src.services.intelligence.monitoring.runner import MonitoringRunner
 
+        monkeypatch.setattr(runner_module, "logger", structlog.get_logger())
+
         sub = _make_subscription(subscription_id="sub-nourl")
         paper_no_url = MonitoringPaperRecord(
-            paper_id="p-nourl", title="No URL Paper", is_new=True, url=None
+            paper_id="p-nourl",
+            title="No URL Paper",
+            is_new=True,
+            url=None,
+            # Issue #141: a non-arXiv paper missing its URL is the
+            # exact case the source-aware skip log was added to surface.
+            source=PaperSource.OPENALEX,
         )
         paper_with_url = MonitoringPaperRecord(
             paper_id="p-url",
             title="Has URL Paper",
             is_new=True,
             url="https://arxiv.org/abs/p-url",
+            source=PaperSource.ARXIV,
         )
         run_obj = _make_run(subscription_id="sub-nourl")
         run_obj = run_obj.model_copy(update={"papers": [paper_no_url, paper_with_url]})
@@ -938,11 +958,6 @@ class TestScorerIntegration:
             scorer=scorer,
         )
 
-        import structlog
-        import src.services.intelligence.monitoring.runner as runner_module2
-
-        runner_module2.logger = structlog.get_logger()
-
         with structlog.testing.capture_logs() as logs:
             runs = await runner.run_once()
 
@@ -959,6 +974,9 @@ class TestScorerIntegration:
         ]
         assert len(skip_events) == 1
         assert skip_events[0]["paper_id"] == "p-nourl"
+        # Issue #141: skip log carries the actual provider so ops can
+        # query "skipped papers from openalex" without joining audits.
+        assert skip_events[0]["source"] == PaperSource.OPENALEX.value
 
 
 # ---------------------------------------------------------------------------
@@ -1061,6 +1079,7 @@ class TestLLMBudgetCap:
                 title=f"Paper {i}",
                 is_new=True,
                 url=f"https://arxiv.org/abs/p{i}",
+                source=PaperSource.ARXIV,
             )
             for i in range(3)
         ]
@@ -1164,3 +1183,206 @@ class TestMultiProviderMonitorBudgetPassthrough:
         from src.services.intelligence.monitoring.runner import MAX_LLM_CALLS_PER_CYCLE
 
         assert received_kwargs.get("max_calls") == MAX_LLM_CALLS_PER_CYCLE
+
+
+# ---------------------------------------------------------------------------
+# C-1: Additional coverage for _score_paper branches (lines 364, 417-424,
+# 432-439, 499, 501)
+# ---------------------------------------------------------------------------
+
+
+class TestScorePaperBranches:
+    """Cover the remaining _score_paper / _run_one branches.
+
+    Uses monkeypatch.setattr(runner_module, "logger", ...) before
+    capture_logs() so the structlog processor swap reaches the module-
+    level cached logger (CLAUDE.md canonical pattern).
+    """
+
+    @pytest.mark.asyncio
+    async def test_score_paper_returns_early_when_scorer_is_none(self) -> None:
+        """Line 364: _score_paper early-returns when self._scorer is None.
+
+        Although _run_one gates on scorer is not None before spawning
+        scoring tasks, the defensive early-return in _score_paper itself
+        is valid code that must be reachable for coverage. Call
+        _score_paper directly on a runner with no scorer.
+        """
+        import asyncio
+        from unittest.mock import MagicMock as _MagicMock
+
+        from src.services.intelligence.monitoring.models import MonitoringPaperRecord
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
+
+        runner = MonitoringRunner(
+            subscription_manager=_MagicMock(),
+            monitor=_MagicMock(),
+            run_repo=_MagicMock(),
+            scorer=None,  # no scorer
+        )
+        sub = _make_subscription(subscription_id="sub-early-return")
+        paper = MonitoringPaperRecord(
+            paper_id="p-er",
+            title="Paper",
+            is_new=True,
+            url="https://arxiv.org/abs/p1",
+            source=PaperSource.ARXIV,
+        )
+        sem = asyncio.Semaphore(10)
+        llm_calls_used: list[int] = [0]
+        # Must not raise; must return without touching scorer.
+        await runner._score_paper(sub, paper, sem, llm_calls_used)
+        assert paper.relevance_score is None
+        assert llm_calls_used[0] == 0
+
+    @pytest.mark.asyncio
+    async def test_score_paper_logs_unexpected_exception(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Lines 417-424: unexpected Exception in scorer is caught, logged,
+        and does not propagate — the paper is left unscored.
+        """
+        import asyncio
+        import structlog
+        import structlog.testing
+        from unittest.mock import AsyncMock as _AsyncMock, MagicMock as _MagicMock
+
+        import src.services.intelligence.monitoring.runner as runner_module
+        from src.services.intelligence.monitoring.models import MonitoringPaperRecord
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
+
+        monkeypatch.setattr(runner_module, "logger", structlog.get_logger())
+
+        scorer = _MagicMock()
+        scorer.score = _AsyncMock(side_effect=RuntimeError("GPU exploded"))
+
+        runner = MonitoringRunner(
+            subscription_manager=_MagicMock(),
+            monitor=_MagicMock(),
+            run_repo=_MagicMock(),
+            scorer=scorer,
+        )
+        sub = _make_subscription(subscription_id="sub-unexpected")
+        paper = MonitoringPaperRecord(
+            paper_id="p-unexpected",
+            title="Unexpected Paper",
+            is_new=True,
+            url="https://arxiv.org/abs/p-unexpected",
+            source=PaperSource.ARXIV,
+        )
+        sem = asyncio.Semaphore(10)
+        llm_calls_used: list[int] = [0]
+
+        with structlog.testing.capture_logs() as logs:
+            await runner._score_paper(sub, paper, sem, llm_calls_used)
+
+        # Paper must be left unscored.
+        assert paper.relevance_score is None
+        # The unexpected-error event must be logged.
+        error_events = [
+            e
+            for e in logs
+            if e.get("event") == "monitoring_relevance_score_unexpected_error"
+        ]
+        assert len(error_events) == 1
+        assert error_events[0].get("paper_id") == "p-unexpected"
+        assert "GPU exploded" in error_events[0].get("error", "")
+
+    @pytest.mark.asyncio
+    async def test_score_paper_rejects_high_score_with_thin_reasoning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Lines 432-439: high score (>=0.95) with reasoning < 30 chars is
+        rejected as a sanity-guard against prompt-injection. Paper is left
+        unscored and monitoring_relevance_score_sanity_rejected is logged.
+        """
+        import asyncio
+        import structlog
+        import structlog.testing
+        from unittest.mock import AsyncMock as _AsyncMock, MagicMock as _MagicMock
+
+        import src.services.intelligence.monitoring.runner as runner_module
+        from src.services.intelligence.monitoring.models import MonitoringPaperRecord
+        from src.services.intelligence.monitoring.relevance_scorer import (
+            RelevanceScoreResult,
+        )
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
+
+        monkeypatch.setattr(runner_module, "logger", structlog.get_logger())
+
+        # Score at exactly the threshold with very short reasoning.
+        thin_result = RelevanceScoreResult(
+            score=0.95,
+            reasoning="short",  # len("short") == 5 < 30
+            model_used="gemini-1.5-flash",
+            cost_usd=0.0,
+        )
+        scorer = _MagicMock()
+        scorer.score = _AsyncMock(return_value=thin_result)
+
+        runner = MonitoringRunner(
+            subscription_manager=_MagicMock(),
+            monitor=_MagicMock(),
+            run_repo=_MagicMock(),
+            scorer=scorer,
+        )
+        sub = _make_subscription(subscription_id="sub-sanity")
+        paper = MonitoringPaperRecord(
+            paper_id="p-sanity",
+            title="Sanity Paper",
+            is_new=True,
+            url="https://arxiv.org/abs/p-sanity",
+            source=PaperSource.ARXIV,
+        )
+        sem = asyncio.Semaphore(10)
+        llm_calls_used: list[int] = [0]
+
+        with structlog.testing.capture_logs() as logs:
+            await runner._score_paper(sub, paper, sem, llm_calls_used)
+
+        # Paper must remain unscored after sanity rejection.
+        assert paper.relevance_score is None
+        sanity_events = [
+            e
+            for e in logs
+            if e.get("event") == "monitoring_relevance_score_sanity_rejected"
+        ]
+        assert len(sanity_events) == 1
+        assert sanity_events[0].get("paper_id") == "p-sanity"
+        assert sanity_events[0].get("score") == pytest.approx(0.95)
+
+    @pytest.mark.asyncio
+    async def test_run_one_creates_fallback_sem_and_counter_when_called_directly(
+        self,
+    ) -> None:
+        """Lines 499/501: _run_one creates its own Semaphore and llm_calls_used
+        list when called without sem/llm_calls_used (e.g., from tests that
+        bypass the run_once cycle context).
+        """
+        from unittest.mock import AsyncMock as _AsyncMock, MagicMock as _MagicMock
+
+        from src.services.intelligence.monitoring.runner import MonitoringRunner
+
+        sub = _make_subscription(subscription_id="sub-fallback")
+        run_obj = _make_run(subscription_id="sub-fallback")
+        result = ArxivMonitorResult(run=run_obj, new_papers=[], deduplicated_papers=[])
+
+        monitor = _MagicMock()
+        monitor.check = _AsyncMock(return_value=result)
+        repo = _MagicMock()
+        repo.record_run = _MagicMock()
+        sub_mgr = _MagicMock()
+        sub_mgr.mark_checked = _MagicMock()
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+        )
+        # Call _run_one directly WITHOUT sem or llm_calls_used to exercise
+        # the fallback creation at lines 499/501.
+        returned_run = await runner._run_one(sub)
+        assert returned_run.subscription_id == "sub-fallback"
+        repo.record_run.assert_called_once()

@@ -623,6 +623,8 @@ async def test_check_identity_resolution_error_emits_log(monkeypatch) -> None:
     events = [e for e in logs if e.get("event") == "monitor_identity_resolution_error"]
     assert len(events) == 1
     assert events[0].get("paper_id") == "p1"
+    # H-4: source field must be present so a future drop of source= is caught.
+    assert events[0].get("source") == PaperSource.ARXIV.value
 
 
 @pytest.mark.asyncio
@@ -641,6 +643,8 @@ async def test_check_registry_write_error_emits_log(monkeypatch) -> None:
     events = [e for e in logs if e.get("event") == "monitor_registry_write_error"]
     assert len(events) == 1
     assert events[0].get("paper_id") == "p1"
+    # H-4: source field must be present so a future drop of source= is caught.
+    assert events[0].get("source") == PaperSource.ARXIV.value
 
 
 # ---------------------------------------------------------------------------
@@ -915,19 +919,248 @@ def test_build_tier1_extras_returns_none_when_no_llm() -> None:
     assert query_expander is None
 
 
-def test_build_tier1_extras_returns_none_on_construction_failure(
-    monkeypatch,
+def test_build_tier1_extras_returns_none_when_provider_construction_raises(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """H-C4: If provider construction fails, build_tier1_extras returns (None, None)."""
-    # Patch the factory to simulate a construction failure.
-    monkeypatch.setattr(
-        "src.services.intelligence.monitoring._tier1_factory.build_tier1_extras",
-        lambda llm: (None, None),
-    )
+    """C-2/H-C4: If a provider constructor raises, build_tier1_extras catches
+    the exception, logs monitor_tier1_init_failed, and returns (None, None).
 
+    Patches OpenAlexProvider (a *dependency* of build_tier1_extras, not the
+    function under test) so the production code path is actually executed.
+    """
+    import structlog
+    import structlog.testing
+
+    import src.services.intelligence.monitoring._tier1_factory as factory_module
     from src.services.intelligence.monitoring._tier1_factory import build_tier1_extras
 
-    extra_providers, query_expander = build_tier1_extras(MagicMock())
-    # When the factory is patched to always return (None, None), caller receives None.
+    monkeypatch.setattr(factory_module, "logger", structlog.get_logger())
+    monkeypatch.setattr(
+        "src.services.providers.openalex.OpenAlexProvider",
+        MagicMock(side_effect=RuntimeError("network unreachable")),
+    )
+
+    with structlog.testing.capture_logs() as logs:
+        extra_providers, query_expander = build_tier1_extras(MagicMock())
+
     assert extra_providers is None
     assert query_expander is None
+
+    failed_events = [e for e in logs if e.get("event") == "monitor_tier1_init_failed"]
+    assert len(failed_events) == 1
+    assert "network unreachable" in failed_events[0].get("error", "")
+
+
+def test_build_tier1_extras_happy_path_returns_providers_and_expander(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C-2/H-C4: When all providers construct successfully, build_tier1_extras
+    returns a non-None providers dict and a QueryExpander.
+
+    Patches OpenAlexProvider, HuggingFaceProvider, and QueryExpander so
+    the real try-block (lines 60-79) is exercised without network I/O.
+    SEMANTIC_SCHOLAR_API_KEY is unset so the optional S2 branch is skipped.
+    """
+    from src.services.intelligence.monitoring._tier1_factory import build_tier1_extras
+    from src.services.intelligence.monitoring.models import PaperSource
+
+    fake_openalex = MagicMock()
+    fake_hf = MagicMock()
+    fake_expander = MagicMock()
+
+    monkeypatch.setattr(
+        "src.services.providers.openalex.OpenAlexProvider",
+        MagicMock(return_value=fake_openalex),
+    )
+    monkeypatch.setattr(
+        "src.services.providers.huggingface.HuggingFaceProvider",
+        MagicMock(return_value=fake_hf),
+    )
+    monkeypatch.setattr(
+        "src.utils.query_expander.QueryExpander",
+        MagicMock(return_value=fake_expander),
+    )
+    # Ensure no S2 key is present for this test.
+    monkeypatch.delenv("SEMANTIC_SCHOLAR_API_KEY", raising=False)
+
+    extra_providers, query_expander = build_tier1_extras(MagicMock())
+
+    assert extra_providers is not None
+    assert PaperSource.OPENALEX in extra_providers
+    assert PaperSource.HUGGINGFACE in extra_providers
+    assert PaperSource.SEMANTIC_SCHOLAR not in extra_providers
+    assert query_expander is fake_expander
+
+
+def test_build_tier1_extras_includes_semantic_scholar_when_api_key_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C-2/H-C4: When SEMANTIC_SCHOLAR_API_KEY is set, SemanticScholarProvider
+    is included in the returned providers dict (line 73 branch).
+    """
+    from src.services.intelligence.monitoring._tier1_factory import build_tier1_extras
+    from src.services.intelligence.monitoring.models import PaperSource
+
+    fake_s2 = MagicMock()
+
+    monkeypatch.setattr(
+        "src.services.providers.openalex.OpenAlexProvider",
+        MagicMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr(
+        "src.services.providers.huggingface.HuggingFaceProvider",
+        MagicMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr(
+        "src.services.providers.semantic_scholar.SemanticScholarProvider",
+        MagicMock(return_value=fake_s2),
+    )
+    monkeypatch.setattr(
+        "src.utils.query_expander.QueryExpander",
+        MagicMock(return_value=MagicMock()),
+    )
+    monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "test-key-123")
+
+    extra_providers, _ = build_tier1_extras(MagicMock())
+
+    assert extra_providers is not None
+    assert PaperSource.SEMANTIC_SCHOLAR in extra_providers
+
+
+# ---------------------------------------------------------------------------
+# Issue #141: per-paper source provenance
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_records_actual_source_per_paper() -> None:
+    """Issue #141: ``MonitoringRun.papers`` carries the actual provider per paper.
+
+    The MVP subscription only allows ARXIV in ``sources``, so all papers
+    in this single-provider scenario must come back stamped
+    ``source=PaperSource.ARXIV`` -- never the silent default the V5
+    column would have given them.
+    """
+    sub = _make_subscription()
+    arxiv = _make_provider(return_papers=[_make_paper("p1")])
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=_make_registry(),
+    )
+    result = await monitor.check(sub)
+    assert result.run.papers_seen == 1
+    assert result.run.papers[0].source is PaperSource.ARXIV
+
+
+@pytest.mark.asyncio
+async def test_check_records_per_paper_source_for_each_provider() -> None:
+    """Issue #141: when a subscription allows multiple providers, each
+    paper's source field reflects the provider it actually came from --
+    NOT a hardcoded ``PaperSource.ARXIV`` (the lie #141 is fixing).
+
+    Subscription is constructed with ``sources=[ARXIV, OPENALEX, ...]``
+    bypassing the model-level allowlist via ``object.__setattr__`` so
+    this test focuses on the monitor's per-paper source threading
+    rather than the (separately-tested) model validator.
+    """
+    arxiv_paper = _make_paper("arxiv-paper-1", title="ArXiv paper")
+    openalex_paper = _make_paper("oa-paper-1", title="OpenAlex paper")
+    s2_paper = _make_paper("s2-paper-1", title="S2 paper")
+    hf_paper = _make_paper("hf-paper-1", title="HF paper")
+
+    arxiv = _make_provider(return_papers=[arxiv_paper])
+    openalex = _make_provider(return_papers=[openalex_paper])
+    s2 = _make_provider(return_papers=[s2_paper])
+    hf = _make_provider(return_papers=[hf_paper])
+
+    sub_base = _make_subscription()
+    # Bypass the model validator (which restricts MVP subscriptions to
+    # ARXIV-only) so we can exercise the multi-provider paper-tracking
+    # code path. This is exactly the path Tier 1 production builds will
+    # hit once the subscription validator is widened in a follow-up.
+    # Use model_construct (the Pydantic API for validation-free construction)
+    # rather than object.__setattr__ to avoid coupling to Pydantic internals.
+    sub = ResearchSubscription.model_construct(
+        **{
+            **sub_base.model_dump(),
+            "sources": [
+                PaperSource.ARXIV,
+                PaperSource.OPENALEX,
+                PaperSource.SEMANTIC_SCHOLAR,
+                PaperSource.HUGGINGFACE,
+            ],
+        }
+    )
+
+    monitor = MultiProviderMonitor(
+        providers={
+            PaperSource.ARXIV: arxiv,
+            PaperSource.OPENALEX: openalex,
+            PaperSource.SEMANTIC_SCHOLAR: s2,
+            PaperSource.HUGGINGFACE: hf,
+        },
+        registry=_make_registry(),
+    )
+    result = await monitor.check(sub)
+
+    # Index the audit rows by paper_id for an unambiguous mapping
+    # assertion.
+    by_id = {p.paper_id: p for p in result.run.papers}
+    assert by_id["arxiv-paper-1"].source is PaperSource.ARXIV
+    assert by_id["oa-paper-1"].source is PaperSource.OPENALEX
+    assert by_id["s2-paper-1"].source is PaperSource.SEMANTIC_SCHOLAR
+    assert by_id["hf-paper-1"].source is PaperSource.HUGGINGFACE
+
+
+@pytest.mark.asyncio
+async def test_check_dedup_preserves_first_seen_source() -> None:
+    """When two providers return the same paper, the first-seen source wins.
+
+    Iteration order over the providers dict is insertion order in
+    Python 3.7+, so ``ARXIV`` (inserted first) is the source of the
+    deduplicated row -- not OPENALEX which came second.
+    """
+    shared = _make_paper("shared-paper")
+    arxiv = _make_provider(return_papers=[shared])
+    openalex = _make_provider(return_papers=[shared])
+
+    sub_base = _make_subscription()
+    # Use model_construct to bypass the ARXIV-only validator (Pydantic API
+    # rather than object.__setattr__ to avoid coupling to internals).
+    sub = ResearchSubscription.model_construct(
+        **{
+            **sub_base.model_dump(),
+            "sources": [PaperSource.ARXIV, PaperSource.OPENALEX],
+        }
+    )
+
+    monitor = MultiProviderMonitor(
+        providers={
+            PaperSource.ARXIV: arxiv,
+            PaperSource.OPENALEX: openalex,
+        },
+        registry=_make_registry(),
+    )
+    result = await monitor.check(sub)
+
+    assert result.run.papers_seen == 1
+    # First-seen wins; arXiv was iterated first.
+    assert result.run.papers[0].source is PaperSource.ARXIV
+
+
+@pytest.mark.asyncio
+async def test_check_records_source_for_deduplicated_papers() -> None:
+    """Even papers known to the registry (deduplicated) must carry their
+    provider source on the audit row -- not just freshly-registered ones.
+    """
+    sub = _make_subscription()
+    known = _make_paper("known-paper")
+    arxiv = _make_provider(return_papers=[known])
+    monitor = MultiProviderMonitor(
+        providers={PaperSource.ARXIV: arxiv},
+        registry=_make_registry(matched_paper_ids={"known-paper"}),
+    )
+    result = await monitor.check(sub)
+    assert result.run.papers_deduplicated == 1
+    assert result.run.papers[0].source is PaperSource.ARXIV
+    assert result.run.papers[0].is_new is False

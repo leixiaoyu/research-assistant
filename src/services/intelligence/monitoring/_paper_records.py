@@ -17,13 +17,16 @@ from typing import Optional
 
 from src.models.config.core import ResearchTopic, TimeframeRecent, TimeframeType
 from src.models.paper import PaperMetadata
+from src.services.intelligence.models.monitoring import PaperSource
 from src.services.intelligence.monitoring.models import (
     MAX_POLL_HOURS,
     MonitoringPaperRecord,
 )
 
 
-def to_paper_record(paper: PaperMetadata, is_new: bool) -> MonitoringPaperRecord:
+def to_paper_record(
+    paper: PaperMetadata, *, is_new: bool, source: PaperSource
+) -> MonitoringPaperRecord:
     """Convert a :class:`PaperMetadata` into a :class:`MonitoringPaperRecord`.
 
     ``PaperMetadata.url`` and ``open_access_pdf`` are Pydantic ``HttpUrl``
@@ -35,6 +38,10 @@ def to_paper_record(paper: PaperMetadata, is_new: bool) -> MonitoringPaperRecord
         paper: Source paper metadata from a discovery provider.
         is_new: ``True`` if the paper was not yet known to the registry
             before this cycle.
+        source: Discovery provider this paper came from (issue #141).
+            Required keyword arg so callers must explicitly thread the
+            actual provider through — never falls back to a hardcoded
+            default (which is what #141 is fixing).
 
     Returns:
         A ``MonitoringPaperRecord`` ready to be appended to
@@ -48,6 +55,7 @@ def to_paper_record(paper: PaperMetadata, is_new: bool) -> MonitoringPaperRecord
         pdf_url=str(paper.open_access_pdf) if paper.open_access_pdf else None,
         published_at=published,
         is_new=is_new,
+        source=source,
     )
 
 

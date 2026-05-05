@@ -31,6 +31,7 @@ from src.services.intelligence.monitoring.digest_generator import (
     DigestGenerator,
     REASONING_TRUNCATE_CHARS,
 )
+from src.services.intelligence.models.monitoring import PaperSource
 from src.services.intelligence.monitoring.models import (
     MonitoringPaperAudit,
     MonitoringRunAudit,
@@ -63,12 +64,14 @@ def _make_paper_audit(
     relevance_score: Optional[float] = 0.8,
     relevance_reasoning: Optional[str] = "Highly relevant",
     registered: bool = False,
+    source: PaperSource = PaperSource.ARXIV,
 ) -> MonitoringPaperAudit:
     return MonitoringPaperAudit(
         paper_id=paper_id,
         registered=registered,
         relevance_score=relevance_score,
         relevance_reasoning=relevance_reasoning,
+        source=source,
     )
 
 
@@ -572,6 +575,8 @@ class TestRenderedSnapshot:
         assert "Direct match on PEFT keyword." in text
         assert "## Stats\n" in text
         assert text.endswith("\n")
+        # M-4 / issue #141: per-paper Source: line must appear in the digest.
+        assert "Source: `arxiv`" in text
 
 
 # ---------------------------------------------------------------------------
@@ -615,9 +620,18 @@ class TestOutputRootEnvVar:
     def test_structlog_monitoring_digest_written(
         self,
         tmp_output: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """H-T1: ``monitoring_digest_written`` is logged by DigestGenerator."""
+        import structlog
         import structlog.testing
+        from src.services.intelligence.monitoring import digest_generator as dg_mod
+
+        # Rebind the module-level logger before entering capture_logs() so
+        # the cached production logger is replaced and events are intercepted.
+        # Required because cache_logger_on_first_use=True freezes the bound
+        # logger at first call, bypassing the capture_logs() processor swap.
+        monkeypatch.setattr(dg_mod, "logger", structlog.get_logger())
 
         gen = DigestGenerator(tmp_output)
         sub = _make_subscription()
@@ -631,3 +645,59 @@ class TestOutputRootEnvVar:
         assert len(written_events) == 1
         assert written_events[0].get("run_id") == run.run_id
         assert written_events[0].get("subscription_id") == sub.subscription_id
+
+
+# ---------------------------------------------------------------------------
+# Issue #141: per-paper source rendering
+# ---------------------------------------------------------------------------
+
+
+class TestDigestSourceRendering:
+    """The Top Papers section must surface each paper's source provider."""
+
+    def test_per_paper_source_appears_in_markdown(self, tmp_output: Path) -> None:
+        """Each Top Papers entry includes a ``Source: ...`` line.
+
+        Issue #141: a digest reader can immediately see that paper X came
+        from arXiv and paper Y came from OpenAlex without round-tripping
+        through the audit DB.
+        """
+        from src.services.intelligence.models.monitoring import PaperSource
+
+        gen = DigestGenerator(tmp_output)
+        sub = _make_subscription()
+        run = _make_run(
+            papers_seen=2,
+            papers_new=2,
+            papers=[
+                MonitoringPaperAudit(
+                    paper_id="arxiv-1",
+                    registered=True,
+                    relevance_score=0.9,
+                    source=PaperSource.ARXIV,
+                ),
+                MonitoringPaperAudit(
+                    paper_id="oa-1",
+                    registered=True,
+                    relevance_score=0.85,
+                    source=PaperSource.OPENALEX,
+                ),
+            ],
+        )
+        path = gen.generate(run, sub)
+        text = path.read_text(encoding="utf-8")
+
+        # Both source labels must appear under their respective papers.
+        assert "Source: `arxiv`" in text
+        assert "Source: `openalex`" in text
+
+    def test_source_line_omitted_when_no_papers(self, tmp_output: Path) -> None:
+        """The empty-papers code path must not render any source lines."""
+        gen = DigestGenerator(tmp_output)
+        sub = _make_subscription()
+        run = _make_run()  # no papers
+        text = gen.generate(run, sub).read_text(encoding="utf-8")
+        # The empty section's "no papers" sentinel is present...
+        assert "_No papers were seen in this run._" in text
+        # ...and no spurious Source line was rendered.
+        assert "Source:" not in text

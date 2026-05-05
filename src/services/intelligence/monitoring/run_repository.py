@@ -33,6 +33,7 @@ Schema (created by ``MIGRATION_V2_MONITORING_RUNS``)
         registered          INTEGER NOT NULL DEFAULT 0,
         relevance_score     REAL,
         relevance_reasoning TEXT,
+        source              TEXT NOT NULL DEFAULT 'arxiv',  -- V5 / #141
         PRIMARY KEY (run_id, paper_id),
         FOREIGN KEY (run_id) REFERENCES monitoring_runs(run_id) ON DELETE CASCADE
     )
@@ -72,6 +73,7 @@ from typing import Iterator, Optional
 
 import structlog
 
+from src.services.intelligence.models.monitoring import PaperSource
 from src.services.intelligence.monitoring.models import (
     MonitoringPaperAudit,
     MonitoringRun,
@@ -279,8 +281,9 @@ class MonitoringRunRepository:
                         """
                         INSERT INTO monitoring_papers (
                             run_id, paper_id, registered,
-                            relevance_score, relevance_reasoning
-                        ) VALUES (?, ?, ?, ?, ?)
+                            relevance_score, relevance_reasoning,
+                            source
+                        ) VALUES (?, ?, ?, ?, ?, ?)
                         """,
                         [
                             (
@@ -289,6 +292,8 @@ class MonitoringRunRepository:
                                 1 if paper.is_new else 0,
                                 paper.relevance_score,
                                 paper.relevance_reasoning,
+                                # V5 / issue #141: per-paper provenance.
+                                paper.source.value,
                             )
                             for paper in run.papers
                         ],
@@ -395,22 +400,37 @@ class MonitoringRunRepository:
         """
         cursor = conn.execute(
             """
-            SELECT paper_id, registered, relevance_score, relevance_reasoning
+            SELECT paper_id, registered, relevance_score, relevance_reasoning,
+                   source
             FROM monitoring_papers
             WHERE run_id = ?
             ORDER BY paper_id ASC
             """,
             (run_id,),
         )
-        result: list[MonitoringPaperAudit] = [
-            MonitoringPaperAudit(
-                paper_id=row["paper_id"],
-                registered=bool(row["registered"]),
-                relevance_score=row["relevance_score"],
-                relevance_reasoning=row["relevance_reasoning"],
+        rows = cursor.fetchall()
+        result: list[MonitoringPaperAudit] = []
+        for row in rows:
+            raw_source = row["source"]
+            try:
+                source = PaperSource(raw_source)
+            except ValueError:
+                logger.error(
+                    "monitoring_paper_unknown_source",
+                    paper_id=row["paper_id"],
+                    raw_value=raw_source,
+                )
+                raise
+            result.append(
+                MonitoringPaperAudit(
+                    paper_id=row["paper_id"],
+                    registered=bool(row["registered"]),
+                    relevance_score=row["relevance_score"],
+                    relevance_reasoning=row["relevance_reasoning"],
+                    # V5 / issue #141: per-paper provenance round-trip.
+                    source=source,
+                )
             )
-            for row in cursor.fetchall()
-        ]
         # Defense-in-depth: pin the typed-DTO contract so a future
         # refactor (e.g., introducing a "fast path" that returns rows
         # directly) cannot silently leak dicts to the caller.

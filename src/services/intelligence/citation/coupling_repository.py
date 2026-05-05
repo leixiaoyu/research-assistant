@@ -103,13 +103,22 @@ class CitationCouplingRepository:
     def __init__(self, db_path: Path | str) -> None:
         """Initialise the repository.
 
+        Disk I/O note (M-5):
+            The constructor does **not** touch the filesystem — it only
+            validates the path via :func:`sanitize_storage_path`.
+            :class:`~src.storage.intelligence_graph.migrations.MigrationManager`
+            (which calls ``_ensure_directory()``) is constructed lazily
+            inside :meth:`initialize` so callers that build a repository
+            in a loop do not pay mkdir costs up front.  The recommended
+            production path is :meth:`connect`, which calls
+            :meth:`initialize` exactly once.
+
         Args:
             db_path: SQLite database path. Must lie under one of the
                 approved storage roots — enforced by
                 :func:`sanitize_storage_path`.
         """
         self.db_path = sanitize_storage_path(db_path)
-        self._migrations = MigrationManager(self.db_path)
         self._initialized = False
 
     # ------------------------------------------------------------------
@@ -120,9 +129,11 @@ class CitationCouplingRepository:
         """Apply pending schema migrations.
 
         Idempotent — safe to call multiple times.  Must be called before
-        any read/write operation.
+        any read/write operation.  This is where :class:`MigrationManager`
+        is constructed (deferred from ``__init__`` per M-5 lesson).
         """
-        applied = self._migrations.migrate()
+        migrations = MigrationManager(self.db_path)
+        applied = migrations.migrate()
         if applied > 0:
             logger.info(
                 "citation_coupling_repository_migrations_applied",

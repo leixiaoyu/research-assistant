@@ -5,8 +5,10 @@ Covers:
 - TTL semantics on the read path — stale rows return ``None``.
 - ``delete_stale`` row count.
 - Canonical-pair ordering: (A,B) and (B,A) hit the same row.
+- Canonical-order return semantics: get(B, A) returns min/max ids.
 - ``record`` retry path on lock contention.
-- ``record`` swallows non-contention ``sqlite3.Error``.
+- ``record`` raises non-contention ``sqlite3.Error`` (H-6).
+- Path security: constructor rejects unsanitized paths (H-8).
 - ``connect`` factory initialises migrations.
 - Structured-log event assertions via ``capture_logs()`` with the
   canonical "rebind logger before capture" pattern (CLAUDE.md §Test
@@ -32,6 +34,7 @@ from src.services.intelligence.citation.coupling_repository import (
 )
 from src.services.intelligence.citation.models import CouplingResult
 from src.storage.intelligence_graph import connection as conn_mod
+from src.utils.security import SecurityError
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -181,6 +184,16 @@ class TestInitialize:
         ]
         assert len(events) == 1
         assert events[0]["count"] >= 1
+
+    def test_constructor_rejects_unsanitized_path(self) -> None:
+        """H-8: Constructor rejects paths outside approved storage roots.
+
+        Mirrors PR #143 C-2 canonical security-rejection pattern so
+        CitationCouplingRepository is covered by the same path-safety
+        guarantee as CitationInfluenceRepository.
+        """
+        with pytest.raises(SecurityError, match="outside approved storage roots"):
+            CitationCouplingRepository("/etc/passwd.db")
 
 
 # ---------------------------------------------------------------------------

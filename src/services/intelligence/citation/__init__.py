@@ -1,10 +1,11 @@
-"""Milestone 9.2: Citation Graph Intelligence (Week 1 + 1.5 surface).
+"""Milestone 9.2: Citation Graph Intelligence (Weeks 1 + 1.5 + 2 surface).
 
 This package builds and persists citation graphs from external APIs
 (Semantic Scholar primary, OpenAlex fallback) using the Phase 9
 ``GraphStore`` for storage. Week 1 + 1.5 deliver depth=1 graph
-construction; BFS crawler, coupling analyzer, influence scorer, and
-recommender are deferred to follow-up PRs (Weeks 2-3).
+construction and BFS crawling. Week 2 ships the bibliographic coupling
+analyzer (:class:`CouplingAnalyzer`) and the influence scorer
+(:class:`InfluenceScorer`). The recommender is deferred to Week 3.
 
 Public surface:
 
@@ -59,6 +60,12 @@ from src.services.intelligence.citation.models import (
     make_citation_edge_id,
     make_paper_node_id,
 )
+from src.services.intelligence.citation.coupling_analyzer import CouplingAnalyzer
+from src.services.intelligence.citation.coupling_repository import (
+    DEFAULT_MAX_AGE_DAYS,
+    CitationCouplingRepository,
+)
+from src.services.intelligence.citation.models import CouplingResult
 from src.services.intelligence.citation.openalex_client import (
     OpenAlexCitationClient,
 )
@@ -96,4 +103,9 @@ __all__ = [
     "DEFAULT_CACHE_TTL",
     "MAX_GRAPH_NODES_FOR_HITS",
     "MAX_GRAPH_NODES_FOR_PAGERANK",
+    # Bibliographic Coupling Analyzer (Issue #128)
+    "CouplingAnalyzer",
+    "CitationCouplingRepository",
+    "CouplingResult",
+    "DEFAULT_MAX_AGE_DAYS",
 ]

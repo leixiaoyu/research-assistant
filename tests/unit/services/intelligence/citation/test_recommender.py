@@ -27,6 +27,7 @@ from src.services.intelligence.citation import recommender as recommender_module
 from src.services.intelligence.citation.coupling_protocol import CouplingResult
 from src.services.intelligence.citation.influence_scorer import InfluenceMetrics
 from src.services.intelligence.citation.models import (
+    EdgeType,
     Recommendation,
     RecommendationStrategy,
 )
@@ -326,6 +327,90 @@ async def test_recommend_similar_invalid_seed_raises() -> None:
         await rec.recommend_similar("bad/seed", k=5)
 
 
+@pytest.mark.asyncio
+async def test_recommend_similar_k_zero_raises() -> None:
+    """M-3: k=0 must raise (after H-2 cap requiring k in [1, 100])."""
+    rec, _, _, _, _ = _build_recommender()
+    with pytest.raises(ValueError, match=r"k must be in \[1, 100\]"):
+        await rec.recommend_similar(_SEED, k=0)
+
+
+@pytest.mark.asyncio
+async def test_recommend_similar_k_above_cap_raises() -> None:
+    """M-3 / H-2: k > 100 must raise."""
+    rec, _, _, _, _ = _build_recommender()
+    with pytest.raises(ValueError, match=r"k must be in \[1, 100\]"):
+        await rec.recommend_similar(_SEED, k=101)
+
+
+@pytest.mark.asyncio
+async def test_recommend_similar_k_exceeds_candidates_returns_all() -> None:
+    """M-3: k larger than available candidates returns all available, not k entries."""
+    coupling_results = [
+        _coupling_result(_SEED, _P1, strength=0.9, shared=10, jaccard=0.5),
+        _coupling_result(_SEED, _P2, strength=0.6, shared=6, jaccard=0.3),
+    ]
+    traverse_nodes = [_make_graph_node(_P1), _make_graph_node(_P2)]
+    rec, _, _, _, _ = _build_recommender(
+        traverse_returns=traverse_nodes,
+        coupling_results=coupling_results,
+    )
+
+    results = await rec.recommend_similar(_SEED, k=10)
+
+    assert len(results) == 2
+    assert results[0].paper_id == _P1
+    assert results[1].paper_id == _P2
+
+
+@pytest.mark.asyncio
+async def test_recommend_similar_ties_broken_deterministically() -> None:
+    """M-3: Tied coupling_strength → results are consistently ordered.
+
+    Tie-break stability matters because recommend_all and downstream UI
+    must produce stable output across cache-cold and cache-warm calls.
+    """
+    coupling_results = [
+        _coupling_result(_SEED, _P3, strength=0.5, shared=5, jaccard=0.25),
+        _coupling_result(_SEED, _P1, strength=0.5, shared=5, jaccard=0.25),
+        _coupling_result(_SEED, _P2, strength=0.5, shared=5, jaccard=0.25),
+    ]
+    traverse_nodes = [
+        _make_graph_node(_P1),
+        _make_graph_node(_P2),
+        _make_graph_node(_P3),
+    ]
+    rec, _, _, _, _ = _build_recommender(
+        traverse_returns=traverse_nodes,
+        coupling_results=coupling_results,
+    )
+
+    # Two consecutive calls produce the same order (deterministic).
+    results_a = await rec.recommend_similar(_SEED, k=3)
+    results_b = await rec.recommend_similar(_SEED, k=3)
+
+    assert [r.paper_id for r in results_a] == [r.paper_id for r in results_b]
+
+
+def test_recommendation_rejects_extra_fields() -> None:
+    """M-1: Recommendation model_config has extra='forbid'.
+
+    Future refactor that drops the strict config would silently accept
+    spurious fields and not be caught without this pin.
+    """
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        Recommendation(
+            paper_id=_P1,
+            score=0.5,
+            strategy=RecommendationStrategy.SIMILAR,
+            reasoning="test",
+            seed_paper_id=_SEED,
+            spurious_field="should be rejected",  # type: ignore[call-arg]
+        )
+
+
 # ---------------------------------------------------------------------------
 # recommend_influential_predecessors
 # ---------------------------------------------------------------------------
@@ -365,8 +450,13 @@ async def test_recommend_influential_predecessors_uses_backward_crawl(
     events = [e["event"] for e in cap_logs]
     assert "recommender_strategy_complete" in events
 
-    # Store must have been called with the CITES edge type via traverse
-    assert mock_store.traverse.called
+    # Store called with correct args (H-5: assert_called_with not bare .called)
+    mock_store.traverse.assert_called_with(
+        _SEED,
+        edge_types=[EdgeType.CITES],
+        max_depth=2,
+        direction="outgoing",
+    )
 
 
 @pytest.mark.asyncio
@@ -651,6 +741,17 @@ async def test_recommend_all_runs_strategies_concurrently(monkeypatch) -> None:
     assert len(gather_calls) == 1
     # It must have received exactly 4 coroutines (one per strategy)
     assert len(gather_calls[0]) == 4
+
+    # L-7: verify the result dict contains all four strategies in the
+    # canonical order (SIMILAR, INFLUENTIAL_PREDECESSOR, ACTIVE_SUCCESSOR, BRIDGE).
+    # recommend_all(...) with empty traverse returns empty lists for all.
+    all_result = await rec.recommend_all(_SEED, k_per_strategy=3)
+    assert list(all_result.keys()) == [
+        RecommendationStrategy.SIMILAR,
+        RecommendationStrategy.INFLUENTIAL_PREDECESSOR,
+        RecommendationStrategy.ACTIVE_SUCCESSOR,
+        RecommendationStrategy.BRIDGE,
+    ]
 
 
 @pytest.mark.asyncio

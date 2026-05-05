@@ -501,7 +501,7 @@ class TestMigrationPathTraversalRejection:
     )
     def test_migration_rejects_traversal_path(self, bad_path: str) -> None:
         """MigrationManager must reject paths outside approved roots."""
-        with pytest.raises(SecurityError):
+        with pytest.raises(SecurityError, match="outside approved storage roots"):
             MigrationManager(bad_path)
 
 
@@ -1167,7 +1167,7 @@ class TestMigrationV4CitationInfluenceMetrics:
                 "(paper_id, computed_at) VALUES (?, ?)",
                 ("paper:s2:dup", "2025-01-01T00:00:00+00:00"),
             )
-            with pytest.raises(sqlite3.IntegrityError):
+            with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
                 conn.execute(
                     "INSERT INTO citation_influence_metrics "
                     "(paper_id, computed_at) VALUES (?, ?)",

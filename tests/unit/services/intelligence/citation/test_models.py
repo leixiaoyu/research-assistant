@@ -70,12 +70,12 @@ def test_make_paper_node_id_sanitizes_doi_with_slashes():
 
 
 def test_make_paper_node_id_rejects_empty_external_id():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="empty after sanitization"):
         make_paper_node_id("s2", "")
 
 
 def test_make_paper_node_id_rejects_empty_source():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="empty after sanitization"):
         make_paper_node_id("", "abc123")
 
 
@@ -146,7 +146,7 @@ def test_citation_direction_membership():
 
 
 def test_citation_direction_rejects_unknown_value():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="is not a valid"):
         CitationDirection("sideways")
 
 
@@ -197,11 +197,8 @@ def test_citation_node_paper_id_strips_whitespace():
 
 
 def test_citation_node_paper_id_rejects_empty_after_strip():
-    with pytest.raises(ValidationError) as exc:
+    with pytest.raises(ValidationError, match="cannot be empty|at least 1 character"):
         CitationNode(paper_id="   ", title="t")
-    assert "cannot be empty" in str(exc.value) or "at least 1 character" in str(
-        exc.value
-    )
 
 
 def test_citation_node_paper_id_rejects_invalid_chars():
@@ -210,22 +207,22 @@ def test_citation_node_paper_id_rejects_invalid_chars():
 
 
 def test_citation_node_paper_id_rejects_min_length_violation():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="at least 1 character"):
         CitationNode(paper_id="", title="t")
 
 
 def test_citation_node_title_required():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="at least 1 character"):
         CitationNode(paper_id="paper:s2:abc", title="")
 
 
 def test_citation_node_year_lower_bound():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="greater than or equal to 1800"):
         CitationNode(paper_id="paper:s2:abc", title="t", year=1799)
 
 
 def test_citation_node_year_upper_bound():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="less than or equal to 2100"):
         CitationNode(paper_id="paper:s2:abc", title="t", year=2101)
 
 
@@ -235,12 +232,12 @@ def test_citation_node_year_accepts_valid_range():
 
 
 def test_citation_node_citation_count_negative_rejected():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="greater than or equal to 0"):
         CitationNode(paper_id="paper:s2:abc", title="t", citation_count=-1)
 
 
 def test_citation_node_reference_count_negative_rejected():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="greater than or equal to 0"):
         CitationNode(paper_id="paper:s2:abc", title="t", reference_count=-1)
 
 
@@ -266,7 +263,7 @@ def test_citation_node_external_ids_rejects_whitespace_value():
 
 def test_citation_node_external_ids_rejects_non_string_key():
     # Pydantic itself coerces here when possible; but ints will raise
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="Input should be a valid string"):
         CitationNode.model_validate(
             {
                 "paper_id": "paper:s2:abc",
@@ -277,7 +274,7 @@ def test_citation_node_external_ids_rejects_non_string_key():
 
 
 def test_citation_node_external_ids_rejects_non_string_value():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="Input should be a valid string"):
         CitationNode.model_validate(
             {
                 "paper_id": "paper:s2:abc",
@@ -288,7 +285,7 @@ def test_citation_node_external_ids_rejects_non_string_value():
 
 
 def test_citation_node_extra_fields_forbidden():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         CitationNode.model_validate(
             {
                 "paper_id": "paper:s2:abc",
@@ -386,7 +383,7 @@ def test_citation_edge_strips_id_whitespace():
 
 
 def test_citation_edge_rejects_blank_citing_id():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="cannot be empty"):
         CitationEdge(citing_paper_id="   ", cited_paper_id="paper:s2:b")
 
 
@@ -401,14 +398,14 @@ def test_citation_edge_rejects_invalid_cited_id():
 
 
 def test_citation_edge_rejects_blank_source():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="at least 1 character"):
         CitationEdge(
             citing_paper_id="paper:s2:a", cited_paper_id="paper:s2:b", source=""
         )
 
 
 def test_citation_edge_extra_fields_forbidden():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         CitationEdge.model_validate(
             {
                 "citing_paper_id": "paper:s2:a",

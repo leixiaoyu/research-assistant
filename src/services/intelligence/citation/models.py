@@ -413,18 +413,27 @@ class RecommendationStrategy(str, Enum):
 class Recommendation(BaseModel):
     """A single paper recommendation produced by ``CitationRecommender``.
 
-    Pydantic V2 strict model (``extra="forbid"``) per project standards.
+    Pydantic V2 strict model (``extra="forbid", strict=True``) per project
+    standards.
 
     Constraints:
     - ``paper_id`` must match the canonical node-id pattern.
-    - ``score`` is in [0.0, 1.0]; strategy-specific normalization ensures
-      every strategy emits comparable scores.
+    - ``score`` is in [0.0, 1.0] — strategy-specific normalization applies
+      independently per strategy.
     - ``seed_paper_id`` must differ from ``paper_id`` — a paper cannot
       recommend itself.
     - ``reasoning`` is a short human-readable explanation (1–512 chars).
+
+    .. warning:: Score asymmetry — do NOT cross-rank between strategies.
+        Each strategy normalizes scores independently (each divides by its
+        own maximum). A score of 0.8 from SIMILAR does **not** mean the
+        same as a score of 0.8 from BRIDGE. Rankings produced by mixing
+        scores from different strategies are semantically meaningless and
+        will produce misleading results. Always compare recommendations
+        within a single strategy.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     paper_id: str = Field(
         ...,

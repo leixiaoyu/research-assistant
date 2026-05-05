@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.services.intelligence.citation._id_validation import (
     CANONICAL_NODE_ID_PATTERN,
@@ -60,10 +60,12 @@ class CouplingResult(BaseModel):
     Validators:
     - ``paper_a_id`` and ``paper_b_id`` must match the canonical node-id
       pattern (alphanumeric, colons, periods, hyphens, underscores).
+    - ``paper_a_id`` must differ from ``paper_b_id`` (self-coupling is
+      semantically invalid).
     - ``coupling_strength`` is clamped to [0.0, 1.0].
     """
 
-    model_config = ConfigDict(extra="forbid", strict=False)
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     paper_a_id: str = Field(
         ...,
@@ -98,10 +100,22 @@ class CouplingResult(BaseModel):
         ),
     )
 
-    def model_post_init(self, __context: object) -> None:
-        """Validate paper ids after field construction."""
-        _validate_paper_id_str(self.paper_a_id, "paper_a_id")
-        _validate_paper_id_str(self.paper_b_id, "paper_b_id")
+    @field_validator("paper_a_id", "paper_b_id")
+    @classmethod
+    def _validate_paper_ids(cls, v: str, info: object) -> str:
+        """Validate paper ids against the canonical node-id pattern."""
+        field_name = getattr(info, "field_name", "paper_id")
+        return _validate_paper_id_str(v, field_name)
+
+    @model_validator(mode="after")
+    def _reject_self_coupling(self) -> "CouplingResult":
+        """Ensure paper_a_id differs from paper_b_id (self-coupling is invalid)."""
+        if self.paper_a_id == self.paper_b_id:
+            raise ValueError(
+                f"paper_a_id and paper_b_id must differ; "
+                f"both are {self.paper_a_id!r}"
+            )
+        return self
 
 
 @runtime_checkable
@@ -130,7 +144,7 @@ class CouplingAnalyzerProtocol(Protocol):
         Returns:
             A ``CouplingResult`` with the coupling metrics.
         """
-        raise NotImplementedError  # pragma: abstract
+        ...
 
     async def analyze_for_paper(
         self,
@@ -149,4 +163,4 @@ class CouplingAnalyzerProtocol(Protocol):
             Coupling results sorted by ``coupling_strength`` descending,
             at most ``top_k`` entries.
         """
-        raise NotImplementedError  # pragma: abstract
+        ...

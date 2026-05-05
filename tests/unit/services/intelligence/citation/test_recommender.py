@@ -1045,54 +1045,6 @@ async def test_recommend_active_successors_bad_year_value_excluded(
 
 
 # ---------------------------------------------------------------------------
-# Coverage gap: _hop_count fallback when node not reachable within 3 hops
-# ---------------------------------------------------------------------------
-
-
-def test_hop_count_returns_1_when_not_found() -> None:
-    """_hop_count returns 1 as fallback when target not in any BFS radius."""
-    mock_store = MagicMock()
-    # traverse never returns the target
-    mock_store.traverse = MagicMock(return_value=[])
-
-    rec = CitationRecommender(
-        coupling=AsyncMock(),
-        crawler=MagicMock(),
-        scorer=AsyncMock(),
-        store=mock_store,
-    )
-
-    result = rec._hop_count(_SEED, _P1, direction="outgoing")
-    assert result == 1
-
-
-def test_hop_count_returns_correct_depth() -> None:
-    """_hop_count returns the correct depth when target is found."""
-    mock_store = MagicMock()
-    target_node = _make_graph_node(_P1)
-
-    call_count = [0]
-
-    def _traverse_se(node_id, edge_types, max_depth, direction="both"):
-        call_count[0] += 1
-        if call_count[0] == 1:
-            return []  # depth 1: not found
-        return [target_node]  # depth 2: found
-
-    mock_store.traverse = MagicMock(side_effect=_traverse_se)
-
-    rec = CitationRecommender(
-        coupling=AsyncMock(),
-        crawler=MagicMock(),
-        scorer=AsyncMock(),
-        store=mock_store,
-    )
-
-    result = rec._hop_count(_SEED, _P1, direction="outgoing")
-    assert result == 2
-
-
-# ---------------------------------------------------------------------------
 # Coverage gap: coupling_protocol._validate_paper_id_str branches
 # ---------------------------------------------------------------------------
 

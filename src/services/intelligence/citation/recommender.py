@@ -21,27 +21,40 @@ Design notes
 - All four strategies are injected via DI constructor so callers can
   substitute mocks in tests.
 - ``recommend_all`` runs all four in ``asyncio.gather`` for concurrency.
+  ``return_exceptions=True`` is used so one strategy failure returns a
+  partial result and emits ``recommender_strategy_failed_in_recommend_all``
+  rather than aborting all strategies.
 - Scores are normalized to [0.0, 1.0] per strategy before being wrapped
   in :class:`Recommendation` objects.
-- Every public method validates ``seed_id`` using
-  :meth:`InfluenceScorer._validate_paper_id` (the project's single
-  source of truth for paper-id validation in this package).
+
+  .. warning::
+      Scores are **not** cross-comparable between strategies — each
+      strategy normalizes independently. Do NOT rank recommendations from
+      different strategies against each other by score.
+
+- Every public method validates ``seed_id`` via the canonical
+  :func:`_validate_paper_id` (single source of truth in this package).
+  ``k`` is validated to be in [1, 100].
 - Structured log events emitted: ``recommender_strategy_complete``,
   ``recommender_seed_isolated_returns_empty``,
-  ``recommender_strategy_failed``.
+  ``recommender_strategy_failed``,
+  ``recommender_strategy_failed_in_recommend_all``,
+  ``recommender_bridge_frontier_truncated``.
 
 Failure semantics
 -----------------
-If a strategy raises an unexpected exception, ``recommender_strategy_failed``
-is logged and the exception propagates (not swallowed). This preserves the
-"Checked Success" pattern from CLAUDE.md: silent swallowing would hide
-bugs and leave the caller unaware that recommendations are incomplete.
+Individual strategies propagate exceptions to the caller (fail-hard by
+default). In ``recommend_all``, ``asyncio.gather(return_exceptions=True)``
+is used so a single strategy failure returns a partial result for the
+other strategies, and emits ``recommender_strategy_failed_in_recommend_all``
+for each failed strategy.
 """
 
 from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 
 import structlog
 
@@ -55,6 +68,7 @@ from src.services.intelligence.citation.coupling_protocol import (
 from src.services.intelligence.citation.crawler import CitationCrawler
 from src.services.intelligence.citation.influence_scorer import InfluenceScorer
 from src.services.intelligence.citation.models import (
+    EdgeType,
     Recommendation,
     RecommendationStrategy,
 )
@@ -66,8 +80,13 @@ logger = structlog.get_logger(__name__)
 # Year cutoff for "active successors": papers published in the last N years.
 _ACTIVE_SUCCESSOR_YEARS = 2
 
-# BFS radius used to gather seed candidates for similar / bridge strategies.
+# BFS radius used to gather seed candidates for similar strategy.
 _BFS_RADIUS_SIMILAR = 2
+
+# BFS radius used to gather backward candidates for influential predecessors.
+# Kept separate from _BFS_RADIUS_SIMILAR so each strategy can be tuned
+# independently without inadvertently changing the other.
+_BFS_RADIUS_PREDECESSOR = 2
 
 # Minimum number of "distant papers" (frontier) that must co-cite a bridge
 # candidate for it to count as a bridge.
@@ -76,12 +95,24 @@ _BRIDGE_MIN_DISTANT_CO_CITERS = 2
 # BFS depth for gathering the distant frontier used in bridge detection.
 _BRIDGE_FRONTIER_RADIUS = 3
 
+# Hard cap on the distant-frontier size in bridge detection. Large corpora
+# can produce thousands of radius-3 nodes which would trigger one
+# _get_bfs_neighbors call per node. Capping at 500 prevents pathological
+# runtimes while still covering realistic citation graphs.
+_BRIDGE_MAX_DISTANT = 500
+
+# Hard cap on the candidate list passed to analyze_for_paper (M-7).
+# Large BFS expansions can produce thousands of candidates; capping here
+# prevents unbounded work in the coupling analyzer.
+_MAX_CANDIDATES = 500
+
+# Valid range for k (applies to all public methods).
+_K_MIN = 1
+_K_MAX = 100
+
 
 def _validate_paper_id(paper_id: str) -> None:
-    """Validate a paper id using the project canonical pattern.
-
-    Delegates to :func:`InfluenceScorer._validate_paper_id` so that the
-    validation logic has a single source of truth.
+    """Validate a paper id against the project's canonical node-id pattern.
 
     Raises:
         ValueError: If ``paper_id`` is malformed.
@@ -97,6 +128,16 @@ def _validate_paper_id(paper_id: str) -> None:
             f"Invalid paper_id format: {paper_id!r}. "
             "Allowed: alphanumeric, colons, periods, hyphens, underscores."
         )
+
+
+def _validate_k(k: int) -> None:
+    """Validate that k is in [_K_MIN, _K_MAX].
+
+    Raises:
+        ValueError: If ``k`` is outside [1, 100].
+    """
+    if not _K_MIN <= k <= _K_MAX:
+        raise ValueError(f"k must be in [{_K_MIN}, {_K_MAX}]; got {k}")
 
 
 def _normalize_scores(scores: dict[str, float]) -> dict[str, float]:
@@ -144,6 +185,65 @@ class CitationRecommender:
         self._store = store
 
     # ------------------------------------------------------------------
+    # Factory
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def connect(
+        cls,
+        *,
+        db_path: Path | str,
+        coupling: CouplingAnalyzerProtocol | None = None,
+    ) -> "CitationRecommender":
+        """Create a fully-wired ``CitationRecommender`` from a database path.
+
+        Wires together ``SQLiteGraphStore``, ``CitationCrawler``,
+        ``InfluenceScorer``, and (optionally) a ``CouplingAnalyzerProtocol``
+        so callers do not need to know about the internal collaborators.
+
+        Args:
+            db_path: Path to the SQLite database backing the graph store.
+            coupling: Optional coupling analyzer. When ``None``, no
+                similarity analysis is available; the ``recommend_similar``
+                strategy will return empty results or raise on any call
+                that reaches the analyzer. In production, PR #128's
+                ``CouplingAnalyzer`` should be passed here once it lands.
+
+        Returns:
+            A ready-to-use ``CitationRecommender``.
+        """
+        from src.services.intelligence.citation.crawler import CitationCrawler
+        from src.services.intelligence.citation.openalex_client import (
+            OpenAlexCitationClient,
+        )
+        from src.services.intelligence.citation.semantic_scholar_client import (
+            SemanticScholarCitationClient,
+        )
+
+        store = SQLiteGraphStore(db_path)
+        s2_client = SemanticScholarCitationClient()
+        openalex_client = OpenAlexCitationClient()
+        crawler = CitationCrawler(
+            store=store,
+            s2_client=s2_client,
+            openalex_client=openalex_client,
+        )
+        scorer = InfluenceScorer(store=store)
+
+        if coupling is None:
+            # Use a no-op coupling adapter that always returns empty results.
+            # External code (PR #128 / CouplingAnalyzer) should be injected
+            # once it lands.
+            coupling = _NullCouplingAdapter()  # type: ignore[assignment]
+
+        return cls(
+            coupling=coupling,  # type: ignore[arg-type]
+            crawler=crawler,
+            scorer=scorer,
+            store=store,
+        )
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
@@ -158,16 +258,17 @@ class CitationRecommender:
 
         Args:
             seed_id: Canonical node id of the seed paper.
-            k: Maximum number of recommendations to return.
+            k: Maximum number of recommendations to return (1–100).
 
         Returns:
             Up to ``k`` :class:`Recommendation` objects, sorted by score
             descending.
 
         Raises:
-            ValueError: If ``seed_id`` is malformed.
+            ValueError: If ``seed_id`` is malformed or ``k`` is out of range.
         """
         _validate_paper_id(seed_id)
+        _validate_k(k)
         strategy = RecommendationStrategy.SIMILAR
         try:
             candidates = self._get_bfs_neighbors(seed_id, radius=_BFS_RADIUS_SIMILAR)
@@ -180,6 +281,10 @@ class CitationRecommender:
                     strategy=strategy.value,
                 )
                 return []
+
+            # Cap candidate list to prevent unbounded coupling work.
+            if len(candidates) > _MAX_CANDIDATES:
+                candidates = candidates[:_MAX_CANDIDATES]
 
             coupling_results = await self._coupling.analyze_for_paper(
                 seed_id, candidates, top_k=k
@@ -235,21 +340,22 @@ class CitationRecommender:
 
         Args:
             seed_id: Canonical node id of the seed paper.
-            k: Maximum number of recommendations to return.
+            k: Maximum number of recommendations to return (1–100).
 
         Returns:
             Up to ``k`` :class:`Recommendation` objects sorted by score
             descending.
 
         Raises:
-            ValueError: If ``seed_id`` is malformed.
+            ValueError: If ``seed_id`` is malformed or ``k`` is out of range.
         """
         _validate_paper_id(seed_id)
+        _validate_k(k)
         strategy = RecommendationStrategy.INFLUENTIAL_PREDECESSOR
         try:
             backward_nodes = self._get_bfs_neighbors(
                 seed_id,
-                radius=_BFS_RADIUS_SIMILAR,
+                radius=_BFS_RADIUS_PREDECESSOR,
                 direction="outgoing",
             )
             backward_nodes = [n for n in backward_nodes if n != seed_id]
@@ -281,10 +387,8 @@ class CitationRecommender:
             for nid in ranked:
                 m = metrics_by_id.get(nid)
                 pr = m.pagerank_score if m else 0.0
-                hop_count = self._hop_count(seed_id, nid, direction="outgoing")
                 reasoning = (
-                    f"PageRank={pr:.4f}, cited by seed via "
-                    f"{hop_count}-hop backward crawl"
+                    f"PageRank={pr:.4f}, " "cited by seed via backward citation chain"
                 )
                 recommendations.append(
                     Recommendation(
@@ -326,16 +430,17 @@ class CitationRecommender:
 
         Args:
             seed_id: Canonical node id of the seed paper.
-            k: Maximum number of recommendations to return.
+            k: Maximum number of recommendations to return (1–100).
 
         Returns:
             Up to ``k`` :class:`Recommendation` objects sorted by score
             descending.
 
         Raises:
-            ValueError: If ``seed_id`` is malformed.
+            ValueError: If ``seed_id`` is malformed or ``k`` is out of range.
         """
         _validate_paper_id(seed_id)
+        _validate_k(k)
         strategy = RecommendationStrategy.ACTIVE_SUCCESSOR
         try:
             forward_nodes = self._get_bfs_neighbors(
@@ -427,6 +532,8 @@ class CitationRecommender:
         Heuristic (no NetworkX / community-detection libs required):
         1. Collect all papers cited by the seed (radius-2 backward BFS).
         2. Collect a "distant frontier" at radius-3 backward BFS.
+           The distant frontier is capped at :data:`_BRIDGE_MAX_DISTANT`
+           nodes to prevent pathological runtimes on large corpora.
         3. A candidate is a "bridge" if it appears in the seed's radius-2
            neighborhood AND is also cited by ≥
            :data:`_BRIDGE_MIN_DISTANT_CO_CITERS` distinct papers in the
@@ -437,20 +544,25 @@ class CitationRecommender:
 
         Args:
             seed_id: Canonical node id of the seed paper.
-            k: Maximum number of recommendations to return.
+            k: Maximum number of recommendations to return (1–100).
 
         Returns:
             Up to ``k`` :class:`Recommendation` objects sorted by score
             descending.
 
         Raises:
-            ValueError: If ``seed_id`` is malformed.
+            ValueError: If ``seed_id`` is malformed or ``k`` is out of range.
         """
         _validate_paper_id(seed_id)
+        _validate_k(k)
         strategy = RecommendationStrategy.BRIDGE
         try:
             # Radius-2 neighbors of seed (candidates).
-            r2_nodes = self._get_bfs_neighbors(seed_id, radius=2, direction="outgoing")
+            r2_nodes = self._get_bfs_neighbors(
+                seed_id,
+                radius=2,
+                direction="outgoing",
+            )
             r2_nodes = [n for n in r2_nodes if n != seed_id]
 
             if not r2_nodes:
@@ -465,10 +577,21 @@ class CitationRecommender:
 
             # Radius-3 "distant" neighbors.
             r3_nodes = self._get_bfs_neighbors(
-                seed_id, radius=_BRIDGE_FRONTIER_RADIUS, direction="outgoing"
+                seed_id,
+                radius=_BRIDGE_FRONTIER_RADIUS,
+                direction="outgoing",
             )
             # Distant = in r3 but NOT in r2 (radius > 2 from seed).
             distant_nodes = [n for n in r3_nodes if n not in r2_set and n != seed_id]
+
+            # Cap the frontier to bound per-node BFS calls (H-3).
+            if len(distant_nodes) > _BRIDGE_MAX_DISTANT:
+                distant_nodes = distant_nodes[:_BRIDGE_MAX_DISTANT]
+                logger.info(
+                    "recommender_bridge_frontier_truncated",
+                    seed_id=seed_id,
+                    cap=_BRIDGE_MAX_DISTANT,
+                )
 
             # Count how many distinct distant nodes cite each r2 candidate.
             # "Cite" in the backward direction means: the distant node
@@ -477,7 +600,9 @@ class CitationRecommender:
             for distant in distant_nodes:
                 # What does this distant node reference?
                 cited_by_distant = self._get_bfs_neighbors(
-                    distant, radius=1, direction="outgoing"
+                    distant,
+                    radius=1,
+                    direction="outgoing",
                 )
                 for cited in cited_by_distant:
                     if cited in r2_set:
@@ -550,35 +675,57 @@ class CitationRecommender:
     ) -> dict[RecommendationStrategy, list[Recommendation]]:
         """Run all four strategies concurrently and return a combined dict.
 
-        Uses ``asyncio.gather`` so the four strategies overlap their I/O
-        instead of running sequentially.
+        Uses ``asyncio.gather(return_exceptions=True)`` so a single strategy
+        failure returns a partial result for the remaining strategies rather
+        than aborting all of them. Each failing strategy is logged with
+        ``recommender_strategy_failed_in_recommend_all`` and contributes an
+        empty list in the returned dict.
 
         Args:
             seed_id: Canonical node id of the seed paper.
-            k_per_strategy: ``k`` passed to each individual strategy.
+            k_per_strategy: ``k`` passed to each individual strategy (1–100).
 
         Returns:
             A dict mapping each :class:`RecommendationStrategy` to its
-            list of :class:`Recommendation` objects.
+            list of :class:`Recommendation` objects. Strategies that raised
+            an exception map to an empty list.
 
         Raises:
-            ValueError: If ``seed_id`` is malformed.
-            Exception: Re-raises any exception from a failing strategy
-                (first exception wins; see asyncio.gather semantics).
+            ValueError: If ``seed_id`` is malformed or ``k_per_strategy``
+                is out of range.
         """
         _validate_paper_id(seed_id)
-        results = await asyncio.gather(
+        _validate_k(k_per_strategy)
+
+        strategies = [
+            RecommendationStrategy.SIMILAR,
+            RecommendationStrategy.INFLUENTIAL_PREDECESSOR,
+            RecommendationStrategy.ACTIVE_SUCCESSOR,
+            RecommendationStrategy.BRIDGE,
+        ]
+        coroutines = [
             self.recommend_similar(seed_id, k=k_per_strategy),
             self.recommend_influential_predecessors(seed_id, k=k_per_strategy),
             self.recommend_active_successors(seed_id, k=k_per_strategy),
             self.recommend_bridge_papers(seed_id, k=k_per_strategy),
-        )
-        return {
-            RecommendationStrategy.SIMILAR: results[0],
-            RecommendationStrategy.INFLUENTIAL_PREDECESSOR: results[1],
-            RecommendationStrategy.ACTIVE_SUCCESSOR: results[2],
-            RecommendationStrategy.BRIDGE: results[3],
-        }
+        ]
+
+        # return_exceptions=True: partial results on strategy failure.
+        raw_results = await asyncio.gather(*coroutines, return_exceptions=True)
+
+        output: dict[RecommendationStrategy, list[Recommendation]] = {}
+        for strategy, result in zip(strategies, raw_results):
+            if isinstance(result, BaseException):
+                logger.error(
+                    "recommender_strategy_failed_in_recommend_all",
+                    seed_id=seed_id,
+                    strategy=strategy.value,
+                    error=_trunc(result),
+                )
+                output[strategy] = []
+            else:
+                output[strategy] = result
+        return output
 
     # ------------------------------------------------------------------
     # Internals
@@ -603,8 +750,6 @@ class CitationRecommender:
         Returns:
             List of neighbor node ids (order not guaranteed).
         """
-        from src.services.intelligence.models import EdgeType
-
         nodes = self._store.traverse(
             node_id,
             edge_types=[EdgeType.CITES],
@@ -650,27 +795,24 @@ class CitationRecommender:
                     kept.append(nid)
         return kept
 
-    def _hop_count(
-        self, source_id: str, target_id: str, direction: str = "outgoing"
-    ) -> int:
-        """Return the BFS hop distance from ``source_id`` to ``target_id``.
 
-        Uses progressive BFS (depth 1, 2, 3) to find the first depth at
-        which ``target_id`` appears. Returns 1 if not found (safe fallback
-        — the caller uses this only for reasoning string generation).
+class _NullCouplingAdapter:
+    """No-op coupling adapter used when no real CouplingAnalyzer is available.
 
-        Args:
-            source_id: BFS origin.
-            target_id: Target node to search for.
-            direction: ``"outgoing"``, ``"incoming"``, or ``"both"``.
+    This satisfies :class:`CouplingAnalyzerProtocol` and is the default
+    wired by :meth:`CitationRecommender.connect` until PR #128 lands and
+    provides a real implementation.
+    """
 
-        Returns:
-            Hop count, or 1 if not reachable within 3 hops.
-        """
-        for depth in range(1, 4):
-            neighbors = self._get_bfs_neighbors(
-                source_id, radius=depth, direction=direction
-            )
-            if target_id in neighbors:
-                return depth
-        return 1
+    async def analyze_pair(self, paper_a_id: str, paper_b_id: str) -> object:
+        """Always returns an empty result (no coupling data available)."""
+        return None
+
+    async def analyze_for_paper(
+        self,
+        seed_id: str,
+        candidates: list[str],
+        top_k: int = 10,
+    ) -> list[object]:
+        """Always returns an empty list (no coupling data available)."""
+        return []

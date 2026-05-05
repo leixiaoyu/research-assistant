@@ -266,6 +266,28 @@ class TestCanonicalOrdering:
         assert fetched is not None
         assert fetched.coupling_strength == pytest.approx(0.55)
 
+    def test_get_ba_returns_canonical_order_not_caller_order(
+        self, repo: CitationCouplingRepository
+    ) -> None:
+        """H-2 regression: get(B, A) returns canonical (min, max) ids, not (B, A).
+
+        The old docstring claimed caller order was preserved; the real
+        implementation always returns canonical order. This test pins
+        the actual behaviour so future readers don't reintroduce the lie.
+        """
+        paper_aaa = "paper:s2:aaa"
+        paper_zzz = "paper:s2:zzz"  # zzz > aaa lexicographically
+
+        repo.record(_result(paper_aaa, paper_zzz, strength=0.7))
+        # Reversed lookup: caller asks for (zzz, aaa).
+        fetched = repo.get(paper_zzz, paper_aaa)
+
+        assert fetched is not None
+        # Returned result carries canonical ids, not caller-supplied order.
+        assert fetched.paper_a_id == paper_aaa  # min
+        assert fetched.paper_b_id == paper_zzz  # max
+        assert fetched.coupling_strength == pytest.approx(0.7)
+
 
 # ---------------------------------------------------------------------------
 # TTL semantics

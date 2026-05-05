@@ -10,9 +10,12 @@ both go through this class — no other module touches the
 Canonical-pair ordering
 -----------------------
 ``(paper_a_id, paper_b_id)`` is stored as ``(min_id, max_id)`` so a
-lookup for (A,B) and (B,A) hits the same row.  The caller-supplied
-order is preserved in the returned :class:`CouplingResult` so callers
-are not surprised by swapped ids.  The DB's ``CHECK (paper_a_id <
+lookup for (A,B) and (B,A) hits the same row.  The returned
+:class:`CouplingResult` always carries the **canonical** (lexicographic
+min, max) order — ``get(B, A)`` returns a result whose ``paper_a_id``
+is ``min(A, B)`` and ``paper_b_id`` is ``max(A, B)``.  Callers that
+need to map the result back to their original ordering must re-derive
+the pair from the canonical ids.  The DB's ``CHECK (paper_a_id <
 paper_b_id)`` constraint enforces this at the storage layer; a
 repository that fails to call min/max before INSERT will receive a
 constraint error, which is the intended loud-failure mode.

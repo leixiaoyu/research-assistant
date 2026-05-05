@@ -411,6 +411,55 @@ MIGRATION_V4_CITATION_INFLUENCE_METRICS = Migration(
 )
 
 
+# Schema version 6: Bibliographic coupling cache.
+# Phase 9.2 — REQ-9.2.3 / Issue #128.
+#
+# Stores the result of one CouplingAnalyzer.analyze_pair() call keyed by the
+# ordered pair (paper_a_id, paper_b_id) where paper_a_id < paper_b_id. The
+# canonical-pair constraint ensures (A,B) and (B,A) occupy the same row so
+# lookups are symmetric by construction.
+#
+# Schema notes
+# ------------
+# - ``PRIMARY KEY (paper_a_id, paper_b_id)`` with the additional
+#   ``CHECK (paper_a_id < paper_b_id)`` enforces the canonical-ordering
+#   invariant at the storage layer; ``CitationCouplingRepository.record``
+#   MUST call ``min``/``max`` before INSERT.
+# - ``coupling_strength`` is REAL with ``CHECK (… >= 0.0 AND … <= 1.0)``
+#   mirroring the Pydantic field constraint so the DB rejects out-of-range
+#   rows that somehow slip past model validation.
+# - ``co_citation_count`` is INTEGER with ``CHECK (… >= 0)`` likewise.
+# - ``shared_references_json`` stores the sorted list as a JSON array.
+# - ``computed_at`` ISO-8601 string; the 30-day TTL is enforced in Python.
+# - No ``version`` column (unlike V4): the coupling table is a pure cache
+#   with no forward-compatibility concerns for its initial version.
+MIGRATION_V6_CITATION_COUPLING_CACHE = Migration(
+    version=6,
+    name="citation_coupling_cache",
+    description=(
+        "Add citation_coupling table for CouplingAnalyzer cache "
+        "(REQ-9.2.3 / Issue #128)."
+    ),
+    up="""
+    CREATE TABLE citation_coupling (
+        paper_a_id TEXT NOT NULL,
+        paper_b_id TEXT NOT NULL,
+        coupling_strength REAL NOT NULL
+            CHECK (coupling_strength >= 0.0 AND coupling_strength <= 1.0),
+        shared_references_json TEXT NOT NULL,
+        co_citation_count INTEGER NOT NULL
+            CHECK (co_citation_count >= 0),
+        computed_at TEXT NOT NULL,
+        PRIMARY KEY (paper_a_id, paper_b_id),
+        CHECK (paper_a_id < paper_b_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_citation_coupling_computed
+        ON citation_coupling(computed_at);
+    """,
+)
+
+
 # Schema version 5: Per-paper source provenance on monitoring_papers.
 # Phase 9.1 Tier 1 follow-up — Issue #141.
 #
@@ -505,6 +554,7 @@ ALL_MIGRATIONS: list[Migration] = [
     MIGRATION_V3_MONITORING_RUNS_FK,
     MIGRATION_V4_CITATION_INFLUENCE_METRICS,
     MIGRATION_V5_PAPER_SOURCE_TRACKING,
+    MIGRATION_V6_CITATION_COUPLING_CACHE,
 ]
 
 
@@ -512,7 +562,7 @@ ALL_MIGRATIONS: list[Migration] = [
 # need to assert "we are on the canonical schema" import this rather
 # than counting ``ALL_MIGRATIONS`` so a future migration addition is
 # a single-line update.
-LATEST_MIGRATION_VERSION = 5
+LATEST_MIGRATION_VERSION = 6
 
 
 class MigrationManager:

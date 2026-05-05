@@ -25,6 +25,7 @@ from src.storage.intelligence_graph.migrations import (
     MIGRATION_V3_MONITORING_RUNS_FK,
     MIGRATION_V4_CITATION_INFLUENCE_METRICS,
     MIGRATION_V5_PAPER_SOURCE_TRACKING,
+    MIGRATION_V6_CITATION_COUPLING_CACHE,
 )
 from src.utils.security import SecurityError
 
@@ -1657,6 +1658,235 @@ class TestMigrationV5PaperSourceTracking:
             assert paper_row["source"] == "arxiv"
 
 
+class TestMigrationV6CitationCouplingCache:
+    """Tests for ``MIGRATION_V6_CITATION_COUPLING_CACHE`` (Issue #128)."""
+
+    def test_migrate_v6_creates_citation_coupling_table(self, temp_db: Path) -> None:
+        """V6 migration creates the citation_coupling table."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='citation_coupling'"
+            )
+            assert cursor.fetchone() is not None
+
+    def test_migrate_v6_table_has_expected_columns(self, temp_db: Path) -> None:
+        """citation_coupling table has the full column set."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            cursor = conn.execute("PRAGMA table_info(citation_coupling)")
+            cols = {row["name"] for row in cursor.fetchall()}
+        assert cols == {
+            "paper_a_id",
+            "paper_b_id",
+            "coupling_strength",
+            "shared_references_json",
+            "co_citation_count",
+            "computed_at",
+        }
+
+    def test_migrate_v6_composite_primary_key(self, temp_db: Path) -> None:
+        """Both paper_a_id and paper_b_id form the primary key."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            cursor = conn.execute("PRAGMA table_info(citation_coupling)")
+            pk_cols = sorted(row["name"] for row in cursor.fetchall() if row["pk"] > 0)
+        assert pk_cols == ["paper_a_id", "paper_b_id"]
+
+    def test_migrate_v6_duplicate_pair_raises_integrity_error(
+        self, temp_db: Path
+    ) -> None:
+        """Inserting a duplicate (paper_a_id, paper_b_id) pair raises IntegrityError."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            conn.execute(
+                "INSERT INTO citation_coupling "
+                "(paper_a_id, paper_b_id, coupling_strength, "
+                "shared_references_json, co_citation_count, computed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "paper:s2:aaa",
+                    "paper:s2:bbb",
+                    0.5,
+                    "[]",
+                    0,
+                    "2025-01-01T00:00:00+00:00",
+                ),
+            )
+            conn.commit()
+            with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint"):
+                conn.execute(
+                    "INSERT INTO citation_coupling "
+                    "(paper_a_id, paper_b_id, coupling_strength, "
+                    "shared_references_json, co_citation_count, computed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        "paper:s2:aaa",
+                        "paper:s2:bbb",
+                        0.3,
+                        "[]",
+                        0,
+                        "2025-01-02T00:00:00+00:00",
+                    ),
+                )
+
+    def test_migrate_v6_check_constraint_enforces_canonical_ordering(
+        self, temp_db: Path
+    ) -> None:
+        """CHECK (paper_a_id < paper_b_id) rejects reversed pairs."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint"):
+                conn.execute(
+                    "INSERT INTO citation_coupling "
+                    "(paper_a_id, paper_b_id, coupling_strength, "
+                    "shared_references_json, co_citation_count, computed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        "paper:s2:zzz",  # > paper_b_id — violates CHECK
+                        "paper:s2:aaa",
+                        0.5,
+                        "[]",
+                        0,
+                        "2025-01-01T00:00:00+00:00",
+                    ),
+                )
+
+    def test_migrate_v6_records_version(self, temp_db: Path) -> None:
+        """V6 migration is recorded in schema_migrations."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        applied = manager.get_applied_migrations()
+        versions = [m["version"] for m in applied]
+        assert 6 in versions
+
+    def test_migrate_v6_preserves_data_inserted_under_v5_schema(
+        self, temp_db: Path
+    ) -> None:
+        """H-1: V6 isolation upgrade test.
+
+        Apply V1+V2+V3+V4+V5 only, insert known rows into all tables
+        (nodes, subscriptions, monitoring_runs, monitoring_papers,
+        citation_influence_metrics), then apply V6 in isolation. V6
+        must (a) create the ``citation_coupling`` table and (b) not
+        disturb any pre-existing rows in other tables. Mirrors the V5
+        isolation test at
+        ``test_migrate_v5_preserves_data_inserted_under_v4_schema``.
+        """
+        manager = MigrationManager(temp_db)
+        # Apply only V1–V5; stop short of V6.
+        conn = manager._get_connection()
+        try:
+            manager._ensure_migrations_table(conn)
+            manager.apply_migration(conn, MIGRATION_V1_INITIAL)
+            manager.apply_migration(conn, MIGRATION_V2_MONITORING_RUNS)
+            manager.apply_migration(conn, MIGRATION_V3_MONITORING_RUNS_FK)
+            manager.apply_migration(conn, MIGRATION_V4_CITATION_INFLUENCE_METRICS)
+            manager.apply_migration(conn, MIGRATION_V5_PAPER_SOURCE_TRACKING)
+        finally:
+            conn.close()
+
+        # Insert rows into all V5 tables.
+        with open_connection(temp_db) as conn:
+            conn.execute(
+                "INSERT INTO nodes"
+                " (node_id, node_type, properties, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    "paper:s2:v5node",
+                    "paper",
+                    "{}",
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+            )
+            conn.execute(
+                "INSERT INTO subscriptions (subscription_id, user_id, name, config)"
+                " VALUES (?, ?, ?, ?)",
+                ("sub-v5-iso", "bob", "V5 Iso Sub", "{}"),
+            )
+            conn.execute(
+                "INSERT INTO monitoring_runs"
+                " (run_id, subscription_id, user_id, started_at, status)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    "run-v5-iso",
+                    "sub-v5-iso",
+                    "bob",
+                    "2025-01-01T00:00:00+00:00",
+                    "success",
+                ),
+            )
+            conn.execute(
+                "INSERT INTO monitoring_papers"
+                " (run_id, paper_id, registered, source)"
+                " VALUES (?, ?, ?, ?)",
+                ("run-v5-iso", "paper:v5:iso001", 1, "arxiv"),
+            )
+            conn.execute(
+                "INSERT INTO citation_influence_metrics"
+                " (paper_id, computed_at)"
+                " VALUES (?, ?)",
+                ("paper:s2:v5metrics", "2025-01-01T00:00:00+00:00"),
+            )
+            conn.commit()
+
+        # Apply V6 in isolation.
+        conn = manager._get_connection()
+        try:
+            manager._ensure_migrations_table(conn)
+            manager.apply_migration(conn, MIGRATION_V6_CITATION_COUPLING_CACHE)
+        finally:
+            conn.close()
+
+        with open_connection(temp_db) as conn:
+            # (a) citation_coupling table now exists.
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+                " AND name='citation_coupling'"
+            )
+            assert cursor.fetchone() is not None
+
+            # (b) All V5 rows survive intact.
+            node_row = conn.execute(
+                "SELECT node_id FROM nodes WHERE node_id = ?",
+                ("paper:s2:v5node",),
+            ).fetchone()
+            assert node_row is not None
+
+            sub_row = conn.execute(
+                "SELECT subscription_id FROM subscriptions WHERE subscription_id = ?",
+                ("sub-v5-iso",),
+            ).fetchone()
+            assert sub_row is not None
+
+            run_row = conn.execute(
+                "SELECT run_id, status FROM monitoring_runs WHERE run_id = ?",
+                ("run-v5-iso",),
+            ).fetchone()
+            assert run_row is not None
+            assert run_row["status"] == "success"
+
+            paper_row = conn.execute(
+                "SELECT paper_id, source FROM monitoring_papers WHERE paper_id = ?",
+                ("paper:v5:iso001",),
+            ).fetchone()
+            assert paper_row is not None
+            assert paper_row["source"] == "arxiv"
+
+            metrics_row = conn.execute(
+                "SELECT paper_id FROM citation_influence_metrics WHERE paper_id = ?",
+                ("paper:s2:v5metrics",),
+            ).fetchone()
+            assert metrics_row is not None
+
+
 class TestLatestMigrationVersion:
     """``LATEST_MIGRATION_VERSION`` mirrors the highest entry in
     ``ALL_MIGRATIONS`` so callers (or future cross-references) have
@@ -1666,7 +1896,7 @@ class TestLatestMigrationVersion:
     def test_latest_version_constant_matches_all_migrations(self) -> None:
         assert LATEST_MIGRATION_VERSION == max(m.version for m in ALL_MIGRATIONS)
 
-    def test_latest_version_is_5(self) -> None:
+    def test_latest_version_is_6(self) -> None:
         # Pinned literal so an accidental version bump shows up in
         # review even if ``ALL_MIGRATIONS`` is also extended.
-        assert LATEST_MIGRATION_VERSION == 5
+        assert LATEST_MIGRATION_VERSION == 6

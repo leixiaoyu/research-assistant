@@ -411,10 +411,13 @@ class TestRetryOnContention:
         # After the retry it must have persisted.
         assert repo.get(PAPER_A, PAPER_B) is not None
 
-    def test_record_swallows_non_contention_sqlite_error(
+    def test_record_raises_non_contention_sqlite_error(
         self, repo: CitationCouplingRepository, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Non-contention sqlite3.Error is swallowed (don't-fail-the-caller)."""
+        """Non-contention sqlite3.Error is raised (H-6: repo raises, caller swallows).
+
+        Mirrors CitationInfluenceRepository.record_metrics pattern (PR #143).
+        """
         real_open = conn_mod.open_connection
 
         @contextmanager
@@ -446,52 +449,8 @@ class TestRetryOnContention:
                 yield _Proxy()  # type: ignore[misc]
 
         monkeypatch.setattr(repo_mod, "open_connection", boom_open)
-        # Must not raise.
-        repo.record(_result())
-
-    def test_record_swallowed_error_logs_write_failed(
-        self,
-        repo: CitationCouplingRepository,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Swallowed sqlite3.Error emits ``coupling_repo_write_failed``."""
-        monkeypatch.setattr(repo_mod, "logger", structlog.get_logger())
-        real_open = conn_mod.open_connection
-
-        @contextmanager
-        def boom_open(p: Path) -> Iterator[sqlite3.Connection]:
-            with real_open(p) as conn:
-
-                class _Proxy:
-                    def execute(self, sql: str, *args: Any, **kwargs: Any) -> Any:
-                        if sql == "BEGIN IMMEDIATE":
-                            raise sqlite3.DatabaseError("boom")
-                        return conn.execute(sql, *args, **kwargs)
-
-                    def commit(self) -> None:
-                        conn.commit()
-
-                    def rollback(self) -> None:
-                        conn.rollback()
-
-                    @property
-                    def row_factory(self) -> Any:
-                        return conn.row_factory
-
-                    @row_factory.setter
-                    def row_factory(self, v: Any) -> None:
-                        conn.row_factory = v
-
-                yield _Proxy()  # type: ignore[misc]
-
-        monkeypatch.setattr(repo_mod, "open_connection", boom_open)
-        with structlog.testing.capture_logs() as logs:
+        with pytest.raises(sqlite3.DatabaseError, match="disk I/O error"):
             repo.record(_result())
-
-        events = [e for e in logs if e.get("event") == "coupling_repo_write_failed"]
-        assert len(events) == 1
-        assert events[0]["paper_a_id"] == PAPER_A
-        assert events[0]["paper_b_id"] == PAPER_B
 
     def test_record_once_rollback_on_insert_failure(
         self, repo: CitationCouplingRepository, monkeypatch: pytest.MonkeyPatch
@@ -499,9 +458,9 @@ class TestRetryOnContention:
         """If the INSERT fails after BEGIN, the rollback path is exercised.
 
         The INSERT raises a non-contention OperationalError, which:
-        1. Triggers conn.rollback() inside _record_once (lines 253-255).
+        1. Triggers conn.rollback() inside _record_once.
         2. Propagates through _retry (no retry for non-contention errors).
-        3. Is caught by the outer sqlite3.Error handler in record() and swallowed.
+        3. Is re-raised by record() to the caller (H-6 fix).
         """
         real_open = conn_mod.open_connection
 
@@ -540,8 +499,9 @@ class TestRetryOnContention:
                 yield _Proxy()  # type: ignore[misc]
 
         monkeypatch.setattr(repo_mod, "open_connection", boom_insert_open)
-        # Must not raise — outer sqlite3.Error handler swallows it.
-        repo.record(_result())
+        # H-6: repo now raises; caller (analyzer) is responsible for swallowing.
+        with pytest.raises(sqlite3.OperationalError, match="disk full"):
+            repo.record(_result())
 
     def test_delete_stale_rollback_on_failure(
         self, repo: CitationCouplingRepository, monkeypatch: pytest.MonkeyPatch

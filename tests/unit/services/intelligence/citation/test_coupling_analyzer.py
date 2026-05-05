@@ -505,3 +505,43 @@ class TestCacheIntegration:
         """
         assert DEFAULT_MAX_AGE_DAYS > 0
         assert isinstance(DEFAULT_MAX_AGE_DAYS, int)
+
+
+# ---------------------------------------------------------------------------
+# 6. References truncation guard (M-10)
+# ---------------------------------------------------------------------------
+
+
+class TestReferencesTruncation:
+    @pytest.mark.asyncio
+    async def test_references_truncated_event_emitted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """coupling_references_truncated warning is emitted when refs exceed cap.
+
+        M-10: _get_references caps the edge list at _MAX_REFERENCES and
+        emits an audit event so operators can detect unexpectedly dense
+        reference sets.
+        """
+        from src.services.intelligence.citation.coupling_analyzer import (
+            _MAX_REFERENCES,
+        )
+
+        monkeypatch.setattr(analyzer_mod, "logger", structlog.get_logger())
+        # Produce _MAX_REFERENCES + 1 edges for PAPER_A to trigger the cap.
+        oversized_refs = [f"paper:s2:r{i:06d}" for i in range(_MAX_REFERENCES + 1)]
+        store = _mock_store_with_refs({PAPER_A: oversized_refs, PAPER_B: []})
+        analyzer = CouplingAnalyzer(store)
+
+        with structlog.testing.capture_logs() as logs:
+            result = await analyzer.analyze_pair(PAPER_A, PAPER_B)
+
+        trunc_events = [
+            e for e in logs if e.get("event") == "coupling_references_truncated"
+        ]
+        assert len(trunc_events) >= 1
+        assert trunc_events[0]["paper_id"] == PAPER_A
+        assert trunc_events[0]["fetched"] == _MAX_REFERENCES + 1
+        assert trunc_events[0]["cap"] == _MAX_REFERENCES
+        # Computation still succeeds; PAPER_B has no refs so strength=0.
+        assert result.coupling_strength == pytest.approx(0.0)

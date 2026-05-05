@@ -47,10 +47,11 @@ PRAGMAs, and closes on exit.  ``record`` uses
 
 Failure semantics
 -----------------
-``record``'s outer ``try`` catches ``sqlite3.Error`` so a cache write
-failure does NOT bubble up to the analyzer caller.  The exception is
-logged via ``coupling_repo_write_failed`` and swallowed — the caller
-still receives its in-memory result.
+``record`` RAISES :class:`sqlite3.Error` on a non-retryable write
+failure — mirrors :class:`CitationInfluenceRepository.record_metrics`
+(PR #143 pattern).  The caller (:meth:`CouplingAnalyzer.analyze_pair`)
+is responsible for the swallow-and-log pattern so callers can opt into
+loud failure if they choose a different wiring.
 """
 
 from __future__ import annotations
@@ -68,7 +69,6 @@ from src.services.intelligence.citation.models import CouplingResult
 from src.storage.intelligence_graph.connection import (
     DEFAULT_BACKOFF_SECONDS,
     DEFAULT_MAX_ATTEMPTS,
-    _trunc,
     open_connection,
     retry_on_lock_contention,
 )
@@ -192,27 +192,25 @@ class CitationCouplingRepository:
             **Async callers MUST wrap in ``asyncio.to_thread(...)``.**
 
         Failure semantics:
-            The outer ``try`` catches ``sqlite3.Error`` so a cache write
-            failure does NOT propagate to the analyzer caller.  The
-            exception is logged via ``coupling_repo_write_failed``.
+            Raises :class:`sqlite3.Error` on a non-retryable write
+            failure — mirrors :meth:`CitationInfluenceRepository.record_metrics`
+            (PR #143 pattern).  The caller (typically
+            :meth:`CouplingAnalyzer.analyze_pair`) is responsible for
+            swallowing the error if cache-write failures should not
+            propagate to end users.
 
         Args:
             result: Single :class:`CouplingResult` to upsert.
+
+        Raises:
+            sqlite3.Error: If the upsert fails after all retry attempts.
         """
-        try:
-            self._retry(
-                lambda: self._record_once(result),
-                operation_name="coupling_record",
-                paper_a_id=result.paper_a_id,
-                paper_b_id=result.paper_b_id,
-            )
-        except sqlite3.Error as exc:
-            logger.error(
-                "coupling_repo_write_failed",
-                paper_a_id=result.paper_a_id,
-                paper_b_id=result.paper_b_id,
-                error=_trunc(exc),
-            )
+        self._retry(
+            lambda: self._record_once(result),
+            operation_name="coupling_record",
+            paper_a_id=result.paper_a_id,
+            paper_b_id=result.paper_b_id,
+        )
 
     def _record_once(self, result: CouplingResult) -> None:
         """Single-attempt upsert of one row."""

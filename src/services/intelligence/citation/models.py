@@ -426,7 +426,12 @@ class CouplingResult(BaseModel):
     )
     shared_references: list[str] = Field(
         default_factory=list,
-        description="Sorted, deduplicated paper IDs cited by both papers.",
+        max_length=10_000,
+        description=(
+            "Sorted, deduplicated paper IDs cited by both papers. "
+            "Capped at 10,000 to bound JSON serialization cost and "
+            "cache row size."
+        ),
     )
     coupling_strength: float = Field(
         ...,

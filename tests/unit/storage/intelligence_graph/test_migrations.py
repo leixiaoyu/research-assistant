@@ -1758,6 +1758,85 @@ class TestMigrationV6CitationCouplingCache:
                     ),
                 )
 
+    def test_migrate_v6_check_rejects_strength_above_one(self, temp_db: Path) -> None:
+        """H-7: CHECK (coupling_strength <= 1.0) rejects 1.5."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint"):
+                conn.execute(
+                    "INSERT INTO citation_coupling "
+                    "(paper_a_id, paper_b_id, coupling_strength, "
+                    "shared_references_json, co_citation_count, computed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        "paper:s2:aaa",
+                        "paper:s2:bbb",
+                        1.5,  # > 1.0 — violates CHECK
+                        "[]",
+                        0,
+                        "2025-01-01T00:00:00+00:00",
+                    ),
+                )
+
+    def test_migrate_v6_check_rejects_strength_below_zero(self, temp_db: Path) -> None:
+        """H-7: CHECK (coupling_strength >= 0.0) rejects -0.1."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint"):
+                conn.execute(
+                    "INSERT INTO citation_coupling "
+                    "(paper_a_id, paper_b_id, coupling_strength, "
+                    "shared_references_json, co_citation_count, computed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        "paper:s2:aaa",
+                        "paper:s2:bbb",
+                        -0.1,  # < 0.0 — violates CHECK
+                        "[]",
+                        0,
+                        "2025-01-01T00:00:00+00:00",
+                    ),
+                )
+
+    def test_migrate_v6_check_rejects_negative_co_citation_count(
+        self, temp_db: Path
+    ) -> None:
+        """H-7: CHECK (co_citation_count >= 0) rejects -1."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint"):
+                conn.execute(
+                    "INSERT INTO citation_coupling "
+                    "(paper_a_id, paper_b_id, coupling_strength, "
+                    "shared_references_json, co_citation_count, computed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        "paper:s2:aaa",
+                        "paper:s2:bbb",
+                        0.5,
+                        "[]",
+                        -1,  # < 0 — violates CHECK
+                        "2025-01-01T00:00:00+00:00",
+                    ),
+                )
+
+    def test_migrate_v6_check_constraint_sql_contains_strength_and_co_citation_bounds(
+        self,
+    ) -> None:
+        """M-4: SQL drift-guard — both bounds present in V6 SQL string.
+
+        Mirrors the V3/V5 enum drift-guard tests in spirit. Protects
+        against a future SQL refactor silently dropping a CHECK clause.
+        """
+        sql = MIGRATION_V6_CITATION_COUPLING_CACHE.up
+        assert "coupling_strength >= 0.0" in sql
+        assert "coupling_strength <= 1.0" in sql
+        assert "co_citation_count >= 0" in sql
+        assert "paper_a_id < paper_b_id" in sql
+
     def test_migrate_v6_records_version(self, temp_db: Path) -> None:
         """V6 migration is recorded in schema_migrations."""
         manager = MigrationManager(temp_db)

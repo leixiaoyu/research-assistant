@@ -1,140 +1,49 @@
-"""Coupling protocol shim for parallel development with issue #128.
+"""Coupling protocol for the citation recommender (Milestone 9.2, Issue #130).
 
-# TO BE REPLACED by #128's models — interface-locked for parallel development.
+Defines :class:`CouplingAnalyzerProtocol` — the structural protocol that
+:class:`CitationRecommender` depends on for bibliographic coupling analysis.
+The real :class:`CouplingAnalyzer` (PR #147 / Issue #128) satisfies this
+protocol implicitly through duck typing; no explicit registration is needed.
 
-Issue #128 (CouplingAnalyzer — Bibliographic Coupling) is being developed
-concurrently. This module defines a minimal ``CouplingAnalyzerProtocol``
-and a stub ``CouplingResult`` model so the recommender (issue #130) can
-code against a well-typed interface without waiting for #128 to land.
+Design rationale for keeping the Protocol:
+- Decouples the recommender from the concrete ``CouplingAnalyzer`` import
+  path, preventing a potential circular-import if the analyzer ever imports
+  recommender utilities.
+- Tests can inject ``AsyncMock()`` objects that satisfy the protocol without
+  importing or constructing the real analyzer.
+- Near-zero LOC cost (~15 lines) for meaningful architectural insurance.
 
-When #128 lands and this branch rebases onto main, the real
-``CouplingAnalyzer`` will already satisfy the Protocol implicitly (duck
-typing). No production code change will be needed in the recommender.
-
-Interface-lock contract:
-- ``CouplingResult.paper_a_id`` / ``paper_b_id`` — canonical node-id format
-- ``CouplingResult.coupling_strength`` — float in [0.0, 1.0]
-- ``CouplingResult.shared_reference_count`` — non-negative int
-- ``CouplingAnalyzerProtocol.analyze_pair(a_id, b_id) -> CouplingResult``
-- ``CouplingAnalyzerProtocol.analyze_for_paper(seed_id, candidates, top_k)
-  -> list[CouplingResult]``
+``CouplingResult`` is re-exported from :mod:`src.services.intelligence.citation.models`
+for backwards-compatibility with any code that imports it from this module.
 """
 
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from src.services.intelligence.citation.models import CouplingResult
 
-from src.services.intelligence.citation._id_validation import (
-    CANONICAL_NODE_ID_PATTERN,
-    PAPER_ID_MAX_LENGTH,
-)
-
-
-def _validate_paper_id_str(v: str, field_name: str) -> str:
-    """Validate a paper id string against the canonical node-id pattern."""
-    if not isinstance(v, str) or not v.strip():
-        raise ValueError(f"{field_name} must be a non-empty string")
-    if len(v) > PAPER_ID_MAX_LENGTH:
-        raise ValueError(
-            f"{field_name} length {len(v)} exceeds max {PAPER_ID_MAX_LENGTH}"
-        )
-    if not CANONICAL_NODE_ID_PATTERN.match(v):
-        raise ValueError(
-            f"Invalid {field_name} format: {v!r}. "
-            "Allowed: alphanumeric, colons, periods, hyphens, underscores."
-        )
-    return v
-
-
-class CouplingResult(BaseModel):
-    """Result of a bibliographic coupling computation between two papers.
-
-    # TO BE REPLACED by #128's models — interface-locked for parallel development.
-
-    Mirrors the spec contract from issue #128 so the recommender can
-    consume coupling results without importing the (not-yet-landed)
-    ``CouplingAnalyzer``.
-
-    Validators:
-    - ``paper_a_id`` and ``paper_b_id`` must match the canonical node-id
-      pattern (alphanumeric, colons, periods, hyphens, underscores).
-    - ``paper_a_id`` must differ from ``paper_b_id`` (self-coupling is
-      semantically invalid).
-    - ``coupling_strength`` is clamped to [0.0, 1.0].
-    """
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    paper_a_id: str = Field(
-        ...,
-        min_length=1,
-        max_length=PAPER_ID_MAX_LENGTH,
-        description="Canonical node id of the first paper.",
-    )
-    paper_b_id: str = Field(
-        ...,
-        min_length=1,
-        max_length=PAPER_ID_MAX_LENGTH,
-        description="Canonical node id of the second paper.",
-    )
-    coupling_strength: float = Field(
-        ...,
-        ge=0.0,
-        le=1.0,
-        description="Bibliographic coupling strength in [0.0, 1.0].",
-    )
-    shared_reference_count: int = Field(
-        default=0,
-        ge=0,
-        description="Number of references shared by both papers.",
-    )
-    jaccard_index: float = Field(
-        default=0.0,
-        ge=0.0,
-        le=1.0,
-        description=(
-            "Jaccard index of reference sets: |A ∩ B| / |A ∪ B|. "
-            "Zero when either paper has no references."
-        ),
-    )
-
-    @field_validator("paper_a_id", "paper_b_id")
-    @classmethod
-    def _validate_paper_ids(cls, v: str, info: object) -> str:
-        """Validate paper ids against the canonical node-id pattern."""
-        field_name = getattr(info, "field_name", "paper_id")
-        return _validate_paper_id_str(v, field_name)
-
-    @model_validator(mode="after")
-    def _reject_self_coupling(self) -> "CouplingResult":
-        """Ensure paper_a_id differs from paper_b_id (self-coupling is invalid)."""
-        if self.paper_a_id == self.paper_b_id:
-            raise ValueError(
-                f"paper_a_id and paper_b_id must differ; "
-                f"both are {self.paper_a_id!r}"
-            )
-        return self
+__all__ = [
+    "CouplingAnalyzerProtocol",
+    "CouplingResult",
+]
 
 
 @runtime_checkable
 class CouplingAnalyzerProtocol(Protocol):
     """Protocol for bibliographic coupling analysis.
 
-    # TO BE REPLACED by #128's models — interface-locked for parallel development.
-
     The recommender depends on this protocol, not on the concrete
-    ``CouplingAnalyzer`` class from issue #128. When #128 lands, the real
-    ``CouplingAnalyzer`` will satisfy this protocol implicitly. Tests inject
-    mock objects implementing this protocol.
+    ``CouplingAnalyzer`` class. When PR #147 landed, the real
+    ``CouplingAnalyzer`` began satisfying this protocol implicitly.
+    Tests inject mock objects implementing this protocol.
 
     Methods:
         analyze_pair: Compute coupling between two papers.
         analyze_for_paper: Find the top-k most coupled papers for a seed.
     """
 
-    async def analyze_pair(self, paper_a_id: str, paper_b_id: str) -> "CouplingResult":
+    async def analyze_pair(self, paper_a_id: str, paper_b_id: str) -> CouplingResult:
         """Compute bibliographic coupling between two papers.
 
         Args:
@@ -144,14 +53,14 @@ class CouplingAnalyzerProtocol(Protocol):
         Returns:
             A ``CouplingResult`` with the coupling metrics.
         """
-        ...
+        ...  # pragma: no cover
 
     async def analyze_for_paper(
         self,
         seed_id: str,
         candidates: list[str],
         top_k: int = 10,
-    ) -> list["CouplingResult"]:
+    ) -> list[CouplingResult]:
         """Find the top-k most coupled papers for a seed.
 
         Args:
@@ -163,4 +72,4 @@ class CouplingAnalyzerProtocol(Protocol):
             Coupling results sorted by ``coupling_strength`` descending,
             at most ``top_k`` entries.
         """
-        ...
+        ...  # pragma: no cover

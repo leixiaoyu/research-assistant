@@ -296,8 +296,8 @@ class CitationRecommender:
                 if other_id == seed_id:
                     continue
                 reasoning = (
-                    f"Top coupling (Jaccard={cr.jaccard_index:.2f}, "
-                    f"{cr.shared_reference_count} shared references)"
+                    f"Top coupling (Jaccard={cr.coupling_strength:.2f}, "
+                    f"{len(cr.shared_references)} shared references)"
                 )
                 recommendations.append(
                     Recommendation(

@@ -24,7 +24,7 @@ import structlog
 import structlog.testing
 
 from src.services.intelligence.citation import recommender as recommender_module
-from src.services.intelligence.citation.coupling_protocol import CouplingResult
+from src.services.intelligence.citation.models import CouplingResult
 from src.services.intelligence.citation.influence_scorer import InfluenceMetrics
 from src.services.intelligence.citation.models import (
     EdgeType,
@@ -70,14 +70,12 @@ def _coupling_result(
     other: str,
     strength: float = 0.5,
     shared: int = 5,
-    jaccard: float = 0.3,
 ) -> CouplingResult:
     return CouplingResult(
         paper_a_id=seed,
         paper_b_id=other,
         coupling_strength=strength,
-        shared_reference_count=shared,
-        jaccard_index=jaccard,
+        shared_references=[f"paper:s2:ref{i:03d}" for i in range(shared)],
     )
 
 
@@ -246,7 +244,7 @@ def test_recommendation_rejects_whitespace_only_paper_id() -> None:
 
 
 def test_coupling_result_rejects_invalid_id() -> None:
-    with pytest.raises(Exception, match="Invalid paper_a_id format"):
+    with pytest.raises(Exception, match="Invalid paper_id format"):
         CouplingResult(
             paper_a_id="bad/id",
             paper_b_id=_P1,
@@ -272,9 +270,9 @@ def test_coupling_result_rejects_out_of_range_strength() -> None:
 async def test_recommend_similar_returns_top_k_by_coupling(monkeypatch) -> None:
     """recommend_similar returns recommendations ordered by coupling_strength."""
     coupling_results = [
-        _coupling_result(_SEED, _P1, strength=0.9, shared=10, jaccard=0.5),
-        _coupling_result(_SEED, _P2, strength=0.6, shared=6, jaccard=0.3),
-        _coupling_result(_SEED, _P3, strength=0.3, shared=3, jaccard=0.15),
+        _coupling_result(_SEED, _P1, strength=0.9, shared=10),
+        _coupling_result(_SEED, _P2, strength=0.6, shared=6),
+        _coupling_result(_SEED, _P3, strength=0.3, shared=3),
     ]
     traverse_nodes = [
         _make_graph_node(_P1),
@@ -294,7 +292,7 @@ async def test_recommend_similar_returns_top_k_by_coupling(monkeypatch) -> None:
     assert results[0].paper_id == _P1
     assert results[0].score == pytest.approx(0.9)
     assert results[0].strategy == RecommendationStrategy.SIMILAR
-    assert "Jaccard=0.50" in results[0].reasoning
+    assert "Jaccard=0.90" in results[0].reasoning
     assert results[1].paper_id == _P2
 
     events = [e["event"] for e in cap_logs]
@@ -347,8 +345,8 @@ async def test_recommend_similar_k_above_cap_raises() -> None:
 async def test_recommend_similar_k_exceeds_candidates_returns_all() -> None:
     """M-3: k larger than available candidates returns all available, not k entries."""
     coupling_results = [
-        _coupling_result(_SEED, _P1, strength=0.9, shared=10, jaccard=0.5),
-        _coupling_result(_SEED, _P2, strength=0.6, shared=6, jaccard=0.3),
+        _coupling_result(_SEED, _P1, strength=0.9, shared=10),
+        _coupling_result(_SEED, _P2, strength=0.6, shared=6),
     ]
     traverse_nodes = [_make_graph_node(_P1), _make_graph_node(_P2)]
     rec, _, _, _, _ = _build_recommender(
@@ -371,9 +369,9 @@ async def test_recommend_similar_ties_broken_deterministically() -> None:
     must produce stable output across cache-cold and cache-warm calls.
     """
     coupling_results = [
-        _coupling_result(_SEED, _P3, strength=0.5, shared=5, jaccard=0.25),
-        _coupling_result(_SEED, _P1, strength=0.5, shared=5, jaccard=0.25),
-        _coupling_result(_SEED, _P2, strength=0.5, shared=5, jaccard=0.25),
+        _coupling_result(_SEED, _P3, strength=0.5, shared=5),
+        _coupling_result(_SEED, _P1, strength=0.5, shared=5),
+        _coupling_result(_SEED, _P2, strength=0.5, shared=5),
     ]
     traverse_nodes = [
         _make_graph_node(_P1),
@@ -922,16 +920,14 @@ async def test_recommend_similar_skips_when_other_id_equals_seed(monkeypatch) ->
     mock_cr.paper_a_id = _P1
     mock_cr.paper_b_id = _SEED
     mock_cr.coupling_strength = 0.8
-    mock_cr.jaccard_index = 0.4
-    mock_cr.shared_reference_count = 6
+    mock_cr.shared_references = [f"paper:s2:ref{i:03d}" for i in range(6)]
 
     # This coupling result has paper_a_id == seed → other = paper_b_id = seed → SKIP
     mock_cr_skip = MagicMock()
     mock_cr_skip.paper_a_id = _SEED  # == seed → other = paper_b_id
     mock_cr_skip.paper_b_id = _SEED  # other == seed → skipped
     mock_cr_skip.coupling_strength = 0.9
-    mock_cr_skip.jaccard_index = 0.5
-    mock_cr_skip.shared_reference_count = 8
+    mock_cr_skip.shared_references = [f"paper:s2:ref{i:03d}" for i in range(8)]
 
     traverse_nodes = [_make_graph_node(_P1)]
 
@@ -1143,44 +1139,9 @@ async def test_recommend_active_successors_bad_year_value_excluded(
     assert "recommender_seed_isolated_returns_empty" in events
 
 
-# ---------------------------------------------------------------------------
-# Coverage gap: coupling_protocol._validate_paper_id_str branches
-# ---------------------------------------------------------------------------
-
-
-def test_coupling_protocol_validate_empty_string() -> None:
-    """_validate_paper_id_str rejects empty strings."""
-    from src.services.intelligence.citation.coupling_protocol import (
-        _validate_paper_id_str,
-    )
-
-    with pytest.raises(ValueError, match="must be a non-empty string"):
-        _validate_paper_id_str("", "paper_a_id")
-
-
-def test_coupling_protocol_validate_too_long() -> None:
-    """_validate_paper_id_str rejects strings exceeding PAPER_ID_MAX_LENGTH."""
-    from src.services.intelligence.citation.coupling_protocol import (
-        _validate_paper_id_str,
-    )
-
-    with pytest.raises(ValueError, match="exceeds max"):
-        _validate_paper_id_str("a" * 513, "paper_a_id")
-
-
-def test_coupling_protocol_validate_invalid_format() -> None:
-    """_validate_paper_id_str rejects invalid format."""
-    from src.services.intelligence.citation.coupling_protocol import (
-        _validate_paper_id_str,
-    )
-
-    with pytest.raises(ValueError, match="Invalid paper_a_id format"):
-        _validate_paper_id_str("bad/id", "paper_a_id")
-
-
 def test_coupling_result_model_post_init_rejects_bad_a_id() -> None:
-    """CouplingResult.model_post_init rejects bad paper_a_id via field validator."""
-    with pytest.raises(Exception, match="Invalid paper_a_id format"):
+    """CouplingResult rejects bad paper_a_id via field validator."""
+    with pytest.raises(Exception, match="Invalid paper_id format"):
         CouplingResult(
             paper_a_id="bad/id",
             paper_b_id=_P1,
@@ -1189,8 +1150,8 @@ def test_coupling_result_model_post_init_rejects_bad_a_id() -> None:
 
 
 def test_coupling_result_model_post_init_rejects_bad_b_id() -> None:
-    """CouplingResult.model_post_init rejects bad paper_b_id."""
-    with pytest.raises(Exception, match="Invalid paper_b_id format"):
+    """CouplingResult rejects bad paper_b_id via field validator."""
+    with pytest.raises(Exception, match="Invalid paper_id format"):
         CouplingResult(
             paper_a_id=_P1,
             paper_b_id="bad/id",

@@ -1,4 +1,4 @@
-"""Tests for citation domain models (Milestone 9.2 — Week 1)."""
+"""Tests for citation domain models (Milestone 9.2 — Week 1 + 2)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from src.services.intelligence.citation.models import (
     CitationDirection,
     CitationEdge,
     CitationNode,
+    CouplingResult,
     CrawlDirection,
     LegacyCitationDirection,
     _normalize_id_segment,
@@ -69,12 +70,12 @@ def test_make_paper_node_id_sanitizes_doi_with_slashes():
 
 
 def test_make_paper_node_id_rejects_empty_external_id():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="empty after sanitization"):
         make_paper_node_id("s2", "")
 
 
 def test_make_paper_node_id_rejects_empty_source():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="empty after sanitization"):
         make_paper_node_id("", "abc123")
 
 
@@ -145,7 +146,7 @@ def test_citation_direction_membership():
 
 
 def test_citation_direction_rejects_unknown_value():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="is not a valid"):
         CitationDirection("sideways")
 
 
@@ -196,11 +197,8 @@ def test_citation_node_paper_id_strips_whitespace():
 
 
 def test_citation_node_paper_id_rejects_empty_after_strip():
-    with pytest.raises(ValidationError) as exc:
+    with pytest.raises(ValidationError, match="cannot be empty|at least 1 character"):
         CitationNode(paper_id="   ", title="t")
-    assert "cannot be empty" in str(exc.value) or "at least 1 character" in str(
-        exc.value
-    )
 
 
 def test_citation_node_paper_id_rejects_invalid_chars():
@@ -209,22 +207,22 @@ def test_citation_node_paper_id_rejects_invalid_chars():
 
 
 def test_citation_node_paper_id_rejects_min_length_violation():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="at least 1 character"):
         CitationNode(paper_id="", title="t")
 
 
 def test_citation_node_title_required():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="at least 1 character"):
         CitationNode(paper_id="paper:s2:abc", title="")
 
 
 def test_citation_node_year_lower_bound():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="greater than or equal to 1800"):
         CitationNode(paper_id="paper:s2:abc", title="t", year=1799)
 
 
 def test_citation_node_year_upper_bound():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="less than or equal to 2100"):
         CitationNode(paper_id="paper:s2:abc", title="t", year=2101)
 
 
@@ -234,12 +232,12 @@ def test_citation_node_year_accepts_valid_range():
 
 
 def test_citation_node_citation_count_negative_rejected():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="greater than or equal to 0"):
         CitationNode(paper_id="paper:s2:abc", title="t", citation_count=-1)
 
 
 def test_citation_node_reference_count_negative_rejected():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="greater than or equal to 0"):
         CitationNode(paper_id="paper:s2:abc", title="t", reference_count=-1)
 
 
@@ -265,7 +263,7 @@ def test_citation_node_external_ids_rejects_whitespace_value():
 
 def test_citation_node_external_ids_rejects_non_string_key():
     # Pydantic itself coerces here when possible; but ints will raise
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="Input should be a valid string"):
         CitationNode.model_validate(
             {
                 "paper_id": "paper:s2:abc",
@@ -276,7 +274,7 @@ def test_citation_node_external_ids_rejects_non_string_key():
 
 
 def test_citation_node_external_ids_rejects_non_string_value():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="Input should be a valid string"):
         CitationNode.model_validate(
             {
                 "paper_id": "paper:s2:abc",
@@ -287,7 +285,7 @@ def test_citation_node_external_ids_rejects_non_string_value():
 
 
 def test_citation_node_extra_fields_forbidden():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         CitationNode.model_validate(
             {
                 "paper_id": "paper:s2:abc",
@@ -385,7 +383,7 @@ def test_citation_edge_strips_id_whitespace():
 
 
 def test_citation_edge_rejects_blank_citing_id():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="cannot be empty"):
         CitationEdge(citing_paper_id="   ", cited_paper_id="paper:s2:b")
 
 
@@ -400,14 +398,14 @@ def test_citation_edge_rejects_invalid_cited_id():
 
 
 def test_citation_edge_rejects_blank_source():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="at least 1 character"):
         CitationEdge(
             citing_paper_id="paper:s2:a", cited_paper_id="paper:s2:b", source=""
         )
 
 
 def test_citation_edge_extra_fields_forbidden():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         CitationEdge.model_validate(
             {
                 "citing_paper_id": "paper:s2:a",
@@ -541,3 +539,161 @@ def test_citation_direction_backward_compat_alias():
     assert CitationDirection.OUT.value == "out"
     assert CitationDirection.IN.value == "in"
     assert CitationDirection.BOTH.value == "both"
+
+
+# ---------------------------------------------------------------------------
+# CouplingResult (REQ-9.2.3 / Issue #128)
+# ---------------------------------------------------------------------------
+
+
+class TestCouplingResult:
+    """Tests for :class:`CouplingResult` Pydantic V2 strict model."""
+
+    def test_coupling_result_basic_construction(self) -> None:
+        """Happy-path construction with minimal fields."""
+        result = CouplingResult(
+            paper_a_id="paper:s2:aaa",
+            paper_b_id="paper:s2:bbb",
+            shared_references=["paper:s2:r1"],
+            coupling_strength=0.5,
+            co_citation_count=0,
+        )
+        assert result.coupling_strength == 0.5
+        assert result.paper_a_id == "paper:s2:aaa"
+        assert result.paper_b_id == "paper:s2:bbb"
+
+    def test_coupling_result_shared_references_sorted(self) -> None:
+        """shared_references is sorted and deduped at validation time."""
+        result = CouplingResult(
+            paper_a_id="paper:s2:aaa",
+            paper_b_id="paper:s2:bbb",
+            shared_references=["paper:s2:zzz", "paper:s2:aaa", "paper:s2:aaa"],
+            coupling_strength=0.3,
+            co_citation_count=0,
+        )
+        # Deduped: only 2 unique, sorted.
+        assert result.shared_references == ["paper:s2:aaa", "paper:s2:zzz"]
+
+    def test_coupling_result_rejects_self_pair(self) -> None:
+        """paper_a_id == paper_b_id raises ValidationError."""
+        with pytest.raises(ValidationError, match="must differ"):
+            CouplingResult(
+                paper_a_id="paper:s2:same",
+                paper_b_id="paper:s2:same",
+                shared_references=[],
+                coupling_strength=0.0,
+                co_citation_count=0,
+            )
+
+    def test_coupling_result_rejects_invalid_paper_id(self) -> None:
+        """paper_a_id with disallowed chars raises ValidationError."""
+        with pytest.raises(ValidationError, match="Invalid paper_id format"):
+            CouplingResult(
+                paper_a_id="paper:s2:a b",  # space is disallowed
+                paper_b_id="paper:s2:bbb",
+                shared_references=[],
+                coupling_strength=0.0,
+                co_citation_count=0,
+            )
+
+    def test_coupling_result_rejects_invalid_shared_reference(self) -> None:
+        """Shared reference with disallowed chars raises ValidationError."""
+        with pytest.raises(ValidationError, match="Invalid shared reference"):
+            CouplingResult(
+                paper_a_id="paper:s2:aaa",
+                paper_b_id="paper:s2:bbb",
+                shared_references=["bad id with spaces"],
+                coupling_strength=0.0,
+                co_citation_count=0,
+            )
+
+    def test_coupling_result_rejects_negative_co_citation_count(self) -> None:
+        """co_citation_count < 0 raises ValidationError."""
+        with pytest.raises(ValidationError, match="greater than or equal to 0"):
+            CouplingResult(
+                paper_a_id="paper:s2:aaa",
+                paper_b_id="paper:s2:bbb",
+                shared_references=[],
+                coupling_strength=0.0,
+                co_citation_count=-1,
+            )
+
+    def test_coupling_result_rejects_coupling_strength_above_one(self) -> None:
+        """coupling_strength > 1.0 raises ValidationError."""
+        with pytest.raises(ValidationError, match="less than or equal to 1"):
+            CouplingResult(
+                paper_a_id="paper:s2:aaa",
+                paper_b_id="paper:s2:bbb",
+                shared_references=[],
+                coupling_strength=1.1,
+                co_citation_count=0,
+            )
+
+    def test_coupling_result_rejects_coupling_strength_below_zero(self) -> None:
+        """coupling_strength < 0.0 raises ValidationError."""
+        with pytest.raises(ValidationError, match="greater than or equal to 0"):
+            CouplingResult(
+                paper_a_id="paper:s2:aaa",
+                paper_b_id="paper:s2:bbb",
+                shared_references=[],
+                coupling_strength=-0.1,
+                co_citation_count=0,
+            )
+
+    def test_coupling_result_rejects_extra_fields(self) -> None:
+        """Extra fields are forbidden (extra='forbid')."""
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            CouplingResult(
+                paper_a_id="paper:s2:aaa",
+                paper_b_id="paper:s2:bbb",
+                shared_references=[],
+                coupling_strength=0.0,
+                co_citation_count=0,
+                unknown_field="bad",  # type: ignore[call-arg]
+            )
+
+    def test_coupling_result_boundary_strength_zero(self) -> None:
+        """coupling_strength=0.0 is accepted (boundary value)."""
+        result = CouplingResult(
+            paper_a_id="paper:s2:aaa",
+            paper_b_id="paper:s2:bbb",
+            shared_references=[],
+            coupling_strength=0.0,
+            co_citation_count=0,
+        )
+        assert result.coupling_strength == 0.0
+
+    def test_coupling_result_boundary_strength_one(self) -> None:
+        """coupling_strength=1.0 is accepted (boundary value)."""
+        result = CouplingResult(
+            paper_a_id="paper:s2:aaa",
+            paper_b_id="paper:s2:bbb",
+            shared_references=["paper:s2:r1"],
+            coupling_strength=1.0,
+            co_citation_count=0,
+        )
+        assert result.coupling_strength == 1.0
+
+    def test_coupling_result_rejects_whitespace_paper_id(self) -> None:
+        """Whitespace-only paper_a_id raises ValidationError (empty after strip)."""
+        with pytest.raises(ValidationError, match="paper_id cannot be empty"):
+            CouplingResult(
+                paper_a_id="   ",
+                paper_b_id="paper:s2:bbb",
+                shared_references=[],
+                coupling_strength=0.0,
+                co_citation_count=0,
+            )
+
+    def test_coupling_result_rejects_empty_shared_reference_string(self) -> None:
+        """Whitespace-only shared reference raises ValidationError."""
+        with pytest.raises(
+            ValidationError, match="shared_references entries must be non-empty"
+        ):
+            CouplingResult(
+                paper_a_id="paper:s2:aaa",
+                paper_b_id="paper:s2:bbb",
+                shared_references=["   "],
+                coupling_strength=0.0,
+                co_citation_count=0,
+            )

@@ -261,11 +261,16 @@ class InfluenceScorer:
         return metrics
 
     async def compute_for_graph(self, node_ids: list[str]) -> list[InfluenceMetrics]:
-        """Bulk compute metrics for a set of papers.
+        """Bulk compute metrics for a set of papers with cache awareness.
 
-        One PageRank invocation; one HITS invocation; one
-        ``record_metrics`` call per row (each in
-        ``asyncio.to_thread`` so the event loop is never blocked).
+        Checks the cache for each requested id first. Only ids that
+        are not cached (or whose cached row is stale) are included in
+        the PageRank / HITS computation. Cached hits are returned
+        directly without triggering a new graph-global computation.
+
+        One PageRank invocation covers all cache-miss ids; one HITS
+        invocation likewise. Each new row is written via
+        ``asyncio.to_thread`` so the event loop is never blocked.
         Returns metrics in the same order as ``node_ids``.
 
         Raises:
@@ -276,20 +281,41 @@ class InfluenceScorer:
         if not node_ids:
             return []
 
-        target_set = set(node_ids)
-        computed = await self._compute_metrics_for_graph(target_ids=target_set)
-        # Ensure every requested id has a row; missing ones get a
-        # baseline-zero metric so callers don't have to special-case
-        # "node not in graph yet".
+        # Phase 1: consult cache for all requested ids.
+        max_age = self._max_age_days()
+        cache_hits: dict[str, InfluenceMetrics] = {}
+        cache_miss_ids: list[str] = []
+        for nid in node_ids:
+            cached = await asyncio.to_thread(
+                self._repo.get_metrics,
+                nid,
+                max_age,
+            )
+            if cached is not None:
+                cache_hits[nid] = cached
+            else:
+                cache_miss_ids.append(nid)
+
+        # Phase 2: compute PageRank + HITS only for cache misses.
+        newly_computed: dict[str, InfluenceMetrics] = {}
+        if cache_miss_ids:
+            newly_computed = await self._compute_metrics_for_graph(
+                target_ids=set(cache_miss_ids)
+            )
+            for metrics in newly_computed.values():
+                await asyncio.to_thread(self._repo.record_metrics, metrics)
+
+        # Phase 3: assemble results in original order.
         out: list[InfluenceMetrics] = []
         for nid in node_ids:
-            metrics = computed.get(
-                nid,
-                InfluenceMetrics(paper_id=nid, computed_at=self._now()),
-            )
-            out.append(metrics)
-        for metrics in out:
-            await asyncio.to_thread(self._repo.record_metrics, metrics)
+            if nid in cache_hits:
+                out.append(cache_hits[nid])
+            else:
+                metrics = newly_computed.get(
+                    nid,
+                    InfluenceMetrics(paper_id=nid, computed_at=self._now()),
+                )
+                out.append(metrics)
         return out
 
     def _max_age_days(self) -> int:

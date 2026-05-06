@@ -1145,6 +1145,47 @@ class SQLiteGraphStore:
         finally:
             conn.close()
 
+    def _list_outgoing_edges_for_nodes(
+        self,
+        source_ids: list[str],
+        edge_type_values: list[str],
+    ) -> dict[str, list[str]]:
+        """Return outgoing edge targets grouped by source, for the given nodes.
+
+        Issues a single SQL query instead of one traverse call per node,
+        making it suitable for bulk bridge-paper detection.  Only direct
+        (depth-1) outgoing edges are returned.
+
+        Args:
+            source_ids: Node ids whose outgoing edges should be fetched.
+            edge_type_values: Edge-type string values to filter by.
+
+        Returns:
+            A dict mapping each source id to its list of target node ids.
+            Source ids with no outgoing edges are absent from the dict.
+        """
+        if not source_ids or not edge_type_values:
+            return {}
+        conn = self._get_connection()
+        try:
+            src_placeholders = ",".join("?" * len(source_ids))
+            type_placeholders = ",".join("?" * len(edge_type_values))
+            cursor = conn.execute(
+                f"""
+                SELECT source_id, target_id FROM edges
+                WHERE source_id IN ({src_placeholders})
+                  AND edge_type IN ({type_placeholders})
+                """,
+                tuple(source_ids) + tuple(edge_type_values),
+            )
+            result: dict[str, list[str]] = {}
+            for row in cursor.fetchall():
+                src = row["source_id"]
+                result.setdefault(src, []).append(row["target_id"])
+            return result
+        finally:
+            conn.close()
+
     # Metrics
 
     def get_node_count(self, node_type: Optional[NodeType] = None) -> int:

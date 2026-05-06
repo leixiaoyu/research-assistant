@@ -1688,3 +1688,81 @@ class TestTraverseInternalBranches:
             f"expected {expected_chunks} IN-clause queries for n={n}, "
             f"got {len(in_clause_queries)}"
         )
+
+
+class TestListOutgoingEdgesForNodes:
+    """Coverage for ``_list_outgoing_edges_for_nodes`` — bulk fan-out
+    helper added in PR #146 to replace per-node ``traverse`` calls in
+    the recommender's bridge-paper strategy."""
+
+    def test_returns_empty_dict_for_empty_source_ids(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Empty source_ids short-circuits to {}."""
+        result = graph_store._list_outgoing_edges_for_nodes(
+            source_ids=[],
+            edge_type_values=[EdgeType.CITES.value],
+        )
+        assert result == {}
+
+    def test_returns_empty_dict_for_empty_edge_types(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Empty edge_type_values short-circuits to {}."""
+        graph_store.add_node("paper:a", NodeType.PAPER, {})
+        result = graph_store._list_outgoing_edges_for_nodes(
+            source_ids=["paper:a"],
+            edge_type_values=[],
+        )
+        assert result == {}
+
+    def test_returns_targets_grouped_by_source(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Targets are grouped under their source id."""
+        for nid in ("paper:a", "paper:b", "paper:c", "paper:d"):
+            graph_store.add_node(nid, NodeType.PAPER, {})
+        graph_store.add_edge("edge:1", "paper:a", "paper:c", EdgeType.CITES, {})
+        graph_store.add_edge("edge:2", "paper:a", "paper:d", EdgeType.CITES, {})
+        graph_store.add_edge("edge:3", "paper:b", "paper:c", EdgeType.CITES, {})
+
+        result = graph_store._list_outgoing_edges_for_nodes(
+            source_ids=["paper:a", "paper:b"],
+            edge_type_values=[EdgeType.CITES.value],
+        )
+        assert set(result.keys()) == {"paper:a", "paper:b"}
+        assert sorted(result["paper:a"]) == ["paper:c", "paper:d"]
+        assert result["paper:b"] == ["paper:c"]
+
+    def test_filters_by_edge_type(self, graph_store: SQLiteGraphStore) -> None:
+        """Only requested edge types appear in the result."""
+        graph_store.add_node("paper:a", NodeType.PAPER, {})
+        graph_store.add_node("paper:b", NodeType.PAPER, {})
+        graph_store.add_node("paper:c", NodeType.PAPER, {})
+        graph_store.add_edge("edge:cites", "paper:a", "paper:b", EdgeType.CITES, {})
+        graph_store.add_edge(
+            "edge:cited_by",
+            "paper:a",
+            "paper:c",
+            EdgeType.CITED_BY,
+            {},
+        )
+
+        result = graph_store._list_outgoing_edges_for_nodes(
+            source_ids=["paper:a"],
+            edge_type_values=[EdgeType.CITES.value],
+        )
+        assert result == {"paper:a": ["paper:b"]}
+
+    def test_omits_sources_with_no_outgoing_edges(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Source ids with no matching outgoing edges are absent (not empty list)."""
+        graph_store.add_node("paper:a", NodeType.PAPER, {})
+        graph_store.add_node("paper:b", NodeType.PAPER, {})
+
+        result = graph_store._list_outgoing_edges_for_nodes(
+            source_ids=["paper:a", "paper:b"],
+            edge_type_values=[EdgeType.CITES.value],
+        )
+        assert result == {}

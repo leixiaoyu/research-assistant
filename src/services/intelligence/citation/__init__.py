@@ -1,11 +1,12 @@
-"""Milestone 9.2: Citation Graph Intelligence (Weeks 1 + 1.5 + 2 surface).
+"""Milestone 9.2: Citation Graph Intelligence (Weeks 1 + 1.5 + 2 + 2.5 surface).
 
 This package builds and persists citation graphs from external APIs
 (Semantic Scholar primary, OpenAlex fallback) using the Phase 9
 ``GraphStore`` for storage. Week 1 + 1.5 deliver depth=1 graph
-construction and BFS crawling. Week 2 ships the bibliographic coupling
-analyzer (:class:`CouplingAnalyzer`) and the influence scorer
-(:class:`InfluenceScorer`). The recommender is deferred to Week 3.
+construction; BFS crawler, bibliographic coupling analyzer
+(:class:`CouplingAnalyzer`), influence scorer (:class:`InfluenceScorer`),
+and recommender (:class:`CitationRecommender`) complete the full
+citation intelligence stack.
 
 Public surface:
 
@@ -18,6 +19,12 @@ Public surface:
 - :class:`CitationGraphBuilder` / :class:`GraphBuildResult` — composes
   the two clients and persists via ``GraphStore.add_nodes_batch`` /
   ``add_edges_batch`` (depth=1 only; BFS crawl is Week 2).
+- :class:`CitationRecommender` — four citation-based recommendation
+  strategies (similar, influential predecessors, active successors,
+  bridge papers). Use :meth:`CitationRecommender.connect` for
+  production wiring; inject collaborators for testing.
+- :class:`Recommendation` / :class:`RecommendationStrategy` — result
+  models produced by :class:`CitationRecommender`.
 
 Architecture choice (recorded for downstream milestones):
 We deliberately built **dedicated citation clients alongside** the
@@ -69,6 +76,13 @@ from src.services.intelligence.citation.models import CouplingResult
 from src.services.intelligence.citation.openalex_client import (
     OpenAlexCitationClient,
 )
+from src.services.intelligence.citation.recommender import (
+    CitationRecommender,
+)
+from src.services.intelligence.citation.models import (
+    Recommendation,
+    RecommendationStrategy,
+)
 from src.services.intelligence.citation.semantic_scholar_client import (
     SemanticScholarCitationClient,
 )
@@ -108,4 +122,8 @@ __all__ = [
     "CitationCouplingRepository",
     "CouplingResult",
     "DEFAULT_MAX_AGE_DAYS",
+    # Recommender (Issue #130)
+    "CitationRecommender",
+    "Recommendation",
+    "RecommendationStrategy",
 ]

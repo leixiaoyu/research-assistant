@@ -31,7 +31,14 @@ from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from src.services.intelligence.citation._id_validation import (
     CANONICAL_NODE_ID_PATTERN,
@@ -396,6 +403,11 @@ class CitationEdge(BaseModel):
         )
 
 
+# ---------------------------------------------------------------------------
+# Bibliographic coupling models (REQ-9.2.3 / Issue #128)
+# ---------------------------------------------------------------------------
+
+
 class CouplingResult(BaseModel):
     """Result of bibliographic coupling analysis (REQ-9.2.3 / Issue #128).
 
@@ -499,3 +511,95 @@ class CouplingResult(BaseModel):
                 seen.add(ref)
                 validated.append(ref)
         return sorted(validated)
+
+
+# ---------------------------------------------------------------------------
+# Recommendation models (REQ-9.2.5 / Issue #130)
+# ---------------------------------------------------------------------------
+
+
+class RecommendationStrategy(str, Enum):
+    """Strategy used to produce a paper recommendation (REQ-9.2.5)."""
+
+    SIMILAR = "similar"
+    INFLUENTIAL_PREDECESSOR = "influential_predecessor"
+    ACTIVE_SUCCESSOR = "active_successor"
+    BRIDGE = "bridge"
+
+
+class Recommendation(BaseModel):
+    """A single paper recommendation produced by ``CitationRecommender``.
+
+    Pydantic V2 strict model (``extra="forbid", strict=True``) per project
+    standards.
+
+    Constraints:
+    - ``paper_id`` must match the canonical node-id pattern.
+    - ``score`` is in [0.0, 1.0] — strategy-specific normalization applies
+      independently per strategy.
+    - ``seed_paper_id`` must differ from ``paper_id`` — a paper cannot
+      recommend itself.
+    - ``reasoning`` is a short human-readable explanation (1–512 chars).
+
+    .. warning:: Score asymmetry — do NOT cross-rank between strategies.
+        Each strategy normalizes scores independently (each divides by its
+        own maximum). A score of 0.8 from SIMILAR does **not** mean the
+        same as a score of 0.8 from BRIDGE. Rankings produced by mixing
+        scores from different strategies are semantically meaningless and
+        will produce misleading results. Always compare recommendations
+        within a single strategy.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    paper_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=512,
+        description="Canonical node id of the recommended paper.",
+    )
+    score: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Strategy-specific score in [0.0, 1.0].",
+    )
+    strategy: RecommendationStrategy = Field(
+        ...,
+        description="Which strategy produced this recommendation.",
+    )
+    reasoning: str = Field(
+        ...,
+        min_length=1,
+        max_length=512,
+        description="Human-readable explanation of why this paper was recommended.",
+    )
+    seed_paper_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=512,
+        description="Canonical node id of the seed paper this was recommended for.",
+    )
+
+    @field_validator("paper_id", "seed_paper_id")
+    @classmethod
+    def _validate_id_format(cls, v: str) -> str:
+        """Enforce canonical node-id format on both paper ids."""
+        v = v.strip()
+        if not v:
+            raise ValueError("paper id cannot be empty")
+        if not CANONICAL_NODE_ID_PATTERN.match(v):
+            raise ValueError(
+                f"Invalid paper id format: {v!r}. "
+                "Allowed: alphanumeric, colons, periods, hyphens, underscores."
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _reject_self_recommendation(self) -> "Recommendation":
+        """Ensure the recommended paper differs from the seed."""
+        if self.paper_id == self.seed_paper_id:
+            raise ValueError(
+                f"paper_id and seed_paper_id must differ; both are {self.paper_id!r}"
+            )
+        return self

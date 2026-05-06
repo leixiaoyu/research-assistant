@@ -1089,7 +1089,7 @@ async def test_recommend_active_successors_uses_publication_date_fallback(
 async def test_recommend_active_successors_bad_publication_date_excluded(
     monkeypatch,
 ) -> None:
-    """Nodes with unparseable publication_date are excluded from active successors."""
+    """Nodes with unparsable publication_date are excluded from active successors."""
     node_bad_date = MagicMock()
     node_bad_date.node_id = _P1
     node_bad_date.properties = {"publication_date": "not-a-date"}

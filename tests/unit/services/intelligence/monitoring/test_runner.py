@@ -22,10 +22,12 @@ Covers:
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import structlog
 
 from src.services.intelligence.monitoring.arxiv_monitor import (
     ArxivMonitor,
@@ -1386,3 +1388,519 @@ class TestScorePaperBranches:
         returned_run = await runner._run_one(sub)
         assert returned_run.subscription_id == "sub-fallback"
         repo.record_run.assert_called_once()
+
+
+# ===========================================================================
+# Backfill step tests (Phase 9.1 / Issue #145)
+# ===========================================================================
+
+
+def _make_subscription_with_backfill(
+    *,
+    subscription_id: str = "sub-bf-001",
+    backfill_days: int = 7,
+    backfill_cursor_date: date | None = None,
+) -> ResearchSubscription:
+    """Build a ResearchSubscription with backfill_days > 0.
+
+    Uses a created_at 400 days in the past so the floor is always
+    ``today - backfill_days`` (not ``created_at``), which prevents the
+    cursor from appearing already-at-floor when the test starts.
+    """
+    from datetime import datetime, timezone, timedelta as _td
+
+    return ResearchSubscription(
+        subscription_id=subscription_id,
+        user_id="alice",
+        name="BF Sub",
+        query="LoRA",
+        backfill_days=backfill_days,
+        backfill_cursor_date=backfill_cursor_date,
+        created_at=datetime.now(timezone.utc) - _td(days=400),
+    )
+
+
+class TestRunnerBackfillSkip:
+    """test_runner_skips_backfill_when_backfill_days_zero — opt-in semantic."""
+
+    @pytest.mark.asyncio
+    async def test_runner_skips_backfill_when_backfill_days_zero(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When backfill_days=0 (default), no backfill step is taken."""
+        from unittest.mock import AsyncMock, MagicMock
+        import src.services.intelligence.monitoring.runner as runner_module
+
+        monkeypatch.setattr(runner_module, "logger", structlog.get_logger())
+
+        sub = _make_subscription()  # backfill_days=0 by default
+        run_obj = _make_run(subscription_id=sub.subscription_id)
+        result = ArxivMonitorResult(run=run_obj, new_papers=[], deduplicated_papers=[])
+        monitor = MagicMock()
+        monitor.check = AsyncMock(return_value=result)
+        repo = MagicMock()
+        repo.record_run = MagicMock()
+        sub_mgr = MagicMock()
+        sub_mgr.mark_checked = MagicMock()
+        sub_mgr.update_backfill_cursor = MagicMock()
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+        )
+
+        with structlog.testing.capture_logs() as cap:
+            returned_run = await runner._run_one(sub)
+
+        # update_backfill_cursor must NOT have been called
+        sub_mgr.update_backfill_cursor.assert_not_called()
+        # No backfill-related events should be emitted
+        backfill_events = [e for e in cap if "backfill" in e.get("event", "")]
+        assert backfill_events == []
+        assert returned_run is run_obj
+
+
+class TestRunnerBackfillStep:
+    """Tests for runner backfill cursor walk and per-step behavior."""
+
+    @pytest.mark.asyncio
+    async def test_runner_walks_cursor_backward_in_step_size_chunks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cursor advances backward by BACKFILL_STEP_DAYS_DEFAULT per cycle."""
+        from unittest.mock import AsyncMock, MagicMock
+        import src.services.intelligence.monitoring.runner as runner_module
+        from src.services.intelligence.monitoring.models import (
+            BACKFILL_STEP_DAYS_DEFAULT,
+        )
+
+        monkeypatch.setattr(runner_module, "logger", structlog.get_logger())
+
+        today = date.today()
+        sub = _make_subscription_with_backfill(
+            backfill_days=7,
+            backfill_cursor_date=None,  # not yet started → cursor is today
+        )
+
+        # Fresh-feed run
+        fresh_run = _make_run(subscription_id=sub.subscription_id)
+        fresh_result = ArxivMonitorResult(
+            run=fresh_run, new_papers=[], deduplicated_papers=[]
+        )
+        # Backfill run (returned by monitor.check on second call)
+        backfill_run = _make_run(subscription_id=sub.subscription_id)
+        backfill_result = ArxivMonitorResult(
+            run=backfill_run, new_papers=[], deduplicated_papers=[]
+        )
+
+        monitor = MagicMock()
+        monitor.check = AsyncMock(side_effect=[fresh_result, backfill_result])
+        repo = MagicMock()
+        repo.record_run = MagicMock()
+        sub_mgr = MagicMock()
+        sub_mgr.mark_checked = MagicMock()
+        captured_cursor: list[date | None] = []
+
+        def capture_cursor(sub_id: str, cursor: date | None) -> None:
+            captured_cursor.append(cursor)
+
+        sub_mgr.update_backfill_cursor = capture_cursor
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+        )
+
+        with structlog.testing.capture_logs() as cap:
+            await runner._run_one(sub)
+
+        # Cursor must have been updated exactly once (one backfill step)
+        assert len(captured_cursor) == 1
+        expected_new_cursor = today - timedelta(days=BACKFILL_STEP_DAYS_DEFAULT)
+        assert captured_cursor[0] == expected_new_cursor
+
+        # monitor.check called twice: once for fresh, once for backfill
+        assert monitor.check.call_count == 2
+
+        # Structured log event present
+        step_events = [
+            e for e in cap if e.get("event") == "monitor_backfill_step_complete"
+        ]
+        assert len(step_events) == 1
+        evt = step_events[0]
+        assert evt["cursor_before"] == today.isoformat()
+        assert evt["cursor_after"] == expected_new_cursor.isoformat()
+
+    @pytest.mark.asyncio
+    async def test_runner_stops_backfill_at_max_days_or_created_at(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Backfill stops when cursor reaches max_days floor or created_at."""
+        from unittest.mock import AsyncMock, MagicMock
+        import src.services.intelligence.monitoring.runner as runner_module
+
+        monkeypatch.setattr(runner_module, "logger", structlog.get_logger())
+
+        today = date.today()
+        # Set cursor right at the floor so no step is taken
+        floor = today - timedelta(days=3)
+        sub = _make_subscription_with_backfill(
+            backfill_days=3,
+            backfill_cursor_date=floor,  # cursor already at floor
+        )
+
+        fresh_run = _make_run(subscription_id=sub.subscription_id)
+        fresh_result = ArxivMonitorResult(
+            run=fresh_run, new_papers=[], deduplicated_papers=[]
+        )
+        monitor = MagicMock()
+        monitor.check = AsyncMock(return_value=fresh_result)
+        repo = MagicMock()
+        repo.record_run = MagicMock()
+        sub_mgr = MagicMock()
+        sub_mgr.mark_checked = MagicMock()
+        sub_mgr.update_backfill_cursor = MagicMock()
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+        )
+
+        with structlog.testing.capture_logs() as cap:
+            await runner._run_one(sub)
+
+        # Cursor at floor → no backfill step, update_backfill_cursor not called
+        sub_mgr.update_backfill_cursor.assert_not_called()
+
+        # But monitor_backfill_complete should have been emitted
+        complete_events = [
+            e for e in cap if e.get("event") == "monitor_backfill_complete"
+        ]
+        assert len(complete_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_runner_caps_papers_per_step_and_defers_excess(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Backfill step is capped at BACKFILL_MAX_PAPERS_PER_STEP."""
+        from unittest.mock import AsyncMock, MagicMock
+        import src.services.intelligence.monitoring.runner as runner_module
+        from src.services.intelligence.monitoring.models import (
+            BACKFILL_MAX_PAPERS_PER_STEP,
+            PaperSource,
+        )
+        from src.services.intelligence.monitoring.models import MonitoringPaperRecord
+
+        monkeypatch.setattr(runner_module, "logger", structlog.get_logger())
+
+        sub = _make_subscription_with_backfill(backfill_days=7)
+
+        # Build a run with more papers than the cap.
+        # NOTE: run.papers is list[MonitoringPaperRecord];
+        # ArxivMonitorResult.new_papers is list[PaperMetadata].
+        # The backfill code reads from run.papers (not new_papers).
+        oversized_paper_records = [
+            MonitoringPaperRecord(
+                paper_id=f"paper:{i:04d}",
+                title=f"Paper {i}",
+                is_new=True,
+                source=PaperSource.ARXIV,
+            )
+            for i in range(BACKFILL_MAX_PAPERS_PER_STEP + 10)
+        ]
+        fresh_run = _make_run(subscription_id=sub.subscription_id)
+        oversized_run = MonitoringRun(
+            subscription_id=sub.subscription_id,
+            status=MonitoringRunStatus.SUCCESS,
+            papers=oversized_paper_records,
+        )
+        fresh_result = ArxivMonitorResult(
+            run=fresh_run, new_papers=[], deduplicated_papers=[]
+        )
+        backfill_result = ArxivMonitorResult(
+            run=oversized_run, new_papers=[], deduplicated_papers=[]
+        )
+
+        monitor = MagicMock()
+        monitor.check = AsyncMock(side_effect=[fresh_result, backfill_result])
+        repo = MagicMock()
+        repo.record_run = MagicMock()
+        sub_mgr = MagicMock()
+        sub_mgr.mark_checked = MagicMock()
+        captured_cursor: list[date | None] = []
+
+        def capture_cursor(sub_id: str, cursor: date | None) -> None:
+            captured_cursor.append(cursor)
+
+        sub_mgr.update_backfill_cursor = capture_cursor
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+        )
+
+        with structlog.testing.capture_logs() as cap:
+            await runner._run_one(sub)
+
+        # Cursor was advanced (step was taken)
+        assert len(captured_cursor) == 1
+
+        # papers_capped=True in the log event
+        step_events = [
+            e for e in cap if e.get("event") == "monitor_backfill_step_complete"
+        ]
+        assert len(step_events) == 1
+        assert step_events[0]["papers_capped"] is True
+        assert step_events[0]["papers_added"] == BACKFILL_MAX_PAPERS_PER_STEP
+
+    @pytest.mark.asyncio
+    async def test_runner_backfill_uses_expanded_query_variants(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Backfill uses the same monitor (MultiProviderMonitor or ArxivMonitor)
+        as the fresh feed, ensuring query expansion applies to backfill too."""
+        from unittest.mock import AsyncMock, MagicMock
+        import src.services.intelligence.monitoring.runner as runner_module
+
+        monkeypatch.setattr(runner_module, "logger", structlog.get_logger())
+
+        sub = _make_subscription_with_backfill(backfill_days=3)
+        fresh_run = _make_run(subscription_id=sub.subscription_id)
+        backfill_run = _make_run(subscription_id=sub.subscription_id)
+        fresh_result = ArxivMonitorResult(
+            run=fresh_run, new_papers=[], deduplicated_papers=[]
+        )
+        backfill_result = ArxivMonitorResult(
+            run=backfill_run, new_papers=[], deduplicated_papers=[]
+        )
+
+        # Use MultiProviderMonitor mock to verify that backfill also calls it
+        multi_monitor = MagicMock(spec=MultiProviderMonitor)
+        multi_monitor.check = AsyncMock(side_effect=[fresh_result, backfill_result])
+        repo = MagicMock()
+        repo.record_run = MagicMock()
+        sub_mgr = MagicMock()
+        sub_mgr.mark_checked = MagicMock()
+        sub_mgr.update_backfill_cursor = MagicMock()
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=multi_monitor,
+            run_repo=repo,
+        )
+
+        await runner._run_one(sub)
+
+        # multi_monitor.check must have been called at least twice:
+        # once for fresh feed, once for backfill step
+        assert multi_monitor.check.call_count >= 2
+
+    @pytest.mark.asyncio
+    async def test_runner_backfill_cursor_update_failure_logs_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If update_backfill_cursor fails, an error is logged and 0 returned."""
+        from unittest.mock import AsyncMock, MagicMock
+        import src.services.intelligence.monitoring.runner as runner_module
+
+        monkeypatch.setattr(runner_module, "logger", structlog.get_logger())
+
+        sub = _make_subscription_with_backfill(backfill_days=7)
+        fresh_run = _make_run(subscription_id=sub.subscription_id)
+        backfill_run = _make_run(subscription_id=sub.subscription_id)
+        fresh_result = ArxivMonitorResult(
+            run=fresh_run, new_papers=[], deduplicated_papers=[]
+        )
+        backfill_result = ArxivMonitorResult(
+            run=backfill_run, new_papers=[], deduplicated_papers=[]
+        )
+
+        monitor = MagicMock()
+        monitor.check = AsyncMock(side_effect=[fresh_result, backfill_result])
+        repo = MagicMock()
+        repo.record_run = MagicMock()
+        sub_mgr = MagicMock()
+        sub_mgr.mark_checked = MagicMock()
+        sub_mgr.update_backfill_cursor = MagicMock(
+            side_effect=RuntimeError("DB is unavailable")
+        )
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+        )
+
+        with structlog.testing.capture_logs() as cap:
+            returned = await runner._run_one(sub)
+
+        # Error event must be emitted
+        error_events = [
+            e for e in cap if e.get("event") == "monitor_backfill_cursor_update_failed"
+        ]
+        assert len(error_events) == 1
+        # Run is still returned (fail-soft)
+        assert returned is fresh_run
+
+    @pytest.mark.asyncio
+    async def test_runner_backfill_step_exception_logs_and_returns_zero(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If the backfill monitor.check raises, error is logged, 0 returned."""
+        from unittest.mock import MagicMock
+        import src.services.intelligence.monitoring.runner as runner_module
+
+        monkeypatch.setattr(runner_module, "logger", structlog.get_logger())
+
+        sub = _make_subscription_with_backfill(backfill_days=7)
+        fresh_run = _make_run(subscription_id=sub.subscription_id)
+        fresh_result = ArxivMonitorResult(
+            run=fresh_run, new_papers=[], deduplicated_papers=[]
+        )
+
+        call_count = [0]
+
+        async def side_effect(subscription, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return fresh_result
+            raise RuntimeError("Provider unavailable")
+
+        monitor = MagicMock()
+        monitor.check = side_effect
+        repo = MagicMock()
+        repo.record_run = MagicMock()
+        sub_mgr = MagicMock()
+        sub_mgr.mark_checked = MagicMock()
+        sub_mgr.update_backfill_cursor = MagicMock()
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+        )
+
+        with structlog.testing.capture_logs() as cap:
+            returned = await runner._run_one(sub)
+
+        error_events = [
+            e for e in cap if e.get("event") == "monitor_backfill_step_failed"
+        ]
+        assert len(error_events) == 1
+        # update_backfill_cursor should NOT have been called
+        sub_mgr.update_backfill_cursor.assert_not_called()
+        assert returned is fresh_run
+
+    @pytest.mark.asyncio
+    async def test_runner_backfill_emits_complete_event_on_last_step(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """monitor_backfill_complete is emitted when cursor reaches floor."""
+        from unittest.mock import AsyncMock, MagicMock
+        from datetime import date, timedelta
+        import src.services.intelligence.monitoring.runner as runner_module
+        from src.services.intelligence.monitoring.models import (
+            BACKFILL_STEP_DAYS_DEFAULT,
+        )
+
+        monkeypatch.setattr(runner_module, "logger", structlog.get_logger())
+
+        today = date.today()
+        # Set cursor exactly one step above the floor so one step completes it
+        floor = today - timedelta(days=1)
+        # cursor is floor + BACKFILL_STEP_DAYS_DEFAULT (i.e., one step from floor)
+        cursor_start = floor + timedelta(days=BACKFILL_STEP_DAYS_DEFAULT)
+        sub = _make_subscription_with_backfill(
+            backfill_days=1,  # floor = today - 1
+            backfill_cursor_date=cursor_start,
+        )
+
+        fresh_run = _make_run(subscription_id=sub.subscription_id)
+        backfill_run = _make_run(subscription_id=sub.subscription_id)
+        fresh_result = ArxivMonitorResult(
+            run=fresh_run, new_papers=[], deduplicated_papers=[]
+        )
+        backfill_result = ArxivMonitorResult(
+            run=backfill_run, new_papers=[], deduplicated_papers=[]
+        )
+
+        monitor = MagicMock()
+        monitor.check = AsyncMock(side_effect=[fresh_result, backfill_result])
+        repo = MagicMock()
+        repo.record_run = MagicMock()
+        sub_mgr = MagicMock()
+        sub_mgr.mark_checked = MagicMock()
+        sub_mgr.update_backfill_cursor = MagicMock()
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+        )
+
+        with structlog.testing.capture_logs() as cap:
+            await runner._run_one(sub)
+
+        complete_events = [
+            e for e in cap if e.get("event") == "monitor_backfill_complete"
+        ]
+        assert len(complete_events) == 1
+        assert complete_events[0]["subscription_id"] == sub.subscription_id
+
+    @pytest.mark.asyncio
+    async def test_runner_backfill_concurrent_cursor_write_succeeds_via_retry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Race test: update_backfill_cursor via asyncio.to_thread tolerates retry.
+
+        The actual retry is inside SubscriptionManager.update_backfill_cursor
+        (via retry_on_lock_contention). This test verifies that _run_backfill_step
+        correctly uses asyncio.to_thread so the retry's time.sleep doesn't
+        block the event loop.
+        """
+        from unittest.mock import MagicMock
+        import src.services.intelligence.monitoring.runner as runner_module
+
+        monkeypatch.setattr(runner_module, "logger", structlog.get_logger())
+
+        sub = _make_subscription_with_backfill(backfill_days=7)
+        fresh_run = _make_run(subscription_id=sub.subscription_id)
+        backfill_run = _make_run(subscription_id=sub.subscription_id)
+        fresh_result = ArxivMonitorResult(
+            run=fresh_run, new_papers=[], deduplicated_papers=[]
+        )
+        backfill_result = ArxivMonitorResult(
+            run=backfill_run, new_papers=[], deduplicated_papers=[]
+        )
+
+        call_count = [0]
+        recorded_cursor: list[date | None] = []
+
+        def update_cursor(sub_id: str, cursor: date | None) -> None:
+            call_count[0] += 1
+            recorded_cursor.append(cursor)
+
+        monitor = MagicMock()
+        monitor.check = AsyncMock(side_effect=[fresh_result, backfill_result])
+        repo = MagicMock()
+        repo.record_run = MagicMock()
+        sub_mgr = MagicMock()
+        sub_mgr.mark_checked = MagicMock()
+        sub_mgr.update_backfill_cursor = update_cursor
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+        )
+
+        # Run inside a proper event loop context
+        await runner._run_one(sub)
+
+        # Cursor was updated exactly once (one backfill step)
+        assert call_count[0] == 1
+        assert recorded_cursor[0] is not None

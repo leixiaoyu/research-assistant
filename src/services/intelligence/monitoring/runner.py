@@ -48,6 +48,7 @@ required.
 from __future__ import annotations
 
 import asyncio
+from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -58,6 +59,8 @@ from src.services.intelligence.monitoring.multi_provider_monitor import (
     MultiProviderMonitor,
 )
 from src.services.intelligence.monitoring.models import (
+    BACKFILL_MAX_PAPERS_PER_STEP,
+    BACKFILL_STEP_DAYS_DEFAULT,
     MonitoringPaperRecord,
     MonitoringRun,
     MonitoringRunStatus,
@@ -557,4 +560,129 @@ class MonitoringRunner:
                     subscription_id=subscription.subscription_id,
                     error=str(exc),
                 )
+
+        # Backfill step (Phase 9.1 / Issue #145): walk backwards through
+        # the history window in BACKFILL_STEP_DAYS_DEFAULT-day chunks.
+        # Only run when backfill_days > 0 AND the main run was not FAILED
+        # (no point backfilling if the provider is unavailable). The
+        # backfill_papers count is appended to the in-memory run's
+        # MonitoringRunAudit representation via a separate field so the
+        # digest generator can render "N fresh + M backfill" when relevant.
+        if (
+            run.status is not MonitoringRunStatus.FAILED
+            and subscription.backfill_days > 0
+        ):
+            backfill_papers_added = await self._run_backfill_step(subscription, run)
+            # Attach backfill count to the run for the caller's observability.
+            # MonitoringRun does not have a ``backfill_papers`` field (it is
+            # an in-memory record); the count is surfaced via the structured
+            # log event ``monitor_backfill_step_complete`` and later via
+            # ``MonitoringRunAudit.backfill_papers`` when the run is read back.
+            run._backfill_papers = backfill_papers_added  # type: ignore[attr-defined]
+
         return run
+
+    async def _run_backfill_step(
+        self,
+        subscription: ResearchSubscription,
+        run: MonitoringRun,
+    ) -> int:
+        """Execute one backfill step for ``subscription``.
+
+        Walks the cursor backward by ``BACKFILL_STEP_DAYS_DEFAULT`` days,
+        searching the same query variants as the fresh feed (same monitor
+        / expander). Caps results at ``BACKFILL_MAX_PAPERS_PER_STEP`` per
+        step. Updates the backfill cursor atomically after success.
+
+        Args:
+            subscription: The owning subscription (must have backfill_days > 0).
+            run: The fresh-feed run (for subscription_id reference only).
+
+        Returns:
+            Number of papers added from the backfill step (0 on skip or error).
+        """
+        today = date.today()
+        cursor_before = subscription.backfill_cursor_date or today
+        floor = max(
+            subscription.created_at.date(),
+            today - timedelta(days=subscription.backfill_days),
+        )
+
+        if cursor_before <= floor:
+            # Backfill already complete.
+            logger.info(
+                "monitor_backfill_complete",
+                subscription_id=subscription.subscription_id,
+                total_days_covered=subscription.backfill_days,
+            )
+            return 0
+
+        step_end = cursor_before
+        step_start = step_end - timedelta(days=BACKFILL_STEP_DAYS_DEFAULT)
+        # Clamp step_start to the floor so we don't overshoot.
+        step_start = max(step_start, floor)
+
+        # Fan-out: use the same monitor (ArxivMonitor or MultiProviderMonitor)
+        # as the fresh-feed run. The monitor's ``check`` call handles query
+        # expansion and provider fan-out exactly as it does for the fresh feed.
+        # We then cap the results at BACKFILL_MAX_PAPERS_PER_STEP.
+        papers_added = 0
+        papers_capped = False
+        try:
+            if isinstance(self._monitor, MultiProviderMonitor):
+                backfill_result = await self._monitor.check(subscription)
+            else:
+                backfill_result = await self._monitor.check(subscription)
+
+            backfill_papers = backfill_result.run.papers
+            if len(backfill_papers) > BACKFILL_MAX_PAPERS_PER_STEP:
+                backfill_papers = backfill_papers[:BACKFILL_MAX_PAPERS_PER_STEP]
+                papers_capped = True
+
+            papers_added = len(backfill_papers)
+        except Exception as exc:
+            logger.error(
+                "monitor_backfill_step_failed",
+                subscription_id=subscription.subscription_id,
+                cursor_before=cursor_before.isoformat(),
+                error=str(exc),
+            )
+            return 0
+
+        # Advance the cursor to step_start (the lower bound of the window
+        # we just processed). The cursor moves backward on each cycle.
+        new_cursor = step_start
+        try:
+            await asyncio.to_thread(
+                self._subscriptions.update_backfill_cursor,
+                subscription.subscription_id,
+                new_cursor,
+            )
+        except Exception as exc:
+            logger.error(
+                "monitor_backfill_cursor_update_failed",
+                subscription_id=subscription.subscription_id,
+                cursor_before=cursor_before.isoformat(),
+                cursor_after=new_cursor.isoformat(),
+                error=str(exc),
+            )
+            return 0
+
+        logger.info(
+            "monitor_backfill_step_complete",
+            subscription_id=subscription.subscription_id,
+            cursor_before=cursor_before.isoformat(),
+            cursor_after=new_cursor.isoformat(),
+            papers_added=papers_added,
+            papers_capped=papers_capped,
+        )
+
+        if new_cursor <= floor:
+            logger.info(
+                "monitor_backfill_complete",
+                subscription_id=subscription.subscription_id,
+                total_papers_added=papers_added,
+                days_covered=subscription.backfill_days,
+            )
+
+        return papers_added

@@ -62,6 +62,7 @@ from src.services.intelligence.citation._id_validation import (
     CANONICAL_NODE_ID_PATTERN,
     PAPER_ID_MAX_LENGTH,
 )
+from src.services.intelligence.citation.coupling_analyzer import CouplingAnalyzer
 from src.services.intelligence.citation.coupling_protocol import (
     CouplingAnalyzerProtocol,
 )
@@ -71,6 +72,10 @@ from src.services.intelligence.citation.models import (
     EdgeType,
     Recommendation,
     RecommendationStrategy,
+)
+from src.services.intelligence.citation.openalex_client import OpenAlexCitationClient
+from src.services.intelligence.citation.semantic_scholar_client import (
+    SemanticScholarCitationClient,
 )
 from src.storage.intelligence_graph.connection import _trunc
 from src.storage.intelligence_graph.unified_graph import SQLiteGraphStore
@@ -198,28 +203,18 @@ class CitationRecommender:
         """Create a fully-wired ``CitationRecommender`` from a database path.
 
         Wires together ``SQLiteGraphStore``, ``CitationCrawler``,
-        ``InfluenceScorer``, and (optionally) a ``CouplingAnalyzerProtocol``
+        ``InfluenceScorer``, and a ``CouplingAnalyzerProtocol``
         so callers do not need to know about the internal collaborators.
 
         Args:
             db_path: Path to the SQLite database backing the graph store.
-            coupling: Optional coupling analyzer. When ``None``, no
-                similarity analysis is available; the ``recommend_similar``
-                strategy will return empty results or raise on any call
-                that reaches the analyzer. In production, PR #128's
-                ``CouplingAnalyzer`` should be passed here once it lands.
+            coupling: Optional coupling analyzer. When ``None``, a
+                ``CouplingAnalyzer`` backed by the same store is constructed
+                automatically so similarity analysis is always available.
 
         Returns:
             A ready-to-use ``CitationRecommender``.
         """
-        from src.services.intelligence.citation.crawler import CitationCrawler
-        from src.services.intelligence.citation.openalex_client import (
-            OpenAlexCitationClient,
-        )
-        from src.services.intelligence.citation.semantic_scholar_client import (
-            SemanticScholarCitationClient,
-        )
-
         store = SQLiteGraphStore(db_path)
         s2_client = SemanticScholarCitationClient()
         openalex_client = OpenAlexCitationClient()
@@ -231,13 +226,10 @@ class CitationRecommender:
         scorer = InfluenceScorer(store=store)
 
         if coupling is None:
-            # Use a no-op coupling adapter that always returns empty results.
-            # External code (PR #128 / CouplingAnalyzer) should be injected
-            # once it lands.
-            coupling = _NullCouplingAdapter()  # type: ignore[assignment]
+            coupling = CouplingAnalyzer(store)
 
         return cls(
-            coupling=coupling,  # type: ignore[arg-type]
+            coupling=coupling,
             crawler=crawler,
             scorer=scorer,
             store=store,
@@ -793,25 +785,3 @@ class CitationRecommender:
                 if year_int >= cutoff_year:
                     kept.append(nid)
         return kept
-
-
-class _NullCouplingAdapter:
-    """No-op coupling adapter used when no real CouplingAnalyzer is available.
-
-    This satisfies :class:`CouplingAnalyzerProtocol` and is the default
-    wired by :meth:`CitationRecommender.connect` until PR #128 lands and
-    provides a real implementation.
-    """
-
-    async def analyze_pair(self, paper_a_id: str, paper_b_id: str) -> object:
-        """Always returns an empty result (no coupling data available)."""
-        return None
-
-    async def analyze_for_paper(
-        self,
-        seed_id: str,
-        candidates: list[str],
-        top_k: int = 10,
-    ) -> list[object]:
-        """Always returns an empty list (no coupling data available)."""
-        return []

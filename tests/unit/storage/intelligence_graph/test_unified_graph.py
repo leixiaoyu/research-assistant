@@ -1053,8 +1053,8 @@ class TestAddIntegrityErrorBranches:
                 # First call is INSERT; raise an unfamiliar IntegrityError
                 raise sqlite3.IntegrityError("custom not-unique not-fk msg")
 
-            def commit(self) -> None:  # pragma: no cover - never reached
-                pass
+            def commit(self) -> None:
+                raise NotImplementedError("commit should not be called in this test")
 
             def rollback(self) -> None:
                 pass
@@ -1077,8 +1077,8 @@ class TestAddIntegrityErrorBranches:
             def execute(self, *args: object, **kwargs: object) -> None:
                 raise sqlite3.IntegrityError("CHECK constraint failed: edges")
 
-            def commit(self) -> None:  # pragma: no cover - never reached
-                pass
+            def commit(self) -> None:
+                raise NotImplementedError("commit should not be called in this test")
 
             def rollback(self) -> None:
                 pass

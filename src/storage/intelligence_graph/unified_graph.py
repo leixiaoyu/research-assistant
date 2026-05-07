@@ -116,7 +116,7 @@ class GraphStore(Protocol):
         Raises:
             GraphStoreError: If node already exists
         """
-        ...  # pragma: no cover - Protocol abstract method
+        raise NotImplementedError
 
     def get_node(self, node_id: str) -> Optional[GraphNode]:
         """Get a node by ID.
@@ -127,7 +127,7 @@ class GraphStore(Protocol):
         Returns:
             GraphNode if found, None otherwise
         """
-        ...  # pragma: no cover - Protocol abstract method
+        raise NotImplementedError
 
     def update_node(
         self,
@@ -149,7 +149,7 @@ class GraphStore(Protocol):
             NodeNotFoundError: If node doesn't exist
             OptimisticLockError: If version mismatch
         """
-        ...  # pragma: no cover - Protocol abstract method
+        raise NotImplementedError
 
     def delete_node(self, node_id: str) -> bool:
         """Delete a node and its edges.
@@ -160,7 +160,7 @@ class GraphStore(Protocol):
         Returns:
             True if deleted, False if not found
         """
-        ...  # pragma: no cover - Protocol abstract method
+        raise NotImplementedError
 
     def add_nodes_batch(self, nodes: Sequence[GraphNode]) -> None:
         """Insert many nodes atomically in a single transaction.
@@ -175,7 +175,7 @@ class GraphStore(Protocol):
             GraphStoreError: If any node violates a constraint; the batch
                 is rolled back and no nodes are persisted.
         """
-        ...  # pragma: no cover - Protocol abstract method
+        raise NotImplementedError
 
     # Edge operations
     def add_edge(
@@ -201,7 +201,7 @@ class GraphStore(Protocol):
         Raises:
             ReferentialIntegrityError: If source or target node doesn't exist
         """
-        ...  # pragma: no cover - Protocol abstract method
+        raise NotImplementedError
 
     def get_edge(self, edge_id: str) -> Optional[GraphEdge]:
         """Get an edge by ID.
@@ -212,7 +212,7 @@ class GraphStore(Protocol):
         Returns:
             GraphEdge if found, None otherwise
         """
-        ...  # pragma: no cover - Protocol abstract method
+        raise NotImplementedError
 
     def get_edges(
         self,
@@ -230,7 +230,7 @@ class GraphStore(Protocol):
         Returns:
             List of connected edges
         """
-        ...  # pragma: no cover - Protocol abstract method
+        raise NotImplementedError
 
     def delete_edge(self, edge_id: str) -> bool:
         """Delete an edge.
@@ -241,7 +241,7 @@ class GraphStore(Protocol):
         Returns:
             True if deleted, False if not found
         """
-        ...  # pragma: no cover - Protocol abstract method
+        raise NotImplementedError
 
     def add_edges_batch(self, edges: Sequence[GraphEdge]) -> None:
         """Insert many edges atomically in a single transaction.
@@ -259,7 +259,7 @@ class GraphStore(Protocol):
             GraphStoreError: For other constraint violations; the batch is
                 rolled back and no edges are persisted.
         """
-        ...  # pragma: no cover - Protocol abstract method
+        raise NotImplementedError
 
     # Graph traversal
     def traverse(
@@ -280,7 +280,7 @@ class GraphStore(Protocol):
         Returns:
             List of visited nodes (excluding start)
         """
-        ...  # pragma: no cover - Protocol abstract method
+        raise NotImplementedError
 
     def shortest_path(
         self, source_id: str, target_id: str
@@ -294,7 +294,7 @@ class GraphStore(Protocol):
         Returns:
             List of nodes in path, or None if no path exists
         """
-        ...  # pragma: no cover - Protocol abstract method
+        raise NotImplementedError
 
     # Metrics
     def get_node_count(self, node_type: Optional[NodeType] = None) -> int:
@@ -306,7 +306,7 @@ class GraphStore(Protocol):
         Returns:
             Number of nodes
         """
-        ...  # pragma: no cover - Protocol abstract method
+        raise NotImplementedError
 
     def get_edge_count(self, edge_type: Optional[EdgeType] = None) -> int:
         """Get total edge count.
@@ -317,7 +317,46 @@ class GraphStore(Protocol):
         Returns:
             Number of edges
         """
-        ...  # pragma: no cover - Protocol abstract method
+        raise NotImplementedError
+
+    # Co-citation helpers (SQLite-specific until Phase 10 Neo4j migration)
+    def get_papers_citing_both(self, paper_a_id: str, paper_b_id: str) -> set[str]:
+        """Return node ids with outgoing CITES edges to BOTH target papers.
+
+        Self-loops (targets citing themselves) are excluded.
+
+        Note:
+            Currently implemented on :class:`SQLiteGraphStore` only.
+            A future ``Neo4jGraphStore`` should provide an equivalent
+            Cypher ``MATCH … RETURN collect(source)`` implementation.
+
+        Args:
+            paper_a_id: Canonical node id of the first target paper.
+            paper_b_id: Canonical node id of the second target paper.
+
+        Returns:
+            Set of source node ids, excluding the target papers themselves.
+        """
+        raise NotImplementedError
+
+    def count_papers_citing_both(self, paper_a_id: str, paper_b_id: str) -> int:
+        """Return the count of nodes with outgoing CITES edges to BOTH targets.
+
+        Hot-path scalar alternative to :meth:`get_papers_citing_both`.
+
+        Note:
+            Currently implemented on :class:`SQLiteGraphStore` only.
+            A future ``Neo4jGraphStore`` should provide an equivalent
+            Cypher ``MATCH … RETURN count(source)`` implementation.
+
+        Args:
+            paper_a_id: Canonical node id of the first target paper.
+            paper_b_id: Canonical node id of the second target paper.
+
+        Returns:
+            Count of distinct source node ids that cite both targets.
+        """
+        raise NotImplementedError
 
 
 class SQLiteGraphStore:
@@ -1199,13 +1238,17 @@ class SQLiteGraphStore:
         collects them into a :class:`set` so callers can sample or count
         without a second pass.
 
+        Self-loops are excluded — a paper citing itself does not count as a
+        co-citer of the pair ``(paper_a_id, paper_b_id)``.
+
         Args:
             paper_a_id: Canonical node id of the first target paper.
             paper_b_id: Canonical node id of the second target paper.
 
         Returns:
             Set of source node ids that cite both ``paper_a_id`` and
-            ``paper_b_id``.  Empty set if there are no shared citers.
+            ``paper_b_id``, excluding the target papers themselves.
+            Empty set if there are no shared citers.
         """
         conn = self._get_connection()
         try:
@@ -1213,12 +1256,58 @@ class SQLiteGraphStore:
                 """
                 SELECT source_id FROM edges
                 WHERE edge_type = ? AND target_id IN (?, ?)
+                  AND source_id NOT IN (?, ?)
                 GROUP BY source_id
                 HAVING COUNT(DISTINCT target_id) = 2
                 """,
-                (EdgeType.CITES.value, paper_a_id, paper_b_id),
+                (EdgeType.CITES.value, paper_a_id, paper_b_id, paper_a_id, paper_b_id),
             )
             return {row["source_id"] for row in cursor.fetchall()}
+        finally:
+            conn.close()
+
+    def count_papers_citing_both(self, paper_a_id: str, paper_b_id: str) -> int:
+        """Return the count of nodes that have outgoing CITES edges to BOTH targets.
+
+        Hot-path alternative to :meth:`get_papers_citing_both` that avoids
+        materializing the full result set.  Uses ``SELECT COUNT(*)`` over a
+        subquery that applies the same grouping and HAVING filter, so the
+        database computes only a scalar — cheaper than returning thousands of
+        ``source_id`` strings to Python.
+
+        Self-loops are excluded — a paper citing itself does not count as a
+        co-citer of the pair.
+
+        Note (SQLite-specific):
+            This method is implemented on :class:`SQLiteGraphStore` only and
+            is not part of the :class:`GraphStore` Protocol.  A future
+            ``Neo4jGraphStore`` (Phase 10) should implement an equivalent
+            using a Cypher ``MATCH … RETURN count(*)`` pattern.
+
+        Args:
+            paper_a_id: Canonical node id of the first target paper.
+            paper_b_id: Canonical node id of the second target paper.
+
+        Returns:
+            Count of distinct source node ids that cite both targets,
+            excluding the targets themselves.
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                """
+                SELECT COUNT(*) as cnt FROM (
+                    SELECT source_id FROM edges
+                    WHERE edge_type = ? AND target_id IN (?, ?)
+                      AND source_id NOT IN (?, ?)
+                    GROUP BY source_id
+                    HAVING COUNT(DISTINCT target_id) = 2
+                )
+                """,
+                (EdgeType.CITES.value, paper_a_id, paper_b_id, paper_a_id, paper_b_id),
+            )
+            row = cursor.fetchone()
+            return row["cnt"] if row else 0
         finally:
             conn.close()
 

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -52,6 +52,13 @@ MAX_PAPERS_PER_CYCLE = 1000
 # Both ArxivMonitor and MultiProviderMonitor import this instead of each
 # defining a local ``_MAX_POLL_HOURS = 720`` copy.
 MAX_POLL_HOURS = 720
+
+# Backfill constants (Phase 9.1 / Issue #145).
+# These are module-level so both runner.py and test code import from
+# one canonical location rather than duplicating magic numbers.
+BACKFILL_MAX_DAYS = 365
+BACKFILL_STEP_DAYS_DEFAULT = 1
+BACKFILL_MAX_PAPERS_PER_STEP = 50
 
 # Subscription name pattern: same character class as the rest of the
 # Phase 9 surface (matches ``ENTITY_NAME_PATTERN`` extended with
@@ -178,6 +185,30 @@ class ResearchSubscription(BaseModel):
     last_checked_at: Optional[datetime] = Field(
         default=None,
         description="UTC timestamp of the most recent successful cycle.",
+    )
+    # Backfill fields (Phase 9.1 / Issue #145).
+    # backfill_days=0 (default) preserves current behavior — opt-in only.
+    backfill_days: int = Field(
+        default=0,
+        ge=0,
+        le=BACKFILL_MAX_DAYS,
+        description=(
+            "Number of days of history to backfill. "
+            "0 (default) means backfill is disabled. "
+            "The runner walks backwards from today in "
+            "BACKFILL_STEP_DAYS_DEFAULT-day steps, one step per cycle."
+        ),
+    )
+    # Managed by the runner, never set directly by the user.
+    # NULL (None) means the backfill cursor has not yet started;
+    # the runner treats this as "start from today".
+    backfill_cursor_date: Optional[date] = Field(
+        default=None,
+        description=(
+            "ISO-8601 UTC date of the last backfill step's lower bound. "
+            "None = not yet started (cursor is implicitly today). "
+            "Managed by the runner; callers must not set this directly."
+        ),
     )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
@@ -451,6 +482,19 @@ class MonitoringRunAudit(BaseModel):
     papers_new: int = Field(default=0, ge=0)
     error: Optional[str] = Field(default=None, max_length=2000)
     papers: list[MonitoringPaperAudit] = Field(default_factory=list)
+    # backfill_papers: count of papers added from the backfill step
+    # during this cycle. Default 0 for backwards compat with pre-V7
+    # audit rows that have no backfill (issue #145).
+    backfill_papers: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Number of papers added from the sliding-window backfill step "
+            "during this monitoring cycle. 0 when backfill is disabled or "
+            "the cycle produced no backfill papers. Default=0 for "
+            "backwards compatibility with pre-V7 audit rows."
+        ),
+    )
 
 
 class MonitoringRun(BaseModel):

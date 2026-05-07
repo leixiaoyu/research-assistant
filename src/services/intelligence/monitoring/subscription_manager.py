@@ -44,7 +44,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -56,7 +56,10 @@ from src.services.intelligence.monitoring.models import (
     ResearchSubscription,
     SubscriptionStatus,
 )
-from src.storage.intelligence_graph.connection import open_connection
+from src.storage.intelligence_graph.connection import (
+    open_connection,
+    retry_on_lock_contention,
+)
 from src.storage.intelligence_graph.migrations import MigrationManager
 from src.storage.intelligence_graph.path_utils import sanitize_storage_path
 
@@ -143,6 +146,11 @@ class SubscriptionManager:
             "last_checked_at",
             "created_at",
             "updated_at",
+            # V7 backfill columns are persisted as first-class columns
+            # (not in the JSON blob) so the runner can UPDATE them
+            # without rewriting the entire config blob.
+            "backfill_days",
+            "backfill_cursor_date",
         ):
             payload.pop(col, None)
         return json.dumps(payload, default=str, sort_keys=True)
@@ -154,6 +162,19 @@ class SubscriptionManager:
         # round-trip via the model validator.
         is_active = bool(row["is_active"])
         last_checked = row["last_checked"]
+        # V7 backfill columns — present on all rows after V7 migration
+        # (DEFAULT 0 / NULL). Older rows that pre-date the migration
+        # already carry the defaults via SQLite's column default
+        # mechanism, so these will never be absent from the Row object.
+        backfill_days_val = row["backfill_days"] if "backfill_days" in row.keys() else 0
+        backfill_cursor_raw = (
+            row["backfill_cursor_date"]
+            if "backfill_cursor_date" in row.keys()
+            else None
+        )
+        backfill_cursor: date | None = (
+            date.fromisoformat(backfill_cursor_raw) if backfill_cursor_raw else None
+        )
         return ResearchSubscription(
             subscription_id=row["subscription_id"],
             user_id=row["user_id"],
@@ -166,6 +187,8 @@ class SubscriptionManager:
             ),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            backfill_days=backfill_days_val,
+            backfill_cursor_date=backfill_cursor,
             **config,
         )
 
@@ -194,58 +217,74 @@ class SubscriptionManager:
                 self.MAX_KEYWORDS_PER_SUBSCRIPTION,
             )
 
-        with self._connect() as conn:
-            # Acquire write lock UP FRONT so the count check + INSERT
-            # are atomic against concurrent writers. Without this, two
-            # callers can both observe count==MAX-1 and both insert,
-            # silently breaking the per-user cap.
-            # TODO(#134): wrap in retry_on_lock_contention
-            conn.execute("BEGIN IMMEDIATE")
-            current = self._count_user_subscriptions(conn, subscription.user_id)
-            if current >= self.MAX_SUBSCRIPTIONS_PER_USER:
-                raise SubscriptionLimitError(
-                    "subscriptions per user",
-                    current,
-                    self.MAX_SUBSCRIPTIONS_PER_USER,
-                )
+        def _do_add() -> None:
+            with self._connect() as conn:
+                # Acquire write lock UP FRONT so the count check + INSERT
+                # are atomic against concurrent writers. Without this, two
+                # callers can both observe count==MAX-1 and both insert,
+                # silently breaking the per-user cap.
+                conn.execute("BEGIN IMMEDIATE")
+                current = self._count_user_subscriptions(conn, subscription.user_id)
+                if current >= self.MAX_SUBSCRIPTIONS_PER_USER:
+                    raise SubscriptionLimitError(
+                        "subscriptions per user",
+                        current,
+                        self.MAX_SUBSCRIPTIONS_PER_USER,
+                    )
 
-            cursor = conn.execute(
-                "SELECT 1 FROM subscriptions WHERE subscription_id = ?",
-                (subscription.subscription_id,),
-            )
-            if cursor.fetchone() is not None:
-                raise ValueError(
-                    f"Subscription already exists: {subscription.subscription_id!r}"
+                cursor = conn.execute(
+                    "SELECT 1 FROM subscriptions WHERE subscription_id = ?",
+                    (subscription.subscription_id,),
                 )
+                if cursor.fetchone() is not None:
+                    raise ValueError(
+                        f"Subscription already exists: {subscription.subscription_id!r}"
+                    )
 
-            now = datetime.now(timezone.utc)
-            # Honor caller-provided timestamps if they were set
-            # explicitly; otherwise stamp ``now`` on both.
-            created_at = subscription.created_at or now
-            updated_at = now
-            conn.execute(
-                """
-                INSERT INTO subscriptions (
-                    subscription_id, user_id, name, config,
-                    last_checked, is_active, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    subscription.subscription_id,
-                    subscription.user_id,
-                    subscription.name,
-                    self._serialize(subscription),
+                now = datetime.now(timezone.utc)
+                # Honor caller-provided timestamps if they were set
+                # explicitly; otherwise stamp ``now`` on both.
+                created_at = subscription.created_at or now
+                updated_at = now
+                conn.execute(
+                    """
+                    INSERT INTO subscriptions (
+                        subscription_id, user_id, name, config,
+                        last_checked, is_active, created_at, updated_at,
+                        backfill_days, backfill_cursor_date
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
                     (
-                        subscription.last_checked_at.isoformat()
-                        if subscription.last_checked_at
-                        else None
+                        subscription.subscription_id,
+                        subscription.user_id,
+                        subscription.name,
+                        self._serialize(subscription),
+                        (
+                            subscription.last_checked_at.isoformat()
+                            if subscription.last_checked_at
+                            else None
+                        ),
+                        1 if subscription.status is SubscriptionStatus.ACTIVE else 0,
+                        created_at.isoformat(),
+                        updated_at.isoformat(),
+                        subscription.backfill_days,
+                        (
+                            subscription.backfill_cursor_date.isoformat()
+                            if subscription.backfill_cursor_date
+                            else None
+                        ),
                     ),
-                    1 if subscription.status is SubscriptionStatus.ACTIVE else 0,
-                    created_at.isoformat(),
-                    updated_at.isoformat(),
-                ),
-            )
-            conn.commit()
+                )
+                conn.commit()
+
+        # Wrap the entire read+write in retry_on_lock_contention so a
+        # concurrent writer spinning on BEGIN IMMEDIATE gets automatic
+        # retry rather than a bare OperationalError (resolves TODO(#134)).
+        retry_on_lock_contention(
+            _do_add,
+            operation_name="subscription_add",
+            subscription_id=subscription.subscription_id,
+        )
 
         logger.info(
             "subscription_added",
@@ -261,7 +300,8 @@ class SubscriptionManager:
             cursor = conn.execute(
                 """
                 SELECT subscription_id, user_id, name, config,
-                       last_checked, is_active, created_at, updated_at
+                       last_checked, is_active, created_at, updated_at,
+                       backfill_days, backfill_cursor_date
                 FROM subscriptions WHERE subscription_id = ?
                 """,
                 (subscription_id,),
@@ -289,7 +329,8 @@ class SubscriptionManager:
             cursor = conn.execute(
                 f"""
                 SELECT subscription_id, user_id, name, config,
-                       last_checked, is_active, created_at, updated_at
+                       last_checked, is_active, created_at, updated_at,
+                       backfill_days, backfill_cursor_date
                 FROM subscriptions
                 {where}
                 ORDER BY created_at ASC
@@ -317,7 +358,8 @@ class SubscriptionManager:
                 """
                 UPDATE subscriptions SET
                     name = ?, config = ?, last_checked = ?,
-                    is_active = ?, updated_at = ?
+                    is_active = ?, updated_at = ?,
+                    backfill_days = ?, backfill_cursor_date = ?
                 WHERE subscription_id = ?
                 """,
                 (
@@ -330,6 +372,12 @@ class SubscriptionManager:
                     ),
                     1 if subscription.status is SubscriptionStatus.ACTIVE else 0,
                     now.isoformat(),
+                    subscription.backfill_days,
+                    (
+                        subscription.backfill_cursor_date.isoformat()
+                        if subscription.backfill_cursor_date
+                        else None
+                    ),
                     subscription.subscription_id,
                 ),
             )
@@ -412,6 +460,56 @@ class SubscriptionManager:
             if cursor.rowcount == 0:
                 raise KeyError(f"Subscription not found: {subscription_id!r}")
             conn.commit()
+
+    def update_backfill_cursor(
+        self,
+        subscription_id: str,
+        cursor_date: Optional[date],
+    ) -> None:
+        """Atomically update the backfill cursor date for one subscription.
+
+        Called by the runner after each successful backfill step.
+        Wrapped in ``retry_on_lock_contention`` so a concurrent writer
+        spinning on BEGIN IMMEDIATE gets automatic retry (issue #145 —
+        see the backfill cursor-write race requirement).
+
+        Args:
+            subscription_id: The subscription to update.
+            cursor_date: The new cursor date (the lower bound of the
+                step just completed). Pass ``None`` to clear the cursor
+                (reset the backfill to "not started").
+
+        Raises:
+            KeyError: If no row matches ``subscription_id``.
+        """
+        now = datetime.now(timezone.utc)
+        cursor_iso = cursor_date.isoformat() if cursor_date else None
+
+        def _do_update() -> None:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                cur = conn.execute(
+                    """
+                    UPDATE subscriptions
+                    SET backfill_cursor_date = ?, updated_at = ?
+                    WHERE subscription_id = ?
+                    """,
+                    (cursor_iso, now.isoformat(), subscription_id),
+                )
+                if cur.rowcount == 0:
+                    raise KeyError(f"Subscription not found: {subscription_id!r}")
+                conn.commit()
+
+        retry_on_lock_contention(
+            _do_update,
+            operation_name="subscription_update_backfill_cursor",
+            subscription_id=subscription_id,
+        )
+        logger.info(
+            "subscription_backfill_cursor_updated",
+            subscription_id=subscription_id,
+            cursor_date=cursor_iso,
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers

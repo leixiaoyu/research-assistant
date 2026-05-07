@@ -13,11 +13,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Optional
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 import structlog
 import structlog.testing
+import typer
 from typer.testing import CliRunner
 
 from src.cli.citation import (
@@ -47,14 +48,6 @@ def runner() -> CliRunner:
     return CliRunner()
 
 
-@pytest.fixture
-def db_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Point the CLI's citation DB env var at a temp file."""
-    db_path = tmp_path / "citation.db"
-    monkeypatch.setenv(_DB_ENV_VAR, str(db_path))
-    return db_path
-
-
 # ---------------------------------------------------------------------------
 # _resolve_db_path
 # ---------------------------------------------------------------------------
@@ -63,11 +56,50 @@ def db_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 class TestResolveDbPath:
     def test_env_unset_returns_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(_DB_ENV_VAR, raising=False)
-        assert _resolve_db_path() == Path("./data/citation.db")
+        result = _resolve_db_path()
+        # sanitize_storage_path resolves to an absolute path; the default
+        # should still end with the canonical db filename.
+        assert result.name == "citation.db"
+        assert result.is_absolute()
 
-    def test_env_set_returns_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv(_DB_ENV_VAR, "/tmp/cit.db")
-        assert _resolve_db_path() == Path("/tmp/cit.db")
+    def test_env_set_returns_env(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        db_path = tmp_path / "cit.db"
+        monkeypatch.setenv(_DB_ENV_VAR, str(db_path))
+        result = _resolve_db_path()
+        assert result == db_path.resolve()
+
+    def test_env_set_traversal_raises_security_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A path with directory traversal is rejected at the CLI boundary."""
+        from src.utils.security import SecurityError
+
+        monkeypatch.setenv(_DB_ENV_VAR, "../../etc/x.db")
+        with pytest.raises(SecurityError):
+            _resolve_db_path()
+
+    def test_handle_errors_translates_security_error_to_clean_exit(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SecurityError from _resolve_db_path produces exit 1 + generic message."""
+        from src.utils.security import SecurityError
+
+        import src.cli.citation as citation_module
+
+        monkeypatch.setattr(
+            citation_module,
+            "_build_store",
+            lambda **kw: (_ for _ in ()).throw(
+                SecurityError("path outside approved roots")
+            ),
+        )
+
+        result = runner.invoke(citation_app, ["path", "paper:s2:a", "paper:s2:b"])
+        assert result.exit_code != 0
+        # Generic message shown, not the raw SecurityError detail
+        assert "Operation failed" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -81,19 +113,19 @@ class TestValidatePaperId:
         _validate_paper_id("paper:s2:abc123")
 
     def test_empty_string_raises_bad_parameter(self) -> None:
-        with pytest.raises(Exception, match="non-empty"):
+        with pytest.raises(typer.BadParameter, match="non-empty"):
             _validate_paper_id("")
 
     def test_whitespace_only_raises_bad_parameter(self) -> None:
-        with pytest.raises(Exception, match="non-empty"):
+        with pytest.raises(typer.BadParameter, match="non-empty"):
             _validate_paper_id("   ")
 
     def test_too_long_raises_bad_parameter(self) -> None:
-        with pytest.raises(Exception, match="exceeds max"):
+        with pytest.raises(typer.BadParameter, match="exceeds max"):
             _validate_paper_id("a" * 513)
 
     def test_invalid_chars_raises_bad_parameter(self) -> None:
-        with pytest.raises(Exception, match="Invalid paper_id format"):
+        with pytest.raises(typer.BadParameter, match="Invalid paper_id format"):
             _validate_paper_id("paper/with/slashes")
 
 
@@ -223,7 +255,9 @@ class TestBuildCommand:
         assert result.exit_code == 0, result.output
         assert "paper:s2:abc123" in result.output
         assert "nodes_added" in result.output
-        mock_gb.build_for_paper.assert_called_once()
+        mock_gb.build_for_paper.assert_called_once_with(
+            "paper:s2:abc123", depth=1, direction=ANY
+        )
 
     def test_build_json_flag(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -368,7 +402,7 @@ class TestExpandCommand:
         assert result.exit_code == 0, result.output
         assert "papers_visited" in result.output
         assert "10" in result.output
-        mock_crawler.crawl.assert_called_once()
+        mock_crawler.crawl.assert_called_once_with("paper:s2:abc123", config=ANY)
 
     def test_expand_invalid_paper_id_exits_nonzero(self, runner: CliRunner) -> None:
         result = runner.invoke(citation_app, ["expand", "bad/id"])
@@ -815,14 +849,9 @@ class TestInfluenceCommand:
         mock_scorer = MagicMock()
         mock_scorer.compute_for_paper = AsyncMock(return_value=metrics)
 
-        import src.services.intelligence.citation.influence_scorer as scorer_module
+        import src.cli.citation as citation_module
 
-        monkeypatch.setattr(
-            scorer_module.InfluenceScorer,
-            "from_paths",
-            lambda *, db_path, cache_ttl: mock_scorer,
-        )
-        monkeypatch.setenv(_DB_ENV_VAR, "/tmp/c.db")
+        monkeypatch.setattr(citation_module, "_build_scorer", lambda **kw: mock_scorer)
 
         result = runner.invoke(citation_app, ["influence", "paper:s2:abc123"])
         assert result.exit_code == 0, result.output
@@ -844,14 +873,9 @@ class TestInfluenceCommand:
         mock_scorer = MagicMock()
         mock_scorer.compute_for_paper = AsyncMock(return_value=metrics)
 
-        import src.services.intelligence.citation.influence_scorer as scorer_module
+        import src.cli.citation as citation_module
 
-        monkeypatch.setattr(
-            scorer_module.InfluenceScorer,
-            "from_paths",
-            lambda *, db_path, cache_ttl: mock_scorer,
-        )
-        monkeypatch.setenv(_DB_ENV_VAR, "/tmp/c.db")
+        monkeypatch.setattr(citation_module, "_build_scorer", lambda **kw: mock_scorer)
 
         result = runner.invoke(citation_app, ["influence", "paper:s2:abc123"])
         assert result.exit_code == 0, result.output
@@ -874,14 +898,9 @@ class TestInfluenceCommand:
         mock_scorer = MagicMock()
         mock_scorer.compute_for_paper = AsyncMock(side_effect=RuntimeError("DB error"))
 
-        import src.services.intelligence.citation.influence_scorer as scorer_module
+        import src.cli.citation as citation_module
 
-        monkeypatch.setattr(
-            scorer_module.InfluenceScorer,
-            "from_paths",
-            lambda *, db_path, cache_ttl: mock_scorer,
-        )
-        monkeypatch.setenv(_DB_ENV_VAR, "/tmp/c.db")
+        monkeypatch.setattr(citation_module, "_build_scorer", lambda **kw: mock_scorer)
 
         result = runner.invoke(citation_app, ["influence", "paper:s2:abc123"])
         assert result.exit_code != 0
@@ -893,14 +912,9 @@ class TestInfluenceCommand:
         mock_scorer = MagicMock()
         mock_scorer.compute_for_paper = AsyncMock(return_value=metrics)
 
-        import src.services.intelligence.citation.influence_scorer as scorer_module
+        import src.cli.citation as citation_module
 
-        monkeypatch.setattr(
-            scorer_module.InfluenceScorer,
-            "from_paths",
-            lambda *, db_path, cache_ttl: mock_scorer,
-        )
-        monkeypatch.setenv(_DB_ENV_VAR, "/tmp/c.db")
+        monkeypatch.setattr(citation_module, "_build_scorer", lambda **kw: mock_scorer)
 
         result = runner.invoke(citation_app, ["influence", "paper:s2:abc123", "--json"])
         assert result.exit_code == 0, result.output
@@ -914,7 +928,7 @@ class TestInfluenceCommand:
     def test_influence_max_age_days_option(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """--max-age-days passes the correct cache_ttl to InfluenceScorer."""
+        """--max-age-days passes the correct cache_ttl to _build_scorer."""
         from datetime import timedelta
 
         metrics = _make_influence_metrics()
@@ -922,16 +936,15 @@ class TestInfluenceCommand:
         mock_scorer_instance.compute_for_paper = AsyncMock(return_value=metrics)
         built_kwargs: dict = {}
 
-        def fake_from_paths(*, db_path: Path, cache_ttl: object) -> MagicMock:
+        def fake_build_scorer(
+            *, db_path: Optional[Path] = None, cache_ttl: object = None
+        ) -> MagicMock:
             built_kwargs["cache_ttl"] = cache_ttl
             return mock_scorer_instance
 
-        import src.services.intelligence.citation.influence_scorer as scorer_module
+        import src.cli.citation as citation_module
 
-        monkeypatch.setattr(
-            scorer_module.InfluenceScorer, "from_paths", fake_from_paths
-        )
-        monkeypatch.setenv(_DB_ENV_VAR, "/tmp/cit.db")
+        monkeypatch.setattr(citation_module, "_build_scorer", fake_build_scorer)
 
         result = runner.invoke(
             citation_app,
@@ -943,21 +956,21 @@ class TestInfluenceCommand:
     def test_influence_db_path_option(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """--db-path is forwarded to InfluenceScorer.from_paths."""
+        """--db-path is forwarded to _build_scorer."""
         captured: dict = {}
         metrics = _make_influence_metrics()
         mock_scorer_instance = MagicMock()
         mock_scorer_instance.compute_for_paper = AsyncMock(return_value=metrics)
 
-        def fake_from_paths(*, db_path: Path, cache_ttl: object) -> MagicMock:
+        def fake_build_scorer(
+            *, db_path: Optional[Path] = None, cache_ttl: object = None
+        ) -> MagicMock:
             captured["db_path"] = db_path
             return mock_scorer_instance
 
-        import src.services.intelligence.citation.influence_scorer as scorer_module
+        import src.cli.citation as citation_module
 
-        monkeypatch.setattr(
-            scorer_module.InfluenceScorer, "from_paths", fake_from_paths
-        )
+        monkeypatch.setattr(citation_module, "_build_scorer", fake_build_scorer)
 
         result = runner.invoke(
             citation_app,
@@ -1173,3 +1186,61 @@ class TestErrorLogging:
         assert result.exit_code != 0
         events = [e for e in logs if e.get("event") == "command_failed"]
         assert len(events) >= 1
+        ev = events[0]
+        assert "error" in ev
+        assert "oops" in ev["error"]
+        assert ev.get("error_type") == "RuntimeError"
+
+    def test_handle_errors_generic_user_message(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """@handle_errors emits the generic user-facing message on failure."""
+        import src.cli.citation as citation_module
+
+        mock_gb = MagicMock()
+        mock_gb.build_for_paper = AsyncMock(side_effect=RuntimeError("internal detail"))
+        monkeypatch.setattr(
+            citation_module, "_build_graph_builder", lambda **kw: mock_gb
+        )
+
+        result = runner.invoke(citation_app, ["build", "paper:s2:abc123"])
+        assert result.exit_code != 0
+        # The generic user-facing message MUST appear in the output.
+        assert "Operation failed" in result.output
+        # The raw exception message must NOT appear outside of any
+        # structured log lines (structlog JSON contains it in the "error"
+        # key, which is acceptable — the user-facing *plain text* should
+        # not expose raw internals).
+        non_json_lines = [
+            line
+            for line in result.output.splitlines()
+            if not line.strip().startswith("{")
+        ]
+        assert not any("internal detail" in ln for ln in non_json_lines)
+
+    def test_handle_errors_trunc_in_log(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """@handle_errors logs a truncated error string, not the full exception."""
+        import src.cli.citation as citation_module
+        import src.cli.utils as utils_module
+
+        monkeypatch.setattr(utils_module, "logger", structlog.get_logger())
+
+        long_msg = "x" * 300
+        mock_gb = MagicMock()
+        mock_gb.build_for_paper = AsyncMock(side_effect=ValueError(long_msg))
+        monkeypatch.setattr(
+            citation_module, "_build_graph_builder", lambda **kw: mock_gb
+        )
+
+        with structlog.testing.capture_logs() as logs:
+            result = runner.invoke(citation_app, ["build", "paper:s2:abc123"])
+
+        assert result.exit_code != 0
+        events = [e for e in logs if e.get("event") == "command_failed"]
+        assert events
+        logged_error = events[0]["error"]
+        # _trunc caps at 200 chars + suffix
+        assert len(logged_error) <= 220
+        assert "[...truncated]" in logged_error

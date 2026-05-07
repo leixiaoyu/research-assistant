@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -55,6 +56,7 @@ from src.services.intelligence.citation.models import (
     CrawlDirection,
     RecommendationStrategy,
 )
+from src.storage.intelligence_graph.path_utils import sanitize_storage_path
 
 logger = structlog.get_logger()
 
@@ -94,9 +96,13 @@ def _validate_paper_id(paper_id: str) -> None:
 
 
 def _resolve_db_path() -> Path:
-    """Return the configured SQLite DB path for citation tables."""
+    """Return the configured SQLite DB path for citation tables.
+
+    Sanitizes the path at the CLI boundary to prevent directory traversal.
+    Raises ``SecurityError`` if the resolved path is outside approved roots.
+    """
     env_value = os.environ.get(_DB_ENV_VAR)
-    return Path(env_value) if env_value else _DEFAULT_DB_RELATIVE
+    return sanitize_storage_path(env_value or _DEFAULT_DB_RELATIVE)
 
 
 def _build_graph_builder(*, db_path: Optional[Path] = None) -> Any:
@@ -157,11 +163,17 @@ def _build_recommender(*, db_path: Optional[Path] = None) -> Any:
     return CitationRecommender.connect(db_path=resolved)
 
 
-def _build_scorer(*, db_path: Optional[Path] = None) -> Any:
+def _build_scorer(
+    *,
+    db_path: Optional[Path] = None,
+    cache_ttl: timedelta = timedelta(days=7),
+) -> Any:
     """Construct an :class:`InfluenceScorer` from a DB path.
 
     Args:
         db_path: Path to the SQLite DB. Defaults to ``_resolve_db_path()``.
+        cache_ttl: Cache time-to-live for influence computations.
+            Defaults to 7 days.
 
     Returns:
         A ready-to-use ``InfluenceScorer``.
@@ -169,7 +181,7 @@ def _build_scorer(*, db_path: Optional[Path] = None) -> Any:
     from src.services.intelligence.citation.influence_scorer import InfluenceScorer
 
     resolved = db_path or _resolve_db_path()
-    return InfluenceScorer.from_paths(db_path=resolved)
+    return InfluenceScorer.from_paths(db_path=resolved, cache_ttl=cache_ttl)
 
 
 def _build_store(*, db_path: Optional[Path] = None) -> Any:
@@ -412,14 +424,7 @@ def influence_command(
     """Show PageRank + citation velocity for a paper."""
     _validate_paper_id(paper_id)
 
-    from datetime import timedelta
-
-    from src.services.intelligence.citation.influence_scorer import InfluenceScorer
-
-    resolved = db_path or _resolve_db_path()
-    sc = InfluenceScorer.from_paths(
-        db_path=resolved, cache_ttl=timedelta(days=max_age_days)
-    )
+    sc = _build_scorer(db_path=db_path, cache_ttl=timedelta(days=max_age_days))
 
     metrics = asyncio.run(sc.compute_for_paper(paper_id))
 

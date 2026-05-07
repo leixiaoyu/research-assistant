@@ -1275,15 +1275,19 @@ async def test_recommend_bridge_distant_cites_outside_r2_ignored(
 def test_connect_wires_real_collaborators(monkeypatch, tmp_path) -> None:
     """connect() factory wires SQLiteGraphStore + crawler + scorer correctly.
 
-    Patches the constructors at the namespace boundary to avoid real network
-    clients and verifies the wiring graph (covers lines 215-239).
+    Patches the constructors at the recommender's namespace boundary to avoid
+    real network clients and verifies the wiring graph (covers the connect()
+    factory).  Cross-wiring assertion: crawler and scorer must receive the same
+    store object that SQLiteGraphStore() returned.
     """
     db_path = tmp_path / "graph.db"
     captured: dict[str, object] = {}
 
     def _fake_store(p):
         captured["store"] = p
-        return MagicMock(name="SQLiteGraphStore")
+        mock = MagicMock(name="SQLiteGraphStore")
+        captured["store_obj"] = mock
+        return mock
 
     def _fake_s2():
         return MagicMock(name="SemanticScholarCitationClient")
@@ -1299,46 +1303,40 @@ def test_connect_wires_real_collaborators(monkeypatch, tmp_path) -> None:
         captured["scorer_store"] = store
         return MagicMock(name="InfluenceScorer")
 
+    def _fake_coupling_analyzer(store):
+        captured["coupling_store"] = store
+        return MagicMock(name="CouplingAnalyzer")
+
     monkeypatch.setattr(recommender_module, "SQLiteGraphStore", _fake_store)
-    monkeypatch.setattr(
-        "src.services.intelligence.citation.crawler.CitationCrawler", _fake_crawler
-    )
-    monkeypatch.setattr(
-        "src.services.intelligence.citation.openalex_client.OpenAlexCitationClient",
-        _fake_oa,
-    )
-    monkeypatch.setattr(
-        "src.services.intelligence.citation.semantic_scholar_client."
-        "SemanticScholarCitationClient",
-        _fake_s2,
-    )
+    monkeypatch.setattr(recommender_module, "CitationCrawler", _fake_crawler)
+    monkeypatch.setattr(recommender_module, "OpenAlexCitationClient", _fake_oa)
+    monkeypatch.setattr(recommender_module, "SemanticScholarCitationClient", _fake_s2)
     monkeypatch.setattr(recommender_module, "InfluenceScorer", _fake_scorer)
+    monkeypatch.setattr(recommender_module, "CouplingAnalyzer", _fake_coupling_analyzer)
 
     rec = CitationRecommender.connect(db_path=db_path)
 
     assert isinstance(rec, CitationRecommender)
     assert captured["store"] == db_path
-    # Default coupling is _NullCouplingAdapter when no coupling injected.
-    from src.services.intelligence.citation.recommender import _NullCouplingAdapter
-
-    assert isinstance(rec._coupling, _NullCouplingAdapter)
+    # Cross-wiring: crawler, scorer, and coupling all receive the same store object.
+    store_obj = captured["store_obj"]
+    assert captured["crawler_store"] is store_obj
+    assert captured["scorer_store"] is store_obj
+    assert captured["coupling_store"] is store_obj
+    # Default coupling is a real CouplingAnalyzer instance (mocked here by
+    # _fake_coupling_analyzer which returns a MagicMock).
+    assert isinstance(rec._coupling, MagicMock)  # mocked by _fake_coupling_analyzer
 
 
 def test_connect_uses_injected_coupling(monkeypatch, tmp_path) -> None:
     """connect() uses the injected coupling analyzer when provided."""
     monkeypatch.setattr(recommender_module, "SQLiteGraphStore", lambda p: MagicMock())
+    monkeypatch.setattr(recommender_module, "CitationCrawler", lambda **kw: MagicMock())
     monkeypatch.setattr(
-        "src.services.intelligence.citation.crawler.CitationCrawler",
-        lambda **kw: MagicMock(),
+        recommender_module, "OpenAlexCitationClient", lambda: MagicMock()
     )
     monkeypatch.setattr(
-        "src.services.intelligence.citation.openalex_client.OpenAlexCitationClient",
-        lambda: MagicMock(),
-    )
-    monkeypatch.setattr(
-        "src.services.intelligence.citation.semantic_scholar_client."
-        "SemanticScholarCitationClient",
-        lambda: MagicMock(),
+        recommender_module, "SemanticScholarCitationClient", lambda: MagicMock()
     )
     monkeypatch.setattr(
         recommender_module, "InfluenceScorer", lambda *, store: MagicMock()
@@ -1369,7 +1367,7 @@ async def test_recommend_similar_caps_candidates_at_max(monkeypatch) -> None:
 
     # Exactly _MAX_CANDIDATES (=3) ids should be passed to the analyzer.
     call_args = mock_coupling.analyze_for_paper.call_args
-    passed_candidates = call_args[0][1]
+    passed_candidates = call_args.args[1]
     assert len(passed_candidates) == 3
 
 
@@ -1382,9 +1380,9 @@ async def test_recommend_bridge_papers_caps_distant_frontier(monkeypatch) -> Non
     # Build a graph: SEED → P1 → P2; r2 = {P1, P2}; r3 = many distant nodes.
     distant_ids = [f"paper:s2:dist{i:03d}" for i in range(10)]
 
+    # recommend_bridge_papers calls traverse at depth=2 (near set) and
+    # depth=3 (distant frontier); depth=1 is never requested.
     def _traverse_se(node_id, *, edge_types, max_depth, direction):
-        if max_depth == 1:
-            return [_make_graph_node(_P1)]  # r1 = {P1}
         if max_depth == 2:
             return [_make_graph_node(_P1), _make_graph_node(_P2)]  # r2 = {P1, P2}
         if max_depth == 3:
@@ -1429,11 +1427,14 @@ async def test_recommend_all_strategy_failure_logs_and_returns_empty(
     rec, _, _, _, mock_store = _build_recommender(traverse_returns=[])
 
     # Make recommend_similar blow up; others should return [] from
-    # the empty-traverse fixture cleanly.
-    async def _failing_similar(seed_id, k):
+    # the empty-traverse fixture cleanly.  The class-level patch receives
+    # (self, seed_id, k=10) matching the real method signature.
+    async def _failing_similar(self, seed_id, k=10):
         raise RuntimeError("simulated coupling outage")
 
-    monkeypatch.setattr(rec, "recommend_similar", _failing_similar)
+    # Patch at the class level so the method is replaced for all instances
+    # (instance-level patching does not exercise the real dispatch path).
+    monkeypatch.setattr(CitationRecommender, "recommend_similar", _failing_similar)
     monkeypatch.setattr(recommender_module, "logger", structlog.get_logger())
 
     with structlog.testing.capture_logs() as cap_logs:
@@ -1449,28 +1450,11 @@ async def test_recommend_all_strategy_failure_logs_and_returns_empty(
     assert len(failure_events) == 1
     assert failure_events[0]["strategy"] == RecommendationStrategy.SIMILAR.value
     assert "simulated coupling outage" in failure_events[0]["error"]
+    # Structured-log field pins (M-1).
+    assert failure_events[0]["log_level"] == "error"
+    assert failure_events[0]["seed_id"] == _SEED
 
     # Other strategies: present (empty since no traverse), not raised.
     assert result[RecommendationStrategy.INFLUENTIAL_PREDECESSOR] == []
     assert result[RecommendationStrategy.ACTIVE_SUCCESSOR] == []
     assert result[RecommendationStrategy.BRIDGE] == []
-
-
-@pytest.mark.asyncio
-async def test_null_coupling_adapter_analyze_pair_returns_none() -> None:
-    """_NullCouplingAdapter.analyze_pair returns None (line 808 default impl)."""
-    from src.services.intelligence.citation.recommender import _NullCouplingAdapter
-
-    adapter = _NullCouplingAdapter()
-    result = await adapter.analyze_pair("paper:s2:a", "paper:s2:b")
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_null_coupling_adapter_analyze_for_paper_returns_empty() -> None:
-    """_NullCouplingAdapter.analyze_for_paper returns [] (line 817 default impl)."""
-    from src.services.intelligence.citation.recommender import _NullCouplingAdapter
-
-    adapter = _NullCouplingAdapter()
-    result = await adapter.analyze_for_paper("paper:s2:seed", ["paper:s2:c1"], top_k=5)
-    assert result == []

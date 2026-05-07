@@ -565,6 +565,64 @@ MIGRATION_V6_CITATION_COUPLING_CACHE = Migration(
 )
 
 
+# Schema version 7: Sliding-window discovery backfill columns.
+# Phase 9.1 enhancement — Issue #145 (per-subscription opt-in).
+#
+# Background
+# ----------
+# The monitor's fresh-feed window covers only the recent poll interval
+# (``poll_interval_hours``, typically 6–24 h). Subscribers who enable
+# backfill want the runner to walk backwards through a configurable
+# history window (up to 365 days) in step-sized chunks, one step per
+# cycle, persisting newly-discovered papers via the existing
+# MonitoringPaperRecord path.
+#
+# Two new columns on ``subscriptions``:
+#
+# ``backfill_days INTEGER NOT NULL DEFAULT 0``
+#   - 0 (default) = backfill disabled; preserves all current behavior.
+#   - 1-365 = days of history to backfill.
+#   - CHECK (backfill_days BETWEEN 0 AND 365) enforces the range at
+#     the storage layer; the Pydantic model enforces it in Python.
+#
+# ``backfill_cursor_date TEXT``
+#   - ISO-8601 UTC date (YYYY-MM-DD) of the earliest date already
+#     backfilled. NULL = backfill not yet started (cursor is implicitly
+#     today). Managed by the runner; never set by the user.
+#
+# Why ALTER TABLE (not table-swap)
+# ---------------------------------
+# SQLite's ``ALTER TABLE ... ADD COLUMN`` is sufficient here because
+# the new columns use simple DEFAULT expressions. No CHECK constraint
+# is added *to the existing table* — the CHECK on backfill_days is
+# expressed via a separate ``ADD COLUMN ... CHECK`` clause which SQLite
+# 3.37.0+ supports. For ``backfill_cursor_date`` (TEXT NULL, no CHECK)
+# a plain ``ADD COLUMN`` works without any restriction. Using ADD COLUMN
+# avoids the row-count-proportional copy cost of table-swap migrations.
+#
+# Idempotent: each ALTER TABLE is guarded by a check against the
+# sqlite_master catalog; the migration can safely be applied to a
+# database that already has the columns (idempotent via IF NOT EXISTS
+# pattern implemented in the callable form).
+MIGRATION_V7_BACKFILL_COLUMNS = Migration(
+    version=7,
+    name="backfill_columns",
+    description=(
+        "Add backfill_days + backfill_cursor_date columns to subscriptions "
+        "(Phase 9.1 sliding-window discovery backfill / Issue #145). "
+        "backfill_days=0 (default) is fully backwards-compatible."
+    ),
+    up="""
+    ALTER TABLE subscriptions
+        ADD COLUMN backfill_days INTEGER NOT NULL DEFAULT 0
+            CHECK (backfill_days BETWEEN 0 AND 365);
+
+    ALTER TABLE subscriptions
+        ADD COLUMN backfill_cursor_date TEXT;
+    """,
+)
+
+
 # All migrations in order
 ALL_MIGRATIONS: list[Migration] = [
     MIGRATION_V1_INITIAL,
@@ -573,6 +631,7 @@ ALL_MIGRATIONS: list[Migration] = [
     MIGRATION_V4_CITATION_INFLUENCE_METRICS,
     MIGRATION_V5_PAPER_SOURCE_TRACKING,
     MIGRATION_V6_CITATION_COUPLING_CACHE,
+    MIGRATION_V7_BACKFILL_COLUMNS,
 ]
 
 
@@ -580,7 +639,7 @@ ALL_MIGRATIONS: list[Migration] = [
 # need to assert "we are on the canonical schema" import this rather
 # than counting ``ALL_MIGRATIONS`` so a future migration addition is
 # a single-line update.
-LATEST_MIGRATION_VERSION = 6
+LATEST_MIGRATION_VERSION = 7
 
 
 class MigrationManager:

@@ -26,6 +26,7 @@ from src.storage.intelligence_graph.migrations import (
     MIGRATION_V4_CITATION_INFLUENCE_METRICS,
     MIGRATION_V5_PAPER_SOURCE_TRACKING,
     MIGRATION_V6_CITATION_COUPLING_CACHE,
+    MIGRATION_V7_BACKFILL_COLUMNS,
 )
 from src.utils.security import SecurityError
 
@@ -1975,7 +1976,229 @@ class TestLatestMigrationVersion:
     def test_latest_version_constant_matches_all_migrations(self) -> None:
         assert LATEST_MIGRATION_VERSION == max(m.version for m in ALL_MIGRATIONS)
 
-    def test_latest_version_is_6(self) -> None:
+    def test_latest_version_is_7(self) -> None:
         # Pinned literal so an accidental version bump shows up in
         # review even if ``ALL_MIGRATIONS`` is also extended.
-        assert LATEST_MIGRATION_VERSION == 6
+        # Updated from 6 to 7 for the Phase 9.1 backfill migration (#145).
+        assert LATEST_MIGRATION_VERSION == 7
+
+
+class TestMigrationV7BackfillColumns:
+    """Tests for MIGRATION_V7_BACKFILL_COLUMNS (Phase 9.1 / Issue #145).
+
+    Naming convention: every test follows ``test_migrate_v7_<scenario>``
+    so the migration under test and the pinned scenario are both visible.
+    """
+
+    def test_migrate_v7_adds_backfill_days_column(self, temp_db: Path) -> None:
+        """V7 must add a backfill_days column to subscriptions."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            cursor = conn.execute("PRAGMA table_info(subscriptions)")
+            cols = {row["name"]: row for row in cursor.fetchall()}
+        assert "backfill_days" in cols, "V7 did not add backfill_days column"
+        assert cols["backfill_days"]["notnull"] == 1, "backfill_days must be NOT NULL"
+        assert (
+            cols["backfill_days"]["dflt_value"] == "0"
+        ), "backfill_days default must be 0"
+
+    def test_migrate_v7_adds_backfill_cursor_date_column(self, temp_db: Path) -> None:
+        """V7 must add a backfill_cursor_date column to subscriptions."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            cursor = conn.execute("PRAGMA table_info(subscriptions)")
+            cols = {row["name"]: row for row in cursor.fetchall()}
+        assert (
+            "backfill_cursor_date" in cols
+        ), "V7 did not add backfill_cursor_date column"
+        # NULL is allowed for backfill_cursor_date.
+        assert (
+            cols["backfill_cursor_date"]["notnull"] == 0
+        ), "backfill_cursor_date must allow NULL"
+
+    def test_migrate_v7_check_constraint_rejects_backfill_days_below_zero(
+        self, temp_db: Path
+    ) -> None:
+        """CHECK on backfill_days must reject negative values."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+                conn.execute(
+                    """
+                    INSERT INTO subscriptions (
+                        subscription_id, user_id, name, config, backfill_days
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    ("sub-v7-neg", "alice", "Sub", "{}", -1),
+                )
+
+    def test_migrate_v7_check_constraint_rejects_backfill_days_above_max(
+        self, temp_db: Path
+    ) -> None:
+        """CHECK on backfill_days must reject values above 365."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+                conn.execute(
+                    """
+                    INSERT INTO subscriptions (
+                        subscription_id, user_id, name, config, backfill_days
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    ("sub-v7-over", "alice", "Sub", "{}", 366),
+                )
+
+    def test_migrate_v7_accepts_backfill_days_boundary_values(
+        self, temp_db: Path
+    ) -> None:
+        """CHECK on backfill_days must accept 0 and 365 (boundaries)."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config, backfill_days
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                ("sub-v7-zero", "alice", "Zero", "{}", 0),
+            )
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config, backfill_days
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                ("sub-v7-max", "alice", "Max", "{}", 365),
+            )
+            conn.commit()
+            cnt = conn.execute(
+                "SELECT COUNT(*) FROM subscriptions WHERE backfill_days IN (0, 365)"
+            ).fetchone()[0]
+        assert cnt == 2
+
+    def test_migrate_v7_default_backfill_days_is_zero(self, temp_db: Path) -> None:
+        """Existing rows (no explicit backfill_days) must default to 0."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config
+                ) VALUES (?, ?, ?, ?)
+                """,
+                ("sub-v7-default", "alice", "Default", "{}"),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT backfill_days FROM subscriptions "
+                "WHERE subscription_id = 'sub-v7-default'"
+            ).fetchone()
+        assert row is not None
+        assert row["backfill_days"] == 0
+
+    def test_migrate_v7_records_version(self, temp_db: Path) -> None:
+        """V7 must appear in schema_migrations after a full migrate()."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        applied_versions = {m["version"] for m in manager.get_applied_migrations()}
+        assert 7 in applied_versions
+
+    def test_migrate_v7_preserves_data_inserted_under_v6_schema(
+        self, temp_db: Path
+    ) -> None:
+        """H-T1: V7 isolation upgrade test.
+
+        Apply V1-V6 only, insert a subscription row, then apply V7 in
+        isolation. V7 must (a) add the two new columns and (b) not
+        disturb any pre-existing rows. The backfill_days column for the
+        pre-V7 row should default to 0 via the ALTER TABLE DEFAULT.
+
+        Mirrors the pattern from
+        test_migrate_v5_preserves_data_inserted_under_v4_schema.
+        """
+        manager = MigrationManager(temp_db)
+        # Apply only V1-V6 -- stop short of V7.
+        conn = manager._get_connection()
+        try:
+            manager._ensure_migrations_table(conn)
+            manager.apply_migration(conn, MIGRATION_V1_INITIAL)
+            manager.apply_migration(conn, MIGRATION_V2_MONITORING_RUNS)
+            manager.apply_migration(conn, MIGRATION_V3_MONITORING_RUNS_FK)
+            manager.apply_migration(conn, MIGRATION_V4_CITATION_INFLUENCE_METRICS)
+            manager.apply_migration(conn, MIGRATION_V5_PAPER_SOURCE_TRACKING)
+            manager.apply_migration(conn, MIGRATION_V6_CITATION_COUPLING_CACHE)
+        finally:
+            conn.close()
+
+        # Insert a subscription row under the V6 schema (no backfill columns).
+        with open_connection(temp_db) as conn:
+            conn.execute(
+                """
+                INSERT INTO subscriptions (
+                    subscription_id, user_id, name, config,
+                    last_checked, is_active, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "sub-v6-legacy",
+                    "alice",
+                    "V6 Legacy Sub",
+                    "{}",
+                    None,
+                    1,
+                    "2024-06-01T00:00:00+00:00",
+                    "2024-06-01T00:00:00+00:00",
+                ),
+            )
+            conn.commit()
+
+        # Now apply V7 in isolation.
+        conn = manager._get_connection()
+        try:
+            manager._ensure_migrations_table(conn)
+            manager.apply_migration(conn, MIGRATION_V7_BACKFILL_COLUMNS)
+        finally:
+            conn.close()
+
+        # (a) New columns exist; (b) legacy row survives with default backfill_days=0.
+        with open_connection(temp_db) as conn:
+            row = conn.execute(
+                """
+                SELECT subscription_id, name, backfill_days, backfill_cursor_date
+                FROM subscriptions WHERE subscription_id = ?
+                """,
+                ("sub-v6-legacy",),
+            ).fetchone()
+        assert row is not None, "V6 row was destroyed by V7"
+        assert row["name"] == "V6 Legacy Sub"
+        assert (
+            row["backfill_days"] == 0
+        ), "V6 row backfill_days must default to 0 after V7"
+        assert (
+            row["backfill_cursor_date"] is None
+        ), "V6 row backfill_cursor_date must default to NULL after V7"
+
+    def test_migrate_v7_check_constraint_sql_contains_365_bound(self) -> None:
+        """Drift-guard: V7 SQL must reference the 365-day bound.
+
+        If BACKFILL_MAX_DAYS is ever changed in models.py, the V7 SQL
+        must also be updated. This test catches that drift at import-time.
+        Mirrors
+        test_migrate_v6_check_constraint_sql_contains_strength_and_co_citation_bounds.
+        """
+        sql = MIGRATION_V7_BACKFILL_COLUMNS.up
+        assert isinstance(sql, str)
+        assert "365" in sql, (
+            "V7 migration SQL must contain the 365-day upper bound "
+            "for the backfill_days CHECK constraint."
+        )
+        assert "0" in sql, (
+            "V7 migration SQL must contain 0 as the lower bound "
+            "for the backfill_days CHECK constraint."
+        )

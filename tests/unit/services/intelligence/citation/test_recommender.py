@@ -24,7 +24,7 @@ import structlog
 import structlog.testing
 
 from src.services.intelligence.citation import recommender as recommender_module
-from src.services.intelligence.citation.coupling_protocol import CouplingResult
+from src.services.intelligence.citation.models import CouplingResult
 from src.services.intelligence.citation.influence_scorer import InfluenceMetrics
 from src.services.intelligence.citation.models import (
     EdgeType,
@@ -70,14 +70,12 @@ def _coupling_result(
     other: str,
     strength: float = 0.5,
     shared: int = 5,
-    jaccard: float = 0.3,
 ) -> CouplingResult:
     return CouplingResult(
         paper_a_id=seed,
         paper_b_id=other,
         coupling_strength=strength,
-        shared_reference_count=shared,
-        jaccard_index=jaccard,
+        shared_references=[f"paper:s2:ref{i:03d}" for i in range(shared)],
     )
 
 
@@ -246,7 +244,7 @@ def test_recommendation_rejects_whitespace_only_paper_id() -> None:
 
 
 def test_coupling_result_rejects_invalid_id() -> None:
-    with pytest.raises(Exception, match="Invalid paper_a_id format"):
+    with pytest.raises(Exception, match="Invalid paper_id format"):
         CouplingResult(
             paper_a_id="bad/id",
             paper_b_id=_P1,
@@ -272,9 +270,9 @@ def test_coupling_result_rejects_out_of_range_strength() -> None:
 async def test_recommend_similar_returns_top_k_by_coupling(monkeypatch) -> None:
     """recommend_similar returns recommendations ordered by coupling_strength."""
     coupling_results = [
-        _coupling_result(_SEED, _P1, strength=0.9, shared=10, jaccard=0.5),
-        _coupling_result(_SEED, _P2, strength=0.6, shared=6, jaccard=0.3),
-        _coupling_result(_SEED, _P3, strength=0.3, shared=3, jaccard=0.15),
+        _coupling_result(_SEED, _P1, strength=0.9, shared=10),
+        _coupling_result(_SEED, _P2, strength=0.6, shared=6),
+        _coupling_result(_SEED, _P3, strength=0.3, shared=3),
     ]
     traverse_nodes = [
         _make_graph_node(_P1),
@@ -294,7 +292,7 @@ async def test_recommend_similar_returns_top_k_by_coupling(monkeypatch) -> None:
     assert results[0].paper_id == _P1
     assert results[0].score == pytest.approx(0.9)
     assert results[0].strategy == RecommendationStrategy.SIMILAR
-    assert "Jaccard=0.50" in results[0].reasoning
+    assert "Jaccard=0.90" in results[0].reasoning
     assert results[1].paper_id == _P2
 
     events = [e["event"] for e in cap_logs]
@@ -347,8 +345,8 @@ async def test_recommend_similar_k_above_cap_raises() -> None:
 async def test_recommend_similar_k_exceeds_candidates_returns_all() -> None:
     """M-3: k larger than available candidates returns all available, not k entries."""
     coupling_results = [
-        _coupling_result(_SEED, _P1, strength=0.9, shared=10, jaccard=0.5),
-        _coupling_result(_SEED, _P2, strength=0.6, shared=6, jaccard=0.3),
+        _coupling_result(_SEED, _P1, strength=0.9, shared=10),
+        _coupling_result(_SEED, _P2, strength=0.6, shared=6),
     ]
     traverse_nodes = [_make_graph_node(_P1), _make_graph_node(_P2)]
     rec, _, _, _, _ = _build_recommender(
@@ -371,9 +369,9 @@ async def test_recommend_similar_ties_broken_deterministically() -> None:
     must produce stable output across cache-cold and cache-warm calls.
     """
     coupling_results = [
-        _coupling_result(_SEED, _P3, strength=0.5, shared=5, jaccard=0.25),
-        _coupling_result(_SEED, _P1, strength=0.5, shared=5, jaccard=0.25),
-        _coupling_result(_SEED, _P2, strength=0.5, shared=5, jaccard=0.25),
+        _coupling_result(_SEED, _P3, strength=0.5, shared=5),
+        _coupling_result(_SEED, _P1, strength=0.5, shared=5),
+        _coupling_result(_SEED, _P2, strength=0.5, shared=5),
     ]
     traverse_nodes = [
         _make_graph_node(_P1),
@@ -922,16 +920,14 @@ async def test_recommend_similar_skips_when_other_id_equals_seed(monkeypatch) ->
     mock_cr.paper_a_id = _P1
     mock_cr.paper_b_id = _SEED
     mock_cr.coupling_strength = 0.8
-    mock_cr.jaccard_index = 0.4
-    mock_cr.shared_reference_count = 6
+    mock_cr.shared_references = [f"paper:s2:ref{i:03d}" for i in range(6)]
 
     # This coupling result has paper_a_id == seed → other = paper_b_id = seed → SKIP
     mock_cr_skip = MagicMock()
     mock_cr_skip.paper_a_id = _SEED  # == seed → other = paper_b_id
     mock_cr_skip.paper_b_id = _SEED  # other == seed → skipped
     mock_cr_skip.coupling_strength = 0.9
-    mock_cr_skip.jaccard_index = 0.5
-    mock_cr_skip.shared_reference_count = 8
+    mock_cr_skip.shared_references = [f"paper:s2:ref{i:03d}" for i in range(8)]
 
     traverse_nodes = [_make_graph_node(_P1)]
 
@@ -1143,44 +1139,9 @@ async def test_recommend_active_successors_bad_year_value_excluded(
     assert "recommender_seed_isolated_returns_empty" in events
 
 
-# ---------------------------------------------------------------------------
-# Coverage gap: coupling_protocol._validate_paper_id_str branches
-# ---------------------------------------------------------------------------
-
-
-def test_coupling_protocol_validate_empty_string() -> None:
-    """_validate_paper_id_str rejects empty strings."""
-    from src.services.intelligence.citation.coupling_protocol import (
-        _validate_paper_id_str,
-    )
-
-    with pytest.raises(ValueError, match="must be a non-empty string"):
-        _validate_paper_id_str("", "paper_a_id")
-
-
-def test_coupling_protocol_validate_too_long() -> None:
-    """_validate_paper_id_str rejects strings exceeding PAPER_ID_MAX_LENGTH."""
-    from src.services.intelligence.citation.coupling_protocol import (
-        _validate_paper_id_str,
-    )
-
-    with pytest.raises(ValueError, match="exceeds max"):
-        _validate_paper_id_str("a" * 513, "paper_a_id")
-
-
-def test_coupling_protocol_validate_invalid_format() -> None:
-    """_validate_paper_id_str rejects invalid format."""
-    from src.services.intelligence.citation.coupling_protocol import (
-        _validate_paper_id_str,
-    )
-
-    with pytest.raises(ValueError, match="Invalid paper_a_id format"):
-        _validate_paper_id_str("bad/id", "paper_a_id")
-
-
 def test_coupling_result_model_post_init_rejects_bad_a_id() -> None:
-    """CouplingResult.model_post_init rejects bad paper_a_id via field validator."""
-    with pytest.raises(Exception, match="Invalid paper_a_id format"):
+    """CouplingResult rejects bad paper_a_id via field validator."""
+    with pytest.raises(Exception, match="Invalid paper_id format"):
         CouplingResult(
             paper_a_id="bad/id",
             paper_b_id=_P1,
@@ -1189,8 +1150,8 @@ def test_coupling_result_model_post_init_rejects_bad_a_id() -> None:
 
 
 def test_coupling_result_model_post_init_rejects_bad_b_id() -> None:
-    """CouplingResult.model_post_init rejects bad paper_b_id."""
-    with pytest.raises(Exception, match="Invalid paper_b_id format"):
+    """CouplingResult rejects bad paper_b_id via field validator."""
+    with pytest.raises(Exception, match="Invalid paper_id format"):
         CouplingResult(
             paper_a_id=_P1,
             paper_b_id="bad/id",
@@ -1304,3 +1265,196 @@ async def test_recommend_bridge_distant_cites_outside_r2_ignored(
     assert results == []
     events = [e["event"] for e in cap_logs]
     assert "recommender_seed_isolated_returns_empty" in events
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap closures (paying down debt — recommender.py was at 92.10%)
+# ---------------------------------------------------------------------------
+
+
+def test_connect_wires_real_collaborators(monkeypatch, tmp_path) -> None:
+    """connect() factory wires SQLiteGraphStore + crawler + scorer correctly.
+
+    Patches the constructors at the recommender's namespace boundary to avoid
+    real network clients and verifies the wiring graph (covers the connect()
+    factory).  Cross-wiring assertion: crawler and scorer must receive the same
+    store object that SQLiteGraphStore() returned.
+    """
+    db_path = tmp_path / "graph.db"
+    captured: dict[str, object] = {}
+
+    def _fake_store(p):
+        captured["store"] = p
+        mock = MagicMock(name="SQLiteGraphStore")
+        captured["store_obj"] = mock
+        return mock
+
+    def _fake_s2():
+        return MagicMock(name="SemanticScholarCitationClient")
+
+    def _fake_oa():
+        return MagicMock(name="OpenAlexCitationClient")
+
+    def _fake_crawler(*, store, s2_client, openalex_client):
+        captured["crawler_store"] = store
+        return MagicMock(name="CitationCrawler")
+
+    def _fake_scorer(*, store):
+        captured["scorer_store"] = store
+        return MagicMock(name="InfluenceScorer")
+
+    def _fake_coupling_analyzer(store):
+        captured["coupling_store"] = store
+        return MagicMock(name="CouplingAnalyzer")
+
+    monkeypatch.setattr(recommender_module, "SQLiteGraphStore", _fake_store)
+    monkeypatch.setattr(recommender_module, "CitationCrawler", _fake_crawler)
+    monkeypatch.setattr(recommender_module, "OpenAlexCitationClient", _fake_oa)
+    monkeypatch.setattr(recommender_module, "SemanticScholarCitationClient", _fake_s2)
+    monkeypatch.setattr(recommender_module, "InfluenceScorer", _fake_scorer)
+    monkeypatch.setattr(recommender_module, "CouplingAnalyzer", _fake_coupling_analyzer)
+
+    rec = CitationRecommender.connect(db_path=db_path)
+
+    assert isinstance(rec, CitationRecommender)
+    assert captured["store"] == db_path
+    # Cross-wiring: crawler, scorer, and coupling all receive the same store object.
+    store_obj = captured["store_obj"]
+    assert captured["crawler_store"] is store_obj
+    assert captured["scorer_store"] is store_obj
+    assert captured["coupling_store"] is store_obj
+    # Default coupling is a real CouplingAnalyzer instance (mocked here by
+    # _fake_coupling_analyzer which returns a MagicMock).
+    assert isinstance(rec._coupling, MagicMock)  # mocked by _fake_coupling_analyzer
+
+
+def test_connect_uses_injected_coupling(monkeypatch, tmp_path) -> None:
+    """connect() uses the injected coupling analyzer when provided."""
+    monkeypatch.setattr(recommender_module, "SQLiteGraphStore", lambda p: MagicMock())
+    monkeypatch.setattr(recommender_module, "CitationCrawler", lambda **kw: MagicMock())
+    monkeypatch.setattr(
+        recommender_module, "OpenAlexCitationClient", lambda: MagicMock()
+    )
+    monkeypatch.setattr(
+        recommender_module, "SemanticScholarCitationClient", lambda: MagicMock()
+    )
+    monkeypatch.setattr(
+        recommender_module, "InfluenceScorer", lambda *, store: MagicMock()
+    )
+
+    custom_coupling = AsyncMock()
+    rec = CitationRecommender.connect(
+        db_path=tmp_path / "graph.db", coupling=custom_coupling
+    )
+    assert rec._coupling is custom_coupling
+
+
+@pytest.mark.asyncio
+async def test_recommend_similar_caps_candidates_at_max(monkeypatch) -> None:
+    """When candidates > _MAX_CANDIDATES, the list is truncated (line 287)."""
+    # Force a tiny cap so we can prove the truncation path runs without
+    # constructing 500+ MagicMock GraphNode objects.
+    monkeypatch.setattr(recommender_module, "_MAX_CANDIDATES", 3)
+
+    traverse_nodes = [_make_graph_node(f"paper:s2:cap{i:03d}") for i in range(10)]
+    rec, mock_coupling, _, _, _ = _build_recommender(
+        traverse_returns=traverse_nodes,
+        coupling_results=[],
+    )
+
+    monkeypatch.setattr(recommender_module, "logger", structlog.get_logger())
+    await rec.recommend_similar(_SEED, k=2)
+
+    # Exactly _MAX_CANDIDATES (=3) ids should be passed to the analyzer.
+    call_args = mock_coupling.analyze_for_paper.call_args
+    passed_candidates = call_args.args[1]
+    assert len(passed_candidates) == 3
+
+
+@pytest.mark.asyncio
+async def test_recommend_bridge_papers_caps_distant_frontier(monkeypatch) -> None:
+    """When distant_nodes > _BRIDGE_MAX_DISTANT, frontier is truncated +
+    a recommender_bridge_frontier_truncated event is emitted (lines 588-594)."""
+    monkeypatch.setattr(recommender_module, "_BRIDGE_MAX_DISTANT", 2)
+
+    # Build a graph: SEED → P1 → P2; r2 = {P1, P2}; r3 = many distant nodes.
+    distant_ids = [f"paper:s2:dist{i:03d}" for i in range(10)]
+
+    # recommend_bridge_papers calls traverse at depth=2 (near set) and
+    # depth=3 (distant frontier); depth=1 is never requested.
+    def _traverse_se(node_id, *, edge_types, max_depth, direction):
+        if max_depth == 2:
+            return [_make_graph_node(_P1), _make_graph_node(_P2)]  # r2 = {P1, P2}
+        if max_depth == 3:
+            return [_make_graph_node(_P1), _make_graph_node(_P2)] + [
+                _make_graph_node(d) for d in distant_ids
+            ]
+        return []
+
+    mock_store = MagicMock()
+    mock_store.traverse = MagicMock(side_effect=_traverse_se)
+    mock_store.get_node = MagicMock(return_value=None)
+    mock_store._list_outgoing_edges_for_nodes = MagicMock(return_value={})
+
+    rec = CitationRecommender(
+        coupling=AsyncMock(),
+        crawler=MagicMock(),
+        scorer=AsyncMock(),
+        store=mock_store,
+    )
+
+    monkeypatch.setattr(recommender_module, "logger", structlog.get_logger())
+    with structlog.testing.capture_logs() as cap_logs:
+        await rec.recommend_bridge_papers(_SEED, k=3)
+
+    truncate_events = [
+        e for e in cap_logs if e.get("event") == "recommender_bridge_frontier_truncated"
+    ]
+    assert len(truncate_events) == 1
+    assert truncate_events[0]["cap"] == 2
+    # Bulk query receives only the capped set (2 nodes), not all 10.
+    bulk_call = mock_store._list_outgoing_edges_for_nodes.call_args
+    # First positional arg is distant_nodes (capped to _BRIDGE_MAX_DISTANT=2).
+    assert len(bulk_call.args[0]) == 2
+
+
+@pytest.mark.asyncio
+async def test_recommend_all_strategy_failure_logs_and_returns_empty(
+    monkeypatch,
+) -> None:
+    """recommend_all logs strategy failures and returns [] for failed strategies
+    (lines 718-724). The other 3 strategies still produce results."""
+    rec, _, _, _, mock_store = _build_recommender(traverse_returns=[])
+
+    # Make recommend_similar blow up; others should return [] from
+    # the empty-traverse fixture cleanly.  The class-level patch receives
+    # (self, seed_id, k=10) matching the real method signature.
+    async def _failing_similar(self, seed_id, k=10):
+        raise RuntimeError("simulated coupling outage")
+
+    # Patch at the class level so the method is replaced for all instances
+    # (instance-level patching does not exercise the real dispatch path).
+    monkeypatch.setattr(CitationRecommender, "recommend_similar", _failing_similar)
+    monkeypatch.setattr(recommender_module, "logger", structlog.get_logger())
+
+    with structlog.testing.capture_logs() as cap_logs:
+        result = await rec.recommend_all(_SEED, k_per_strategy=3)
+
+    # Failed strategy: empty list, error logged.
+    assert result[RecommendationStrategy.SIMILAR] == []
+    failure_events = [
+        e
+        for e in cap_logs
+        if e.get("event") == "recommender_strategy_failed_in_recommend_all"
+    ]
+    assert len(failure_events) == 1
+    assert failure_events[0]["strategy"] == RecommendationStrategy.SIMILAR.value
+    assert "simulated coupling outage" in failure_events[0]["error"]
+    # Structured-log field pins (M-1).
+    assert failure_events[0]["log_level"] == "error"
+    assert failure_events[0]["seed_id"] == _SEED
+
+    # Other strategies: present (empty since no traverse), not raised.
+    assert result[RecommendationStrategy.INFLUENTIAL_PREDECESSOR] == []
+    assert result[RecommendationStrategy.ACTIVE_SUCCESSOR] == []
+    assert result[RecommendationStrategy.BRIDGE] == []

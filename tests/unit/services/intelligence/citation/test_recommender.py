@@ -1265,3 +1265,212 @@ async def test_recommend_bridge_distant_cites_outside_r2_ignored(
     assert results == []
     events = [e["event"] for e in cap_logs]
     assert "recommender_seed_isolated_returns_empty" in events
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap closures (paying down debt — recommender.py was at 92.10%)
+# ---------------------------------------------------------------------------
+
+
+def test_connect_wires_real_collaborators(monkeypatch, tmp_path) -> None:
+    """connect() factory wires SQLiteGraphStore + crawler + scorer correctly.
+
+    Patches the constructors at the namespace boundary to avoid real network
+    clients and verifies the wiring graph (covers lines 215-239).
+    """
+    db_path = tmp_path / "graph.db"
+    captured: dict[str, object] = {}
+
+    def _fake_store(p):
+        captured["store"] = p
+        return MagicMock(name="SQLiteGraphStore")
+
+    def _fake_s2():
+        return MagicMock(name="SemanticScholarCitationClient")
+
+    def _fake_oa():
+        return MagicMock(name="OpenAlexCitationClient")
+
+    def _fake_crawler(*, store, s2_client, openalex_client):
+        captured["crawler_store"] = store
+        return MagicMock(name="CitationCrawler")
+
+    def _fake_scorer(*, store):
+        captured["scorer_store"] = store
+        return MagicMock(name="InfluenceScorer")
+
+    monkeypatch.setattr(recommender_module, "SQLiteGraphStore", _fake_store)
+    monkeypatch.setattr(
+        "src.services.intelligence.citation.crawler.CitationCrawler", _fake_crawler
+    )
+    monkeypatch.setattr(
+        "src.services.intelligence.citation.openalex_client.OpenAlexCitationClient",
+        _fake_oa,
+    )
+    monkeypatch.setattr(
+        "src.services.intelligence.citation.semantic_scholar_client."
+        "SemanticScholarCitationClient",
+        _fake_s2,
+    )
+    monkeypatch.setattr(recommender_module, "InfluenceScorer", _fake_scorer)
+
+    rec = CitationRecommender.connect(db_path=db_path)
+
+    assert isinstance(rec, CitationRecommender)
+    assert captured["store"] == db_path
+    # Default coupling is _NullCouplingAdapter when no coupling injected.
+    from src.services.intelligence.citation.recommender import _NullCouplingAdapter
+
+    assert isinstance(rec._coupling, _NullCouplingAdapter)
+
+
+def test_connect_uses_injected_coupling(monkeypatch, tmp_path) -> None:
+    """connect() uses the injected coupling analyzer when provided."""
+    monkeypatch.setattr(recommender_module, "SQLiteGraphStore", lambda p: MagicMock())
+    monkeypatch.setattr(
+        "src.services.intelligence.citation.crawler.CitationCrawler",
+        lambda **kw: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "src.services.intelligence.citation.openalex_client.OpenAlexCitationClient",
+        lambda: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "src.services.intelligence.citation.semantic_scholar_client."
+        "SemanticScholarCitationClient",
+        lambda: MagicMock(),
+    )
+    monkeypatch.setattr(
+        recommender_module, "InfluenceScorer", lambda *, store: MagicMock()
+    )
+
+    custom_coupling = AsyncMock()
+    rec = CitationRecommender.connect(
+        db_path=tmp_path / "graph.db", coupling=custom_coupling
+    )
+    assert rec._coupling is custom_coupling
+
+
+@pytest.mark.asyncio
+async def test_recommend_similar_caps_candidates_at_max(monkeypatch) -> None:
+    """When candidates > _MAX_CANDIDATES, the list is truncated (line 287)."""
+    # Force a tiny cap so we can prove the truncation path runs without
+    # constructing 500+ MagicMock GraphNode objects.
+    monkeypatch.setattr(recommender_module, "_MAX_CANDIDATES", 3)
+
+    traverse_nodes = [_make_graph_node(f"paper:s2:cap{i:03d}") for i in range(10)]
+    rec, mock_coupling, _, _, _ = _build_recommender(
+        traverse_returns=traverse_nodes,
+        coupling_results=[],
+    )
+
+    monkeypatch.setattr(recommender_module, "logger", structlog.get_logger())
+    await rec.recommend_similar(_SEED, k=2)
+
+    # Exactly _MAX_CANDIDATES (=3) ids should be passed to the analyzer.
+    call_args = mock_coupling.analyze_for_paper.call_args
+    passed_candidates = call_args[0][1]
+    assert len(passed_candidates) == 3
+
+
+@pytest.mark.asyncio
+async def test_recommend_bridge_papers_caps_distant_frontier(monkeypatch) -> None:
+    """When distant_nodes > _BRIDGE_MAX_DISTANT, frontier is truncated +
+    a recommender_bridge_frontier_truncated event is emitted (lines 588-594)."""
+    monkeypatch.setattr(recommender_module, "_BRIDGE_MAX_DISTANT", 2)
+
+    # Build a graph: SEED → P1 → P2; r2 = {P1, P2}; r3 = many distant nodes.
+    distant_ids = [f"paper:s2:dist{i:03d}" for i in range(10)]
+
+    def _traverse_se(node_id, *, edge_types, max_depth, direction):
+        if max_depth == 1:
+            return [_make_graph_node(_P1)]  # r1 = {P1}
+        if max_depth == 2:
+            return [_make_graph_node(_P1), _make_graph_node(_P2)]  # r2 = {P1, P2}
+        if max_depth == 3:
+            return [_make_graph_node(_P1), _make_graph_node(_P2)] + [
+                _make_graph_node(d) for d in distant_ids
+            ]
+        return []
+
+    mock_store = MagicMock()
+    mock_store.traverse = MagicMock(side_effect=_traverse_se)
+    mock_store.get_node = MagicMock(return_value=None)
+    mock_store._list_outgoing_edges_for_nodes = MagicMock(return_value={})
+
+    rec = CitationRecommender(
+        coupling=AsyncMock(),
+        crawler=MagicMock(),
+        scorer=AsyncMock(),
+        store=mock_store,
+    )
+
+    monkeypatch.setattr(recommender_module, "logger", structlog.get_logger())
+    with structlog.testing.capture_logs() as cap_logs:
+        await rec.recommend_bridge_papers(_SEED, k=3)
+
+    truncate_events = [
+        e for e in cap_logs if e.get("event") == "recommender_bridge_frontier_truncated"
+    ]
+    assert len(truncate_events) == 1
+    assert truncate_events[0]["cap"] == 2
+    # Bulk query receives only the capped set (2 nodes), not all 10.
+    bulk_call = mock_store._list_outgoing_edges_for_nodes.call_args
+    # First positional arg is distant_nodes (capped to _BRIDGE_MAX_DISTANT=2).
+    assert len(bulk_call.args[0]) == 2
+
+
+@pytest.mark.asyncio
+async def test_recommend_all_strategy_failure_logs_and_returns_empty(
+    monkeypatch,
+) -> None:
+    """recommend_all logs strategy failures and returns [] for failed strategies
+    (lines 718-724). The other 3 strategies still produce results."""
+    rec, _, _, _, mock_store = _build_recommender(traverse_returns=[])
+
+    # Make recommend_similar blow up; others should return [] from
+    # the empty-traverse fixture cleanly.
+    async def _failing_similar(seed_id, k):
+        raise RuntimeError("simulated coupling outage")
+
+    monkeypatch.setattr(rec, "recommend_similar", _failing_similar)
+    monkeypatch.setattr(recommender_module, "logger", structlog.get_logger())
+
+    with structlog.testing.capture_logs() as cap_logs:
+        result = await rec.recommend_all(_SEED, k_per_strategy=3)
+
+    # Failed strategy: empty list, error logged.
+    assert result[RecommendationStrategy.SIMILAR] == []
+    failure_events = [
+        e
+        for e in cap_logs
+        if e.get("event") == "recommender_strategy_failed_in_recommend_all"
+    ]
+    assert len(failure_events) == 1
+    assert failure_events[0]["strategy"] == RecommendationStrategy.SIMILAR.value
+    assert "simulated coupling outage" in failure_events[0]["error"]
+
+    # Other strategies: present (empty since no traverse), not raised.
+    assert result[RecommendationStrategy.INFLUENTIAL_PREDECESSOR] == []
+    assert result[RecommendationStrategy.ACTIVE_SUCCESSOR] == []
+    assert result[RecommendationStrategy.BRIDGE] == []
+
+
+@pytest.mark.asyncio
+async def test_null_coupling_adapter_analyze_pair_returns_none() -> None:
+    """_NullCouplingAdapter.analyze_pair returns None (line 808 default impl)."""
+    from src.services.intelligence.citation.recommender import _NullCouplingAdapter
+
+    adapter = _NullCouplingAdapter()
+    result = await adapter.analyze_pair("paper:s2:a", "paper:s2:b")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_null_coupling_adapter_analyze_for_paper_returns_empty() -> None:
+    """_NullCouplingAdapter.analyze_for_paper returns [] (line 817 default impl)."""
+    from src.services.intelligence.citation.recommender import _NullCouplingAdapter
+
+    adapter = _NullCouplingAdapter()
+    result = await adapter.analyze_for_paper("paper:s2:seed", ["paper:s2:c1"], top_k=5)
+    assert result == []

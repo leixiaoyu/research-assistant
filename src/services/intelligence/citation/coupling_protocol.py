@@ -53,7 +53,7 @@ class CouplingAnalyzerProtocol(Protocol):
         Returns:
             A ``CouplingResult`` with the coupling metrics.
         """
-        ...  # pragma: no cover
+        raise NotImplementedError
 
     async def analyze_for_paper(
         self,
@@ -72,4 +72,4 @@ class CouplingAnalyzerProtocol(Protocol):
             Coupling results sorted by ``coupling_strength`` descending,
             at most ``top_k`` entries.
         """
-        ...  # pragma: no cover
+        raise NotImplementedError

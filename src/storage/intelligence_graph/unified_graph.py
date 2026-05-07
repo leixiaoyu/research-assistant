@@ -1186,6 +1186,70 @@ class SQLiteGraphStore:
         finally:
             conn.close()
 
+    def get_papers_citing_both(self, paper_a_id: str, paper_b_id: str) -> set[str]:
+        """Return node ids that have outgoing CITES edges to BOTH target papers.
+
+        Implements the co-citation reverse-edge walk for
+        :class:`~src.services.intelligence.citation.coupling_analyzer.CouplingAnalyzer`:
+        a single SQL query groups by ``source_id`` and keeps only those rows
+        that match *both* target ids, so the result set is the intersection of
+        the two inbound-citer sets — exactly the co-citation count numerator.
+
+        The SQL emits at most one row per ``source_id``; the Python side
+        collects them into a :class:`set` so callers can sample or count
+        without a second pass.
+
+        Args:
+            paper_a_id: Canonical node id of the first target paper.
+            paper_b_id: Canonical node id of the second target paper.
+
+        Returns:
+            Set of source node ids that cite both ``paper_a_id`` and
+            ``paper_b_id``.  Empty set if there are no shared citers.
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                """
+                SELECT source_id FROM edges
+                WHERE edge_type = ? AND target_id IN (?, ?)
+                GROUP BY source_id
+                HAVING COUNT(DISTINCT target_id) = 2
+                """,
+                (EdgeType.CITES.value, paper_a_id, paper_b_id),
+            )
+            return {row["source_id"] for row in cursor.fetchall()}
+        finally:
+            conn.close()
+
+    def get_inbound_citer_count(self, paper_id: str) -> int:
+        """Return the number of nodes with an outgoing CITES edge to ``paper_id``.
+
+        Used by
+        :class:`~src.services.intelligence.citation.coupling_analyzer.CouplingAnalyzer`
+        to enforce the DoS fan-out cap before executing the full co-citation walk.
+
+        Args:
+            paper_id: Canonical node id of the paper whose inbound
+                citation count is requested.
+
+        Returns:
+            Count of distinct source nodes that cite ``paper_id``.
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                """
+                SELECT COUNT(*) as cnt FROM edges
+                WHERE edge_type = ? AND target_id = ?
+                """,
+                (EdgeType.CITES.value, paper_id),
+            )
+            row = cursor.fetchone()
+            return row["cnt"] if row else 0
+        finally:
+            conn.close()
+
     # Metrics
 
     def get_node_count(self, node_type: Optional[NodeType] = None) -> int:

@@ -198,7 +198,9 @@ def _build_store(*, db_path: Optional[Path] = None) -> Any:
 @handle_errors
 def build_command(
     paper_id: str = typer.Argument(..., help="Seed paper id"),
-    depth: int = typer.Option(1, "--depth", help="Graph depth (currently fixed at 1)"),
+    depth: int = typer.Option(
+        1, "--depth", min=1, max=1, help="Graph depth (currently fixed at 1)"
+    ),
     db_path: Optional[Path] = typer.Option(
         None, "--db-path", help="Override citation DB path"
     ),
@@ -248,7 +250,9 @@ def build_command(
 def expand_command(
     paper_id: str = typer.Argument(..., help="Seed paper id"),
     depth: int = typer.Option(1, "--depth", min=1, max=3, help="BFS depth (1-3)"),
-    max_papers: int = typer.Option(50, "--max-papers", help="Max papers per BFS level"),
+    max_papers: int = typer.Option(
+        50, "--max-papers", min=10, max=200, help="Max papers per BFS level (10-200)"
+    ),
     direction: CrawlDirection = typer.Option(
         CrawlDirection.BOTH, "--direction", help="Crawl direction"
     ),
@@ -315,7 +319,9 @@ _VALID_STRATEGIES = [
 @handle_errors
 def related_command(
     paper_id: str = typer.Argument(..., help="Seed paper id"),
-    k: int = typer.Option(5, "--k", help="Results per strategy"),
+    k: int = typer.Option(
+        5, "--k", min=1, max=100, help="Results per strategy (1-100)"
+    ),
     strategy: str = typer.Option(
         _STRATEGY_ALL,
         "--strategy",
@@ -450,7 +456,9 @@ def influence_command(
 def path_command(
     from_paper_id: str = typer.Argument(..., help="Source paper id"),
     to_paper_id: str = typer.Argument(..., help="Target paper id"),
-    max_depth: int = typer.Option(6, "--max-depth", help="Max BFS depth"),
+    max_depth: int = typer.Option(
+        6, "--max-depth", min=1, max=10, help="Max BFS depth (1-10)"
+    ),
     db_path: Optional[Path] = typer.Option(
         None, "--db-path", help="Override citation DB path"
     ),
@@ -462,7 +470,7 @@ def path_command(
 
     gs = _build_store(db_path=db_path)
 
-    path_nodes = gs.shortest_path(from_paper_id, to_paper_id)
+    path_nodes = gs.shortest_path(from_paper_id, to_paper_id, max_depth=max_depth)
 
     if path_nodes is None:
         logger.info(

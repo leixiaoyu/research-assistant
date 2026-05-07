@@ -999,7 +999,9 @@ class TestPathCommand:
         assert "paper:s2:aaa" in result.output
         assert "paper:s2:ccc" in result.output
         assert "->" in result.output
-        mock_store.shortest_path.assert_called_once_with("paper:s2:aaa", "paper:s2:ccc")
+        mock_store.shortest_path.assert_called_once_with(
+            "paper:s2:aaa", "paper:s2:ccc", max_depth=6
+        )
 
     def test_path_no_path_found_exits_nonzero(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch

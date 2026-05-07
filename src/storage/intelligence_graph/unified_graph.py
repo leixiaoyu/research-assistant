@@ -283,16 +283,21 @@ class GraphStore(Protocol):
         ...  # pragma: no cover - Protocol abstract method
 
     def shortest_path(
-        self, source_id: str, target_id: str
+        self,
+        source_id: str,
+        target_id: str,
+        max_depth: Optional[int] = None,
     ) -> Optional[list[GraphNode]]:
         """Find shortest path between two nodes.
 
         Args:
             source_id: Source node ID
             target_id: Target node ID
+            max_depth: Maximum BFS depth. ``None`` means unbounded.
 
         Returns:
-            List of nodes in path, or None if no path exists
+            List of nodes in path, or None if no path exists or target
+            is beyond ``max_depth`` hops from source.
         """
         ...  # pragma: no cover - Protocol abstract method
 
@@ -1028,7 +1033,10 @@ class SQLiteGraphStore:
         return out
 
     def shortest_path(
-        self, source_id: str, target_id: str
+        self,
+        source_id: str,
+        target_id: str,
+        max_depth: Optional[int] = None,
     ) -> Optional[list[GraphNode]]:
         """Find shortest path between two nodes using BFS.
 
@@ -1042,6 +1050,14 @@ class SQLiteGraphStore:
         The bidirectional neighbor query uses ``UNION ALL``; the BFS
         ``visited`` set already deduplicates, so plain ``UNION`` is wasted
         work.
+
+        Args:
+            source_id: Source node ID.
+            target_id: Target node ID.
+            max_depth: Maximum BFS depth. ``None`` means unbounded.
+                When set, the BFS stops expanding nodes whose depth
+                would exceed this bound, and ``None`` is returned if the
+                target has not been found within the bound.
         """
         conn = self._get_connection()
         try:
@@ -1050,16 +1066,23 @@ class SQLiteGraphStore:
             # so the early-exit goes through one consistent code path
             # instead of opening a separate connection via ``get_node``.
             if source_id == target_id:
+                # depth-0 path: never exceeds any max_depth bound
                 fetched = self._fetch_nodes_by_ids(conn, [source_id])
                 node = fetched.get(source_id)
                 return [node] if node else None
 
             visited: set[str] = {source_id}
             parent: dict[str, Optional[str]] = {source_id: None}
-            queue: deque[str] = deque([source_id])
+            # Queue stores (node_id, depth_from_source) so the depth
+            # bound can be enforced without an additional lookup.
+            queue: deque[tuple[str, int]] = deque([(source_id, 0)])
 
             while queue:
-                current_id = queue.popleft()
+                current_id, current_depth = queue.popleft()
+
+                # Do not expand beyond the caller-supplied depth cap.
+                if max_depth is not None and current_depth >= max_depth:
+                    continue
 
                 # Get all neighbors (UNION ALL: visited dedupes already)
                 cursor = conn.execute(
@@ -1095,7 +1118,7 @@ class SQLiteGraphStore:
                         # strict consistency should re-check counts.
                         return [fetched[nid] for nid in path_ids if nid in fetched]
 
-                    queue.append(neighbor_id)
+                    queue.append((neighbor_id, current_depth + 1))
 
             return None  # No path found
         finally:

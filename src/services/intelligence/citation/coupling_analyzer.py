@@ -42,7 +42,6 @@ Failure semantics
 from __future__ import annotations
 
 import asyncio
-import random
 from typing import TYPE_CHECKING, Optional
 
 import structlog
@@ -81,12 +80,11 @@ _ANALYZE_FOR_PAPER_CONCURRENCY: int = 10
 _MAX_REFERENCES: int = 50_000
 
 # DoS cap: if either paper has more inbound CITES edges than this, the full
-# co-citation walk is too expensive. We sample a random subset instead.
+# co-citation walk is skipped entirely and 0 is returned as a sentinel.
+# Rationale: 50K edges × ~100 bytes ≈ 5MB join; SQLite degrades >1s past this
+# point.  No useful estimate can be produced without an expensive subset query
+# that defeats the purpose of the guard.
 MAX_INBOUND_CITERS_FOR_CO_CITATION: int = 50_000
-
-# When the inbound-citer count exceeds the cap, sample this many source nodes
-# at random and scale the count proportionally.
-CO_CITATION_SAMPLE_SIZE: int = 5_000
 
 
 def _validate_paper_id(paper_id: str) -> None:
@@ -282,12 +280,19 @@ class CouplingAnalyzer:
 
         DoS guard:
             If either paper has > :data:`MAX_INBOUND_CITERS_FOR_CO_CITATION`
-            inbound CITES edges, the walk is too expensive to execute exactly.
-            A ``coupling_co_citation_truncated`` audit event is emitted and a
-            random sample of :data:`CO_CITATION_SAMPLE_SIZE` shared-citer
-            candidates is used to approximate the count.  The approximation
-            preserves monotonicity (higher co-citation → higher estimate) but
-            is not exact; callers should treat truncated values as lower bounds.
+            inbound CITES edges, the walk is **skipped entirely** and ``0`` is
+            returned as a sentinel value.  A
+            ``coupling_co_citation_truncated`` audit event is emitted so
+            operators can monitor truncation frequency.
+
+            The previous implementation fetched the full shared-citer set
+            anyway and applied sampling math that reduced to an identity
+            (``round(sample_size * len(shared) / sample_size) == len(shared)``).
+            That approach provided no DoS protection.  The correct fix is to
+            skip the expensive ``get_papers_citing_both`` call entirely when
+            the DoS cap is exceeded; no useful estimate can be produced without
+            running an expensive subset query that defeats the purpose of the
+            guard.
 
         Args:
             paper_a_id: First paper (already validated, != paper_b_id).
@@ -295,7 +300,8 @@ class CouplingAnalyzer:
 
         Returns:
             Count of third-party papers that cite both inputs.  0 when either
-            paper has no inbound citations or when no shared citer exists.
+            paper has no inbound citations, when no shared citer exists, or
+            when the DoS cap is exceeded (sentinel).
         """
         count_a = self.store.get_inbound_citer_count(paper_a_id)
         count_b = self.store.get_inbound_citer_count(paper_b_id)
@@ -309,20 +315,12 @@ class CouplingAnalyzer:
                 inbound_count=offending_count,
                 cap=MAX_INBOUND_CITERS_FOR_CO_CITATION,
             )
-            # Sample: fetch the full shared-citer set, then sample from it.
-            # Because both papers exceed the cap (or at least one does), we
-            # cannot avoid the full query here; the cap guards against degenerate
-            # graphs where one paper is cited by millions of others.  The sample
-            # produces a proportionally-scaled estimate.
-            shared = self.store.get_papers_citing_both(paper_a_id, paper_b_id)
-            if len(shared) <= CO_CITATION_SAMPLE_SIZE:
-                return len(shared)
-            sampled = random.sample(list(shared), CO_CITATION_SAMPLE_SIZE)
-            # Scale the sample count back to an estimate of the full count.
-            return round(len(sampled) * len(shared) / CO_CITATION_SAMPLE_SIZE)
+            # Skip the expensive walk entirely — return 0 as a sentinel.
+            # Callers are expected to treat 0 under truncation as
+            # "count unavailable" rather than "no co-citation".
+            return 0
 
-        shared = self.store.get_papers_citing_both(paper_a_id, paper_b_id)
-        return len(shared)
+        return self.store.count_papers_citing_both(paper_a_id, paper_b_id)
 
     def _get_references(self, paper_id: str) -> frozenset[str]:
         """Return the set of paper ids that ``paper_id`` references.

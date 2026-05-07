@@ -114,8 +114,12 @@ def _mock_store_with_refs(
         citers_b = set(effective_citers.get(b_id, []))
         return citers_a & citers_b
 
+    def _count_papers_citing_both(a_id: str, b_id: str) -> int:
+        return len(_get_papers_citing_both(a_id, b_id))
+
     store.get_inbound_citer_count.side_effect = _get_inbound_citer_count
     store.get_papers_citing_both.side_effect = _get_papers_citing_both
+    store.count_papers_citing_both.side_effect = _count_papers_citing_both
 
     return store
 
@@ -662,10 +666,8 @@ class TestCoCitationCount:
         the test doesn't need to insert 50,001 rows.  The mock returns > 3
         citers for PAPER_A, triggering the DoS guard.
         """
-        import src.services.intelligence.citation.coupling_analyzer as _amod_trunc
-
         monkeypatch.setattr(analyzer_mod, "logger", structlog.get_logger())
-        monkeypatch.setattr(_amod_trunc, "MAX_INBOUND_CITERS_FOR_CO_CITATION", 3)
+        monkeypatch.setattr(analyzer_mod, "MAX_INBOUND_CITERS_FOR_CO_CITATION", 3)
 
         # 4 citers for PAPER_A > cap of 3; 2 shared citers (PAPER_X, PAPER_Y).
         citer_ids = [f"paper:s2:cit{i:04d}" for i in range(4)]
@@ -689,8 +691,9 @@ class TestCoCitationCount:
         assert trunc_events[0]["paper_b_id"] == PAPER_B
         assert trunc_events[0]["inbound_count"] == 4
         assert trunc_events[0]["cap"] == 3
-        # Result must be computed (non-negative) even when truncated.
-        assert result.co_citation_count >= 0
+        # When truncation fires, the sentinel value 0 is returned — the
+        # expensive get_papers_citing_both walk is skipped entirely.
+        assert result.co_citation_count == 0
 
     @pytest.mark.asyncio
     async def test_compute_pair_populates_co_citation_count(self) -> None:
@@ -710,31 +713,27 @@ class TestCoCitationCount:
         assert result.coupling_strength == pytest.approx(3 / 7, rel=1e-6)
 
     @pytest.mark.asyncio
-    async def test_co_citation_count_truncation_samples_when_shared_exceeds_sample_size(
+    async def test_co_citation_count_truncation_skips_walk_entirely(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When shared citers exceed CO_CITATION_SAMPLE_SIZE, sampling path executes.
+        """When DoS cap is exceeded, get_papers_citing_both is never called.
 
-        Patches both the cap and the sample size to tiny values so the test
-        is fast.  Verifies the scaled result is non-negative and that the
-        truncation log event is emitted.
+        Sampling has been removed (H-1 fix): the old broken math was an
+        algebraic identity ``round(n * len(shared) / n) == len(shared)``.
+        The correct behaviour is to skip the expensive walk entirely and
+        return 0 as a sentinel.  This test verifies that
+        ``count_papers_citing_both`` is not called when the cap fires.
         """
-        import src.services.intelligence.citation.coupling_analyzer as _amod
-
         monkeypatch.setattr(analyzer_mod, "logger", structlog.get_logger())
-        # Set cap to 2 (so 3 citers for PAPER_A triggers truncation)
-        # and sample size to 1 so the sample branch executes (shared > sample_size).
-        monkeypatch.setattr(_amod, "MAX_INBOUND_CITERS_FOR_CO_CITATION", 2)
-        monkeypatch.setattr(_amod, "CO_CITATION_SAMPLE_SIZE", 1)
+        monkeypatch.setattr(analyzer_mod, "MAX_INBOUND_CITERS_FOR_CO_CITATION", 2)
 
-        # 3 citers for PAPER_A (> cap of 2), all 3 also cite PAPER_B → shared = 3.
-        # shared (3) > CO_CITATION_SAMPLE_SIZE (1) → sampling branch executes.
+        # 3 citers for PAPER_A (> cap of 2) → truncation fires.
         citer_ids = [f"paper:s2:cit{i:04d}" for i in range(3)]
         store = _mock_store_with_refs(
             {PAPER_A: REFS_A, PAPER_B: REFS_B},
             citers_map={
                 PAPER_A: citer_ids,
-                PAPER_B: citer_ids,  # all 3 shared
+                PAPER_B: citer_ids,
             },
         )
         analyzer = CouplingAnalyzer(store)
@@ -746,5 +745,8 @@ class TestCoCitationCount:
             e for e in logs if e.get("event") == "coupling_co_citation_truncated"
         ]
         assert len(trunc_events) == 1
-        # Scaled estimate: round(1 * 3 / 1) == 3
-        assert result.co_citation_count >= 1  # non-negative scaled estimate
+        # Sentinel 0 returned; the expensive walk was NOT executed.
+        assert result.co_citation_count == 0
+        # Verify count_papers_citing_both was never called (DoS guard works).
+        store.count_papers_citing_both.assert_not_called()
+        store.get_papers_citing_both.assert_not_called()

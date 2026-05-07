@@ -701,3 +701,59 @@ class TestDigestSourceRendering:
         assert "_No papers were seen in this run._" in text
         # ...and no spurious Source line was rendered.
         assert "Source:" not in text
+
+
+# ---------------------------------------------------------------------------
+# Backfill split rendering (Phase 9.1 / Issue #145)
+# ---------------------------------------------------------------------------
+
+
+class TestDigestBackfillSplitRendering:
+    """test_digest_renders_fresh_vs_backfill_split — issue #145."""
+
+    def test_digest_renders_fresh_vs_backfill_split(self, tmp_output: Path) -> None:
+        """When backfill_papers > 0, digest shows 'N fresh + M backfill'."""
+        gen = DigestGenerator(tmp_output)
+        sub = _make_subscription()
+        run = MonitoringRunAudit(
+            run_id="run-bf-001",
+            subscription_id=sub.subscription_id,
+            user_id="alice",
+            started_at=datetime(2024, 6, 1, tzinfo=timezone.utc),
+            finished_at=datetime(2024, 6, 1, 0, 1, tzinfo=timezone.utc),
+            status=MonitoringRunStatus.SUCCESS,
+            papers_seen=17,
+            papers_new=5,
+            backfill_papers=12,
+        )
+        text = gen.generate(run, sub).read_text(encoding="utf-8")
+
+        # The summary paragraph must contain the backfill split
+        assert (
+            "5 fresh + 12 backfill" in text
+        ), f"Expected '5 fresh + 12 backfill' in digest body, got:\n{text[:500]}"
+
+    def test_digest_does_not_show_backfill_split_when_zero(
+        self, tmp_output: Path
+    ) -> None:
+        """When backfill_papers=0, the digest shows 'N new' (no backfill detail)."""
+        gen = DigestGenerator(tmp_output)
+        sub = _make_subscription()
+        run = MonitoringRunAudit(
+            run_id="run-fresh-only-001",
+            subscription_id=sub.subscription_id,
+            user_id="alice",
+            started_at=datetime(2024, 6, 2, tzinfo=timezone.utc),
+            finished_at=datetime(2024, 6, 2, 0, 1, tzinfo=timezone.utc),
+            status=MonitoringRunStatus.SUCCESS,
+            papers_seen=7,
+            papers_new=3,
+            backfill_papers=0,
+        )
+        text = gen.generate(run, sub).read_text(encoding="utf-8")
+
+        # Should show "3 new" rather than a backfill split.
+        assert "3 new" in text
+        # "backfill" must not appear in the body (the run_id has no
+        # "backfill" substring so this check is unambiguous).
+        assert "fresh + " not in text

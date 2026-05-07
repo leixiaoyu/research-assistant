@@ -317,10 +317,18 @@ class DigestGenerator:
     @staticmethod
     def _render_summary_paragraph(run: MonitoringRunAudit) -> str:
         finished = run.finished_at.isoformat() if run.finished_at else "(in progress)"
+        # Render backfill split when backfill papers were added this cycle
+        # (issue #145: "5 fresh + 12 backfill" when backfill_papers > 0).
+        if run.backfill_papers > 0:
+            fresh_count = run.papers_new
+            papers_detail = f"{fresh_count} fresh + {run.backfill_papers} backfill"
+        else:
+            papers_detail = f"{run.papers_new} new"
         return (
             f"Monitoring run `{run.run_id}` started at {run.started_at.isoformat()} "
             f"and finished at {finished}. "
-            f"Status: **{run.status.value}**."
+            f"Status: **{run.status.value}**. "
+            f"Papers: {papers_detail}."
         )
 
     def _render_top_papers_section(self, top: list[MonitoringPaperAudit]) -> list[str]:

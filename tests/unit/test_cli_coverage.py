@@ -112,7 +112,9 @@ class TestCLICoverage:
         with patch("src.cli.utils.ConfigManager", side_effect=Exception("Unexpected")):
             result = runner.invoke(app, ["run"])
             assert result.exit_code == 1
-            assert "Error" in result.stdout
+            # Generic message written to stderr (err=True); use result.output
+            # which merges stdout+stderr in Typer's CliRunner.
+            assert "Operation failed" in result.output
 
     def test_process_topics_no_papers(self):
         """Test processing with no papers found - via ResearchPipeline"""
@@ -453,8 +455,8 @@ class TestSynthesizeCommand:
                 result = runner.invoke(app, ["synthesize"])
 
                 assert result.exit_code == 1
-                # Error now displayed by generic handle_errors decorator
-                assert "Error" in result.stdout
+                # Generic message written to stderr; use result.output.
+                assert "Operation failed" in result.output
 
 
 class TestDryRunPhase1:

@@ -532,6 +532,62 @@ class TestShortestPath:
         path = graph_store.shortest_path("paper:missing", "paper:missing")
         assert path is None
 
+    def test_shortest_path_max_depth_bounds_bfs(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """``max_depth`` causes BFS to return ``None`` when target is beyond bound.
+
+        Graph: p:0 -> p:1 -> p:2 -> p:3
+        With max_depth=1 the BFS only expands one hop from p:0, so p:3
+        (3 hops away) is unreachable and None is returned.
+        """
+        for i in range(4):
+            graph_store.add_node(f"p:md:{i}", NodeType.PAPER, {})
+        for i in range(3):
+            graph_store.add_edge(
+                f"edge:md:{i}:{i+1}",
+                f"p:md:{i}",
+                f"p:md:{i+1}",
+                EdgeType.CITES,
+                {},
+            )
+        # Without bound, full path is found.
+        path_full = graph_store.shortest_path("p:md:0", "p:md:3")
+        assert path_full is not None
+        assert len(path_full) == 4  # 4 nodes, 3 hops
+
+        # With max_depth=2, p:md:3 (3 hops away) is NOT reachable.
+        path_bounded = graph_store.shortest_path("p:md:0", "p:md:3", max_depth=2)
+        assert path_bounded is None
+
+        # With max_depth=3, p:md:3 IS exactly reachable.
+        path_exact = graph_store.shortest_path("p:md:0", "p:md:3", max_depth=3)
+        assert path_exact is not None
+        assert [n.node_id for n in path_exact] == [
+            "p:md:0",
+            "p:md:1",
+            "p:md:2",
+            "p:md:3",
+        ]
+
+    def test_shortest_path_max_depth_none_is_unbounded(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """``max_depth=None`` (the default) leaves BFS fully unbounded."""
+        for i in range(3):
+            graph_store.add_node(f"p:unb:{i}", NodeType.PAPER, {})
+        for i in range(2):
+            graph_store.add_edge(
+                f"edge:unb:{i}:{i+1}",
+                f"p:unb:{i}",
+                f"p:unb:{i+1}",
+                EdgeType.CITES,
+                {},
+            )
+        path = graph_store.shortest_path("p:unb:0", "p:unb:2", max_depth=None)
+        assert path is not None
+        assert len(path) == 3
+
 
 class TestMetrics:
     """Tests for graph metrics."""

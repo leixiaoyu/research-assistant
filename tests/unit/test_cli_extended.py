@@ -104,5 +104,6 @@ def test_run_unexpected_error(mock_components):
 
     result = runner.invoke(app, ["run"])
     assert result.exit_code == 1
-    # Error now displayed by generic handle_errors decorator
-    assert "Error" in result.stdout
+    # Generic message written to stderr (err=True in handle_errors H-3 fix);
+    # result.output merges stdout+stderr in Typer's CliRunner.
+    assert "Operation failed" in result.output

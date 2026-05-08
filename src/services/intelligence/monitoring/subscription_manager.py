@@ -157,7 +157,17 @@ class SubscriptionManager:
 
     @staticmethod
     def _deserialize(row: sqlite3.Row) -> ResearchSubscription:
+        from src.services.intelligence.models.monitoring import PaperSource as _PS
+
         config = json.loads(row["config"])
+        # H-4: ResearchSubscription now has strict=True. The ``sources``
+        # field is stored in the JSON blob as a list of strings (e.g.,
+        # ["arxiv"]) but strict mode requires PaperSource instances, not
+        # raw strings. Coerce them here so the round-trip works.
+        if "sources" in config and isinstance(config["sources"], list):
+            config["sources"] = [
+                _PS(s) if isinstance(s, str) else s for s in config["sources"]
+            ]
         # Re-stitch the column-promoted fields back into the dict so we
         # round-trip via the model validator.
         is_active = bool(row["is_active"])
@@ -172,9 +182,21 @@ class SubscriptionManager:
             if "backfill_cursor_date" in row.keys()
             else None
         )
-        backfill_cursor: date | None = (
-            date.fromisoformat(backfill_cursor_raw) if backfill_cursor_raw else None
-        )
+        # M-1: Wrap date.fromisoformat in try/except so a corrupted
+        # backfill_cursor_date value (e.g., from a manual SQL UPDATE or
+        # schema drift) degrades gracefully instead of aborting the
+        # entire monitoring cycle.
+        backfill_cursor: date | None = None
+        if backfill_cursor_raw:
+            try:
+                backfill_cursor = date.fromisoformat(backfill_cursor_raw)
+            except ValueError:
+                logger.warning(
+                    "subscription_backfill_cursor_parse_failed",
+                    subscription_id=row["subscription_id"],
+                    raw_value=backfill_cursor_raw,
+                )
+                backfill_cursor = None
         return ResearchSubscription(
             subscription_id=row["subscription_id"],
             user_id=row["user_id"],
@@ -440,26 +462,40 @@ class SubscriptionManager:
         ``when`` defaults to "now" in UTC. Tests pass an explicit
         timestamp so cycle behavior is deterministic.
 
+        M-2: Wrapped in ``retry_on_lock_contention`` (matching
+        ``update_backfill_cursor``) so the two sequential write sites
+        per cycle share the same retry protection.  Uses
+        ``BEGIN IMMEDIATE`` to acquire the write lock up front.
+
         Raises:
             KeyError: If no row matches ``subscription_id``.
         """
         timestamp = when or datetime.now(timezone.utc)
-        with self._connect() as conn:
-            cursor = conn.execute(
-                """
-                UPDATE subscriptions
-                SET last_checked = ?, updated_at = ?
-                WHERE subscription_id = ?
-                """,
-                (
-                    timestamp.isoformat(),
-                    timestamp.isoformat(),
-                    subscription_id,
-                ),
-            )
-            if cursor.rowcount == 0:
-                raise KeyError(f"Subscription not found: {subscription_id!r}")
-            conn.commit()
+
+        def _do_mark() -> None:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                cur = conn.execute(
+                    """
+                    UPDATE subscriptions
+                    SET last_checked = ?, updated_at = ?
+                    WHERE subscription_id = ?
+                    """,
+                    (
+                        timestamp.isoformat(),
+                        timestamp.isoformat(),
+                        subscription_id,
+                    ),
+                )
+                if cur.rowcount == 0:
+                    raise KeyError(f"Subscription not found: {subscription_id!r}")
+                conn.commit()
+
+        retry_on_lock_contention(
+            _do_mark,
+            operation_name="subscription_mark_checked",
+            subscription_id=subscription_id,
+        )
 
     def update_backfill_cursor(
         self,

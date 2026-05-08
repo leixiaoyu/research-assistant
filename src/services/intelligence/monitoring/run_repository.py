@@ -24,7 +24,8 @@ Schema (created by ``MIGRATION_V2_MONITORING_RUNS``)
         status           TEXT NOT NULL,
         error            TEXT,
         papers_found     INTEGER NOT NULL DEFAULT 0,
-        papers_new       INTEGER NOT NULL DEFAULT 0
+        papers_new       INTEGER NOT NULL DEFAULT 0,
+        backfill_papers  INTEGER NOT NULL DEFAULT 0  -- V8 / #145
     )
 
     monitoring_papers(
@@ -261,8 +262,8 @@ class MonitoringRunRepository:
                     INSERT INTO monitoring_runs (
                         run_id, subscription_id, user_id,
                         started_at, finished_at, status, error,
-                        papers_found, papers_new
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        papers_found, papers_new, backfill_papers
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         run.run_id,
@@ -274,6 +275,7 @@ class MonitoringRunRepository:
                         run.error,
                         run.papers_seen,
                         run.papers_new,
+                        run.backfill_papers,
                     ),
                 )
                 if run.papers:
@@ -323,7 +325,7 @@ class MonitoringRunRepository:
                 """
                 SELECT run_id, subscription_id, user_id, started_at,
                        finished_at, status, error,
-                       papers_found, papers_new
+                       papers_found, papers_new, backfill_papers
                 FROM monitoring_runs
                 WHERE run_id = ?
                 """,
@@ -364,7 +366,7 @@ class MonitoringRunRepository:
                 f"""
                 SELECT run_id, subscription_id, user_id, started_at,
                        finished_at, status, error,
-                       papers_found, papers_new
+                       papers_found, papers_new, backfill_papers
                 FROM monitoring_runs
                 {where}
                 ORDER BY started_at DESC
@@ -444,6 +446,13 @@ class MonitoringRunRepository:
         row: sqlite3.Row, papers: list[MonitoringPaperAudit]
     ) -> MonitoringRunAudit:
         finished_iso = row["finished_at"]
+        # backfill_papers was added in V8; pre-V8 rows return 0 via the
+        # column DEFAULT and will have the key present via sqlite3.Row.
+        # Guard defensively so the read path works even if run against a
+        # pre-migration DB (V8 adds DEFAULT 0, so this key will always
+        # be present after migration).
+        raw_bp = row["backfill_papers"]
+        backfill_papers = int(raw_bp) if raw_bp is not None else 0
         return MonitoringRunAudit(
             run_id=row["run_id"],
             subscription_id=row["subscription_id"],
@@ -457,4 +466,5 @@ class MonitoringRunRepository:
             papers_new=int(row["papers_new"]),
             error=row["error"],
             papers=papers,
+            backfill_papers=backfill_papers,
         )

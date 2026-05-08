@@ -361,7 +361,7 @@ def related_command(
     if strategy == _STRATEGY_ALL:
         results_by_strategy = asyncio.run(rec.recommend_all(paper_id, k_per_strategy=k))
     else:
-        strat_enum = RecommendationStrategy(strategy)
+        strategy_enum = RecommendationStrategy(strategy)
         method_map = {
             RecommendationStrategy.SIMILAR: rec.recommend_similar,
             RecommendationStrategy.INFLUENTIAL_PREDECESSOR: (
@@ -370,14 +370,14 @@ def related_command(
             RecommendationStrategy.ACTIVE_SUCCESSOR: rec.recommend_active_successors,
             RecommendationStrategy.BRIDGE: rec.recommend_bridge_papers,
         }
-        recs = asyncio.run(method_map[strat_enum](paper_id, k=k))
-        results_by_strategy = {strat_enum: recs}
+        recs = asyncio.run(method_map[strategy_enum](paper_id, k=k))
+        results_by_strategy = {strategy_enum: recs}
 
     if emit_json:
         typer.echo(
             json.dumps(
                 {
-                    strat.value: [
+                    strategy_enum.value: [
                         {
                             "paper_id": r.paper_id,
                             "score": r.score,
@@ -385,15 +385,15 @@ def related_command(
                         }
                         for r in recs_list
                     ]
-                    for strat, recs_list in results_by_strategy.items()
+                    for strategy_enum, recs_list in results_by_strategy.items()
                 }
             )
         )
         return
 
     any_results = False
-    for strat, recs_list in results_by_strategy.items():
-        typer.echo(f"\n--- {strat.value} ---")
+    for strategy_enum, recs_list in results_by_strategy.items():
+        typer.echo(f"\n--- {strategy_enum.value} ---")
         if not recs_list:
             typer.echo("  (no results)")
             continue

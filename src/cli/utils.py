@@ -10,8 +10,9 @@ from typing import Callable, TypeVar
 import structlog
 import typer
 
-from src.services.config_manager import ConfigManager, ConfigValidationError
 from src.models.config import ResearchConfig
+from src.services.config_manager import ConfigManager, ConfigValidationError
+from src.storage.intelligence_graph.connection import _trunc
 from src.utils.logging import configure_logging
 
 # Configure structured logging
@@ -60,9 +61,17 @@ def handle_errors(func: F) -> F:
             return func(*args, **kwargs)
         except typer.Exit:
             raise
-        except Exception as e:
-            logger.exception("command_failed")
-            typer.secho(f"Error: {e}", fg=typer.colors.RED)
+        except Exception as exc:
+            typer.secho(
+                "Operation failed (see logs for details)",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            logger.error(
+                "command_failed",
+                error=_trunc(exc),
+                error_type=type(exc).__name__,
+            )
             raise typer.Exit(code=1)
 
     return wrapper  # type: ignore[return-value]

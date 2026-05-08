@@ -1109,8 +1109,8 @@ class TestAddIntegrityErrorBranches:
                 # First call is INSERT; raise an unfamiliar IntegrityError
                 raise sqlite3.IntegrityError("custom not-unique not-fk msg")
 
-            def commit(self) -> None:  # pragma: no cover - never reached
-                pass
+            def commit(self) -> None:
+                raise NotImplementedError("commit should not be called in this test")
 
             def rollback(self) -> None:
                 pass
@@ -1133,8 +1133,8 @@ class TestAddIntegrityErrorBranches:
             def execute(self, *args: object, **kwargs: object) -> None:
                 raise sqlite3.IntegrityError("CHECK constraint failed: edges")
 
-            def commit(self) -> None:  # pragma: no cover - never reached
-                pass
+            def commit(self) -> None:
+                raise NotImplementedError("commit should not be called in this test")
 
             def rollback(self) -> None:
                 pass
@@ -1822,3 +1822,393 @@ class TestListOutgoingEdgesForNodes:
             edge_type_values=[EdgeType.CITES.value],
         )
         assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Co-citation helpers (Issue #148)
+# ---------------------------------------------------------------------------
+
+
+def _setup_citation_graph(
+    graph_store: SQLiteGraphStore,
+    paper_ids: list[str],
+    edges: list[tuple[str, str, str]],
+) -> None:
+    """Utility: add nodes and CITES edges in bulk for co-citation tests.
+
+    Args:
+        graph_store: Initialized store.
+        paper_ids: All node ids to create.
+        edges: Tuples of (edge_id, source_id, target_id).
+    """
+    for pid in paper_ids:
+        graph_store.add_node(pid, NodeType.PAPER, {})
+    for eid, src, tgt in edges:
+        graph_store.add_edge(eid, src, tgt, EdgeType.CITES, {})
+
+
+class TestGetPapersCitingBoth:
+    """Tests for ``SQLiteGraphStore.get_papers_citing_both`` (Issue #148)."""
+
+    def test_get_papers_citing_both_returns_empty_when_no_citers(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Returns empty set when neither paper has any inbound CITES edges."""
+        _setup_citation_graph(
+            graph_store,
+            paper_ids=["paper:a", "paper:b"],
+            edges=[],
+        )
+
+        result = graph_store.get_papers_citing_both("paper:a", "paper:b")
+        assert result == set()
+
+    def test_get_papers_citing_both_correct_for_two_shared_citers(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Returns the two papers that cite both targets."""
+        _setup_citation_graph(
+            graph_store,
+            paper_ids=["paper:a", "paper:b", "paper:x", "paper:y", "paper:z"],
+            edges=[
+                ("e1", "paper:x", "paper:a"),
+                ("e2", "paper:x", "paper:b"),
+                ("e3", "paper:y", "paper:a"),
+                ("e4", "paper:y", "paper:b"),
+                ("e5", "paper:z", "paper:a"),  # z cites only a, not b
+            ],
+        )
+
+        result = graph_store.get_papers_citing_both("paper:a", "paper:b")
+        assert result == {"paper:x", "paper:y"}
+
+    def test_get_papers_citing_both_excludes_partial_citers(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Papers that cite only one target are excluded from the result."""
+        _setup_citation_graph(
+            graph_store,
+            paper_ids=["paper:a", "paper:b", "paper:only_a"],
+            edges=[
+                ("e1", "paper:only_a", "paper:a"),
+            ],
+        )
+
+        result = graph_store.get_papers_citing_both("paper:a", "paper:b")
+        assert result == set()
+
+    def test_get_papers_citing_both_returns_set_not_list(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Return type is set[str] (deduplication by construction)."""
+        _setup_citation_graph(
+            graph_store,
+            paper_ids=["paper:a", "paper:b", "paper:c"],
+            edges=[
+                ("e1", "paper:c", "paper:a"),
+                ("e2", "paper:c", "paper:b"),
+            ],
+        )
+
+        result = graph_store.get_papers_citing_both("paper:a", "paper:b")
+        assert isinstance(result, set)
+        assert result == {"paper:c"}
+
+
+class TestGetInboundCiterCount:
+    """Tests for ``SQLiteGraphStore.get_inbound_citer_count`` (Issue #148)."""
+
+    def test_get_inbound_citer_count_zero_when_no_inbound(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Returns 0 when no CITES edges target the given paper."""
+        graph_store.add_node("paper:lone", NodeType.PAPER, {})
+
+        count = graph_store.get_inbound_citer_count("paper:lone")
+        assert count == 0
+
+    def test_get_inbound_citer_count_correct(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Returns the exact count of nodes citing the target."""
+        _setup_citation_graph(
+            graph_store,
+            paper_ids=["paper:target", "paper:c1", "paper:c2", "paper:c3"],
+            edges=[
+                ("e1", "paper:c1", "paper:target"),
+                ("e2", "paper:c2", "paper:target"),
+                ("e3", "paper:c3", "paper:target"),
+            ],
+        )
+
+        count = graph_store.get_inbound_citer_count("paper:target")
+        assert count == 3
+
+    def test_get_inbound_citer_count_ignores_outgoing_edges(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Only incoming CITES edges are counted; outgoing edges are ignored."""
+        _setup_citation_graph(
+            graph_store,
+            paper_ids=["paper:a", "paper:b", "paper:c"],
+            edges=[
+                ("e1", "paper:a", "paper:b"),  # a cites b (outgoing from a)
+                ("e2", "paper:c", "paper:a"),  # c cites a (inbound to a)
+            ],
+        )
+
+        # paper:a has 1 inbound citer (paper:c)
+        assert graph_store.get_inbound_citer_count("paper:a") == 1
+        # paper:b has 1 inbound citer (paper:a)
+        assert graph_store.get_inbound_citer_count("paper:b") == 1
+        # paper:c has no inbound citers
+        assert graph_store.get_inbound_citer_count("paper:c") == 0
+
+    def test_get_inbound_citer_count_zero_for_unknown_paper(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Returns 0 for a paper_id not present in the graph."""
+        graph_store.add_node("paper:known", NodeType.PAPER, {})
+
+        count = graph_store.get_inbound_citer_count("paper:does_not_exist")
+        assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# C-1: _list_node_ids and _list_edges_by_types (pre-existing private helpers)
+# ---------------------------------------------------------------------------
+
+
+class TestListNodeIds:
+    """Coverage for ``SQLiteGraphStore._list_node_ids`` (C-1).
+
+    These private helpers are used by ``GraphAlgorithms`` and were
+    previously uncovered (lines 1112-1123 in unified_graph.py at 96.02%).
+    """
+
+    def test_list_node_ids_returns_all_nodes_when_no_filter(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Without a node_type filter, all inserted node ids are returned."""
+        for nid in ("paper:a", "paper:b", "paper:c"):
+            graph_store.add_node(nid, NodeType.PAPER, {})
+
+        result = graph_store._list_node_ids()
+
+        assert set(result) == {"paper:a", "paper:b", "paper:c"}
+
+    def test_list_node_ids_returns_empty_when_store_empty(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Returns an empty list when no nodes have been inserted."""
+        assert graph_store._list_node_ids() == []
+
+    def test_list_node_ids_filters_by_node_type(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """With a node_type filter, only matching node ids are returned."""
+        graph_store.add_node("paper:x", NodeType.PAPER, {})
+        graph_store.add_node("author:y", NodeType.AUTHOR, {})
+        graph_store.add_node("paper:z", NodeType.PAPER, {})
+
+        papers = graph_store._list_node_ids(node_type=NodeType.PAPER)
+        authors = graph_store._list_node_ids(node_type=NodeType.AUTHOR)
+
+        assert set(papers) == {"paper:x", "paper:z"}
+        assert authors == ["author:y"]
+
+    def test_list_node_ids_filter_returns_empty_for_absent_type(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Filter by a type that has no nodes returns an empty list."""
+        graph_store.add_node("paper:a", NodeType.PAPER, {})
+
+        result = graph_store._list_node_ids(node_type=NodeType.AUTHOR)
+
+        assert result == []
+
+
+class TestListEdgesByTypes:
+    """Coverage for ``SQLiteGraphStore._list_edges_by_types`` (C-1).
+
+    These private helpers are used by ``GraphAlgorithms`` and were
+    previously uncovered (lines 1132-1146 in unified_graph.py at 96.02%).
+    """
+
+    def test_list_edges_by_types_returns_empty_for_empty_type_list(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Empty edge_type_values short-circuits to an empty list."""
+        graph_store.add_node("paper:a", NodeType.PAPER, {})
+        graph_store.add_node("paper:b", NodeType.PAPER, {})
+        graph_store.add_edge("e1", "paper:a", "paper:b", EdgeType.CITES, {})
+
+        result = graph_store._list_edges_by_types([])
+
+        assert result == []
+
+    def test_list_edges_by_types_returns_matching_pairs(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Returns (source_id, target_id) tuples for the requested edge type."""
+        for nid in ("paper:a", "paper:b", "paper:c"):
+            graph_store.add_node(nid, NodeType.PAPER, {})
+        graph_store.add_edge("e1", "paper:a", "paper:b", EdgeType.CITES, {})
+        graph_store.add_edge("e2", "paper:b", "paper:c", EdgeType.CITES, {})
+
+        result = graph_store._list_edges_by_types([EdgeType.CITES.value])
+
+        assert set(result) == {("paper:a", "paper:b"), ("paper:b", "paper:c")}
+
+    def test_list_edges_by_types_excludes_non_matching_edge_types(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Only edges whose type matches the filter are returned (M-3).
+
+        A MENTIONS edge alongside CITES edges must not appear in the
+        CITES-only result.
+        """
+        for nid in ("paper:a", "paper:b", "paper:c"):
+            graph_store.add_node(nid, NodeType.PAPER, {})
+        graph_store.add_edge("e:cites", "paper:a", "paper:b", EdgeType.CITES, {})
+        graph_store.add_edge("e:mentions", "paper:a", "paper:c", EdgeType.MENTIONS, {})
+
+        result = graph_store._list_edges_by_types([EdgeType.CITES.value])
+
+        assert result == [("paper:a", "paper:b")]
+
+    def test_list_edges_by_types_returns_empty_for_store_with_no_edges(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Returns empty list when no edges of any type exist."""
+        graph_store.add_node("paper:a", NodeType.PAPER, {})
+
+        result = graph_store._list_edges_by_types([EdgeType.CITES.value])
+
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# H-3 storage-level: self-loop exclusion in get_papers_citing_both
+# ---------------------------------------------------------------------------
+
+
+class TestGetPapersCitingBothSelfLoopExclusion:
+    """Storage-level tests for self-loop exclusion in ``get_papers_citing_both``
+    and ``count_papers_citing_both`` (H-3).
+
+    A paper citing itself must not be counted as a co-citer of the pair
+    ``(paper_a_id, paper_b_id)`` — i.e. if A→A and A→B exist, A must
+    NOT appear in ``get_papers_citing_both("A", "B")``.
+    """
+
+    def test_self_loop_citer_a_excluded(self, graph_store: SQLiteGraphStore) -> None:
+        """paper:a is NOT a co-citer of (a, b) even if A→A and A→B exist."""
+        for nid in ("paper:a", "paper:b", "paper:x"):
+            graph_store.add_node(nid, NodeType.PAPER, {})
+        # paper:a → paper:a (self-loop) and paper:a → paper:b
+        graph_store.add_edge("e:aa", "paper:a", "paper:a", EdgeType.CITES, {})
+        graph_store.add_edge("e:ab", "paper:a", "paper:b", EdgeType.CITES, {})
+        # paper:x cites both → should appear
+        graph_store.add_edge("e:xa", "paper:x", "paper:a", EdgeType.CITES, {})
+        graph_store.add_edge("e:xb", "paper:x", "paper:b", EdgeType.CITES, {})
+
+        result = graph_store.get_papers_citing_both("paper:a", "paper:b")
+
+        assert "paper:a" not in result
+        assert "paper:x" in result
+
+    def test_self_loop_citer_b_excluded(self, graph_store: SQLiteGraphStore) -> None:
+        """paper:b is NOT a co-citer of (a, b) even if B→A and B→B exist."""
+        for nid in ("paper:a", "paper:b"):
+            graph_store.add_node(nid, NodeType.PAPER, {})
+        graph_store.add_edge("e:ba", "paper:b", "paper:a", EdgeType.CITES, {})
+        graph_store.add_edge("e:bb", "paper:b", "paper:b", EdgeType.CITES, {})
+
+        result = graph_store.get_papers_citing_both("paper:a", "paper:b")
+
+        assert result == set()
+
+    def test_count_papers_citing_both_excludes_self_loops(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """count returns 1 (paper:x only), not 2, when paper:a self-loops."""
+        for nid in ("paper:a", "paper:b", "paper:x"):
+            graph_store.add_node(nid, NodeType.PAPER, {})
+        graph_store.add_edge("e:aa", "paper:a", "paper:a", EdgeType.CITES, {})
+        graph_store.add_edge("e:ab", "paper:a", "paper:b", EdgeType.CITES, {})
+        graph_store.add_edge("e:xa", "paper:x", "paper:a", EdgeType.CITES, {})
+        graph_store.add_edge("e:xb", "paper:x", "paper:b", EdgeType.CITES, {})
+
+        count = graph_store.count_papers_citing_both("paper:a", "paper:b")
+
+        assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# M-1: count_papers_citing_both scalar helper
+# ---------------------------------------------------------------------------
+
+
+class TestCountPapersCitingBoth:
+    """Tests for ``SQLiteGraphStore.count_papers_citing_both`` (M-1).
+
+    Verifies the scalar hot-path returns the same count as
+    ``len(get_papers_citing_both(...))``.
+    """
+
+    def test_count_is_zero_when_no_shared_citers(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """Returns 0 when no paper cites both targets."""
+        for nid in ("paper:a", "paper:b"):
+            graph_store.add_node(nid, NodeType.PAPER, {})
+
+        assert graph_store.count_papers_citing_both("paper:a", "paper:b") == 0
+
+    def test_count_matches_set_size(self, graph_store: SQLiteGraphStore) -> None:
+        """count_papers_citing_both == len(get_papers_citing_both) always."""
+        for nid in ("paper:a", "paper:b", "paper:x", "paper:y", "paper:z"):
+            graph_store.add_node(nid, NodeType.PAPER, {})
+        graph_store.add_edge("e1", "paper:x", "paper:a", EdgeType.CITES, {})
+        graph_store.add_edge("e2", "paper:x", "paper:b", EdgeType.CITES, {})
+        graph_store.add_edge("e3", "paper:y", "paper:a", EdgeType.CITES, {})
+        graph_store.add_edge("e4", "paper:y", "paper:b", EdgeType.CITES, {})
+        graph_store.add_edge("e5", "paper:z", "paper:a", EdgeType.CITES, {})
+        # paper:z only cites a → excluded
+
+        count = graph_store.count_papers_citing_both("paper:a", "paper:b")
+        shared = graph_store.get_papers_citing_both("paper:a", "paper:b")
+
+        assert count == len(shared) == 2
+
+    def test_count_excludes_non_cites_edge_types(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """A MENTIONS edge alongside CITES edges is excluded from the count (M-3)."""
+        for nid in ("paper:a", "paper:b", "paper:m"):
+            graph_store.add_node(nid, NodeType.PAPER, {})
+        # paper:m MENTIONS paper:a and CITES paper:b — not a co-citer
+        graph_store.add_edge("e:men:a", "paper:m", "paper:a", EdgeType.MENTIONS, {})
+        graph_store.add_edge("e:cit:b", "paper:m", "paper:b", EdgeType.CITES, {})
+
+        count = graph_store.count_papers_citing_both("paper:a", "paper:b")
+        assert count == 0
+
+    def test_get_papers_citing_both_excludes_non_cites_edge_types(
+        self, graph_store: SQLiteGraphStore
+    ) -> None:
+        """get_papers_citing_both excludes MENTIONS edges (M-3 edge-type filter)."""
+        for nid in ("paper:a", "paper:b", "paper:m", "paper:c"):
+            graph_store.add_node(nid, NodeType.PAPER, {})
+        # paper:m MENTIONS paper:a and CITES paper:b — must be excluded
+        graph_store.add_edge("e:men:a", "paper:m", "paper:a", EdgeType.MENTIONS, {})
+        graph_store.add_edge("e:cit:b", "paper:m", "paper:b", EdgeType.CITES, {})
+        # paper:c CITES both — must be included
+        graph_store.add_edge("e:ca", "paper:c", "paper:a", EdgeType.CITES, {})
+        graph_store.add_edge("e:cb", "paper:c", "paper:b", EdgeType.CITES, {})
+
+        result = graph_store.get_papers_citing_both("paper:a", "paper:b")
+
+        assert "paper:m" not in result
+        assert "paper:c" in result

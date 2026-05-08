@@ -657,3 +657,52 @@ class TestBackfillCursor:
         )
         assert match is not None
         assert match.backfill_days == 14
+
+    def test_deserialize_gracefully_handles_corrupted_backfill_cursor(
+        self, manager: SubscriptionManager, db_path: Path
+    ) -> None:
+        """M-1: Corrupted backfill_cursor_date degrades gracefully.
+
+        A manual SQL UPDATE (or schema migration error) can leave a
+        non-ISO-8601 value in backfill_cursor_date. _deserialize must
+        log a warning and treat the value as None rather than raising
+        ValueError and aborting the entire monitoring cycle.
+        """
+        import structlog.testing
+
+        sub = ResearchSubscription(name="Corrupt Cursor", query="q", backfill_days=7)
+        manager.add_subscription(sub)
+
+        # Directly corrupt the column value with an unparseable string.
+        import sqlite3
+
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute(
+                "UPDATE subscriptions SET backfill_cursor_date = ? "
+                "WHERE subscription_id = ?",
+                ("NOT-A-DATE", sub.subscription_id),
+            )
+            conn.commit()
+
+        # get_subscription must return the subscription (degraded to None cursor)
+        # rather than raising ValueError.
+        with structlog.testing.capture_logs() as logs:
+            fetched = manager.get_subscription(sub.subscription_id)
+
+        assert (
+            fetched is not None
+        ), "get_subscription must not raise on corrupted backfill_cursor_date"
+        bad_cursor = fetched.backfill_cursor_date
+        assert (
+            bad_cursor is None
+        ), f"Corrupted cursor should degrade to None, got {bad_cursor!r}"
+
+        # A warning should have been logged.
+        warn_events = [
+            e
+            for e in logs
+            if e.get("event") == "subscription_backfill_cursor_parse_failed"
+        ]
+        assert len(warn_events) == 1
+        assert warn_events[0]["subscription_id"] == sub.subscription_id
+        assert warn_events[0]["raw_value"] == "NOT-A-DATE"

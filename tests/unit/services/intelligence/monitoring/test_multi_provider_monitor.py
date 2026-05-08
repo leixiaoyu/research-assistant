@@ -798,11 +798,11 @@ async def test_check_topic_build_failure_treated_as_provider_failure() -> None:
     call_count = [0]
     original_build = monitor._build_topic_for_query
 
-    def flaky_build(subscription, variant):
+    def flaky_build(subscription, variant, *, time_window=None):
         call_count[0] += 1
         if call_count[0] == 1:
             raise ValueError("Bad ResearchTopic variant")
-        return original_build(subscription, variant)
+        return original_build(subscription, variant, time_window=time_window)
 
     monitor._build_topic_for_query = flaky_build  # type: ignore[method-assign]
 

@@ -673,7 +673,7 @@ class TestBackfillCursor:
         sub = ResearchSubscription(name="Corrupt Cursor", query="q", backfill_days=7)
         manager.add_subscription(sub)
 
-        # Directly corrupt the column value with an unparseable string.
+        # Directly corrupt the column value with an unparsable string.
         import sqlite3
 
         with sqlite3.connect(str(db_path)) as conn:

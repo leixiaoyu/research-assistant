@@ -48,7 +48,7 @@ required.
 from __future__ import annotations
 
 import asyncio
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -61,12 +61,14 @@ from src.services.intelligence.monitoring.multi_provider_monitor import (
 from src.services.intelligence.monitoring.models import (
     BACKFILL_MAX_PAPERS_PER_STEP,
     BACKFILL_STEP_DAYS_DEFAULT,
+    MAX_PAPERS_PER_CYCLE,
     MonitoringPaperRecord,
     MonitoringRun,
     MonitoringRunStatus,
     PaperSource,
     ResearchSubscription,
 )
+from src.storage.intelligence_graph.connection import _trunc
 from src.services.intelligence.monitoring.relevance_scorer import (
     LLMResponseError,
     RelevanceScorer,
@@ -564,21 +566,32 @@ class MonitoringRunner:
         # Backfill step (Phase 9.1 / Issue #145): walk backwards through
         # the history window in BACKFILL_STEP_DAYS_DEFAULT-day chunks.
         # Only run when backfill_days > 0 AND the main run was not FAILED
-        # (no point backfilling if the provider is unavailable). The
-        # backfill_papers count is appended to the in-memory run's
-        # MonitoringRunAudit representation via a separate field so the
-        # digest generator can render "N fresh + M backfill" when relevant.
+        # (no point backfilling if the provider is unavailable).
+        #
+        # H-3: Enforce MAX_PAPERS_PER_CYCLE budget so fresh + backfill
+        # together cannot exceed the per-cycle cap.
         if (
             run.status is not MonitoringRunStatus.FAILED
             and subscription.backfill_days > 0
         ):
-            backfill_papers_added = await self._run_backfill_step(subscription, run)
-            # Attach backfill count to the run for the caller's observability.
-            # MonitoringRun does not have a ``backfill_papers`` field (it is
-            # an in-memory record); the count is surfaced via the structured
-            # log event ``monitor_backfill_step_complete`` and later via
-            # ``MonitoringRunAudit.backfill_papers`` when the run is read back.
-            run._backfill_papers = backfill_papers_added  # type: ignore[attr-defined]
+            available = MAX_PAPERS_PER_CYCLE - len(run.papers)
+            backfill_cap = min(BACKFILL_MAX_PAPERS_PER_STEP, max(0, available))
+            if backfill_cap > 0:
+                backfill_papers_added = await self._run_backfill_step(
+                    subscription, run, papers_cap=backfill_cap
+                )
+                # C-2: backfill_papers is a first-class field on MonitoringRun
+                # (not a private attr hack). The field is persisted to
+                # monitoring_runs.backfill_papers via V8 migration so
+                # MonitoringRunAudit.backfill_papers round-trips correctly.
+                run.backfill_papers = backfill_papers_added
+            else:
+                logger.info(
+                    "monitor_backfill_step_skipped_budget",
+                    subscription_id=subscription.subscription_id,
+                    papers_in_cycle=len(run.papers),
+                    max_papers_per_cycle=MAX_PAPERS_PER_CYCLE,
+                )
 
         return run
 
@@ -586,22 +599,43 @@ class MonitoringRunner:
         self,
         subscription: ResearchSubscription,
         run: MonitoringRun,
+        *,
+        papers_cap: int = BACKFILL_MAX_PAPERS_PER_STEP,
     ) -> int:
         """Execute one backfill step for ``subscription``.
 
         Walks the cursor backward by ``BACKFILL_STEP_DAYS_DEFAULT`` days,
         searching the same query variants as the fresh feed (same monitor
-        / expander). Caps results at ``BACKFILL_MAX_PAPERS_PER_STEP`` per
-        step. Updates the backfill cursor atomically after success.
+        / expander) but with an EXPLICIT historical date window so the
+        monitor actually fetches historical papers instead of re-polling
+        the same fresh-feed window.  Caps results at ``papers_cap`` per
+        step.  Updates the backfill cursor atomically after success.
+
+        C-1 fix: passes ``time_window=(step_start, step_end)`` to
+        ``monitor.check`` so the provider uses the historical window,
+        not the subscription's ``poll_interval_hours``-derived window.
+
+        H-1/M-2/M-3 doc: cursor update and mark_checked are two separate
+        SQLite transactions.  Crash between them leaves the cursor
+        advanced but last_checked_at un-updated (or vice-versa); the
+        next cycle re-deduplicates via the registry so no papers are
+        lost — only a potential duplicate check at low cost.  A unified
+        transaction across the two repositories would require
+        cross-repository connection sharing; documented here as the
+        acceptable at-most-once tradeoff per CLAUDE.md "Checked Success".
 
         Args:
             subscription: The owning subscription (must have backfill_days > 0).
-            run: The fresh-feed run (for subscription_id reference only).
+            run: The fresh-feed run (used only for logging context).
+            papers_cap: Maximum papers to accept from this step. Caller
+                computes ``min(BACKFILL_MAX_PAPERS_PER_STEP, available)``
+                to enforce the cycle-wide ``MAX_PAPERS_PER_CYCLE`` budget.
 
         Returns:
             Number of papers added from the backfill step (0 on skip or error).
         """
-        today = date.today()
+        # L-2: use UTC date to avoid local-timezone mismatch at DST boundaries.
+        today = datetime.now(timezone.utc).date()
         cursor_before = subscription.backfill_cursor_date or today
         floor = max(
             subscription.created_at.date(),
@@ -610,10 +644,12 @@ class MonitoringRunner:
 
         if cursor_before <= floor:
             # Backfill already complete.
+            # H-2: consistent field set on early-exit (total_papers_added=0).
             logger.info(
                 "monitor_backfill_complete",
                 subscription_id=subscription.subscription_id,
-                total_days_covered=subscription.backfill_days,
+                total_papers_added=0,
+                days_covered=subscription.backfill_days,
             )
             return 0
 
@@ -622,21 +658,22 @@ class MonitoringRunner:
         # Clamp step_start to the floor so we don't overshoot.
         step_start = max(step_start, floor)
 
-        # Fan-out: use the same monitor (ArxivMonitor or MultiProviderMonitor)
-        # as the fresh-feed run. The monitor's ``check`` call handles query
-        # expansion and provider fan-out exactly as it does for the fresh feed.
-        # We then cap the results at BACKFILL_MAX_PAPERS_PER_STEP.
+        # C-1 fix: pass the explicit historical window to monitor.check so
+        # the provider fetches papers from [step_start, step_end] rather than
+        # re-polling the same fresh-feed window derived from poll_interval_hours.
+        # L-1: the dead if/else (both arms called identical code) is collapsed
+        # now that both ArxivMonitor and MultiProviderMonitor accept time_window.
+        time_window = (step_start, step_end)
         papers_added = 0
         papers_capped = False
         try:
-            if isinstance(self._monitor, MultiProviderMonitor):
-                backfill_result = await self._monitor.check(subscription)
-            else:
-                backfill_result = await self._monitor.check(subscription)
+            backfill_result = await self._monitor.check(
+                subscription, time_window=time_window
+            )
 
             backfill_papers = backfill_result.run.papers
-            if len(backfill_papers) > BACKFILL_MAX_PAPERS_PER_STEP:
-                backfill_papers = backfill_papers[:BACKFILL_MAX_PAPERS_PER_STEP]
+            if len(backfill_papers) > papers_cap:
+                backfill_papers = backfill_papers[:papers_cap]
                 papers_capped = True
 
             papers_added = len(backfill_papers)
@@ -645,7 +682,7 @@ class MonitoringRunner:
                 "monitor_backfill_step_failed",
                 subscription_id=subscription.subscription_id,
                 cursor_before=cursor_before.isoformat(),
-                error=str(exc),
+                error=_trunc(exc),  # C-3: use _trunc not str(exc)
             )
             return 0
 
@@ -664,7 +701,7 @@ class MonitoringRunner:
                 subscription_id=subscription.subscription_id,
                 cursor_before=cursor_before.isoformat(),
                 cursor_after=new_cursor.isoformat(),
-                error=str(exc),
+                error=_trunc(exc),  # C-3: use _trunc not str(exc)
             )
             return 0
 
@@ -678,6 +715,7 @@ class MonitoringRunner:
         )
 
         if new_cursor <= floor:
+            # H-2: consistent field set at end-of-step completion.
             logger.info(
                 "monitor_backfill_complete",
                 subscription_id=subscription.subscription_id,

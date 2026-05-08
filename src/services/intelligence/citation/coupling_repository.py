@@ -331,6 +331,16 @@ class CitationCouplingRepository:
         if max_age_days <= 0:
             raise ValueError("max_age_days must be positive")
 
+        # Cache coherence note (M-4 / PR #150):
+        # V6 cache rows written by PR #147 stored ``co_citation_count=0``
+        # because the co-citation feature did not yet exist.  Those rows will
+        # be served as valid cache hits here until they expire (30-day TTL).
+        # This is intentional — ``co_citation_count=0`` is also the sentinel
+        # returned when the DoS cap fires (H-1 fix), so callers cannot
+        # distinguish "genuine zero co-citers" from "stale V6 row" without
+        # checking ``computed_at``.  The staleness window is bounded by
+        # ``DEFAULT_MAX_AGE_DAYS`` (30 days); no special migration is needed.
+
         # Canonicalize lookup order so (A,B) and (B,A) hit the same row.
         canon_a = min(paper_a_id, paper_b_id)
         canon_b = max(paper_a_id, paper_b_id)

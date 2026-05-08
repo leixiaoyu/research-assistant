@@ -78,10 +78,18 @@ def _make_edge(source: str, target: str) -> GraphEdge:
     )
 
 
-def _mock_store_with_refs(refs_map: dict[str, list[str]]) -> MagicMock:
+def _mock_store_with_refs(
+    refs_map: dict[str, list[str]],
+    citers_map: dict[str, list[str]] | None = None,
+) -> MagicMock:
     """Return a mock SQLiteGraphStore whose get_edges returns controlled data.
 
     ``refs_map`` maps paper_id → list of cited paper_ids (outgoing CITES).
+
+    ``citers_map`` optionally maps paper_id → list of papers that cite it
+    (inbound CITES).  When omitted, all inbound-citer counts return 0 and
+    ``get_papers_citing_both`` returns an empty set — preserving the existing
+    test semantics for tests that only care about Jaccard coupling.
     """
     store = MagicMock(spec=SQLiteGraphStore)
 
@@ -95,6 +103,24 @@ def _mock_store_with_refs(refs_map: dict[str, list[str]]) -> MagicMock:
         return []
 
     store.get_edges.side_effect = _get_edges
+
+    effective_citers: dict[str, list[str]] = citers_map or {}
+
+    def _get_inbound_citer_count(paper_id: str) -> int:
+        return len(effective_citers.get(paper_id, []))
+
+    def _get_papers_citing_both(a_id: str, b_id: str) -> set[str]:
+        citers_a = set(effective_citers.get(a_id, []))
+        citers_b = set(effective_citers.get(b_id, []))
+        return citers_a & citers_b
+
+    def _count_papers_citing_both(a_id: str, b_id: str) -> int:
+        return len(_get_papers_citing_both(a_id, b_id))
+
+    store.get_inbound_citer_count.side_effect = _get_inbound_citer_count
+    store.get_papers_citing_both.side_effect = _get_papers_citing_both
+    store.count_papers_citing_both.side_effect = _count_papers_citing_both
+
     return store
 
 
@@ -123,7 +149,8 @@ class TestAnalyzePairJaccard:
     async def test_coupling_jaccard_exact_example_from_spec(self) -> None:
         """Spec example: A:[R1..R5], B:[R2,R3,R4,R6,R7] → 3/7 ≈ 0.4286.
 
-        Pinned with pytest.approx per REQ-9.2.3 §617.
+        Pinned with pytest.approx per REQ-9.2.3 §617.  The mock has no
+        shared citers so co_citation_count is 0.
         """
         store = _mock_store_with_refs({PAPER_A: REFS_A, PAPER_B: REFS_B})
         analyzer = CouplingAnalyzer(store)
@@ -135,6 +162,7 @@ class TestAnalyzePairJaccard:
         )
         assert result.paper_a_id == PAPER_A
         assert result.paper_b_id == PAPER_B
+        assert result.co_citation_count == 0  # no shared citers in mock
 
     @pytest.mark.asyncio
     async def test_coupling_no_overlap(self) -> None:
@@ -545,3 +573,180 @@ class TestReferencesTruncation:
         assert trunc_events[0]["cap"] == _MAX_REFERENCES
         # Computation still succeeds; PAPER_B has no refs so strength=0.
         assert result.coupling_strength == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# 7. Co-citation count (Issue #148)
+# ---------------------------------------------------------------------------
+
+
+PAPER_X = "paper:s2:citer001"
+PAPER_Y = "paper:s2:citer002"
+PAPER_Z = "paper:s2:citer003"
+
+
+class TestCoCitationCount:
+    @pytest.mark.asyncio
+    async def test_co_citation_count_zero_when_no_overlap(self) -> None:
+        """Papers with no shared citers → co_citation_count == 0."""
+        # PAPER_X cites PAPER_A only; PAPER_Y cites PAPER_B only.
+        store = _mock_store_with_refs(
+            {PAPER_A: REFS_A, PAPER_B: REFS_B},
+            citers_map={PAPER_A: [PAPER_X], PAPER_B: [PAPER_Y]},
+        )
+        analyzer = CouplingAnalyzer(store)
+        result = await analyzer.analyze_pair(PAPER_A, PAPER_B)
+
+        assert result.co_citation_count == 0
+
+    @pytest.mark.asyncio
+    async def test_co_citation_count_correct_for_two_shared_citers(self) -> None:
+        """Two shared citers → co_citation_count == 2."""
+        # PAPER_X and PAPER_Y both cite PAPER_A and PAPER_B.
+        # PAPER_Z cites only PAPER_A, so does not count.
+        store = _mock_store_with_refs(
+            {PAPER_A: REFS_A, PAPER_B: REFS_B},
+            citers_map={
+                PAPER_A: [PAPER_X, PAPER_Y, PAPER_Z],
+                PAPER_B: [PAPER_X, PAPER_Y],
+            },
+        )
+        analyzer = CouplingAnalyzer(store)
+        result = await analyzer.analyze_pair(PAPER_A, PAPER_B)
+
+        assert result.co_citation_count == 2
+
+    @pytest.mark.asyncio
+    async def test_co_citation_count_excludes_self_loops(self) -> None:
+        """A paper that cites itself (self-loop) should not count toward co-citations.
+
+        The shared-citer intersection is computed by get_papers_citing_both
+        in the storage layer.  Here we verify that PAPER_A appearing in its
+        own citer list does not inflate the result — the result must match
+        only genuine third-party papers.
+        """
+        # PAPER_A is in its own citer list (self-loop scenario).
+        # Only PAPER_X is a genuine shared citer of both.
+        store = _mock_store_with_refs(
+            {PAPER_A: REFS_A, PAPER_B: REFS_B},
+            citers_map={
+                PAPER_A: [PAPER_X, PAPER_A],  # self-loop: PAPER_A cites itself
+                PAPER_B: [PAPER_X],
+            },
+        )
+        analyzer = CouplingAnalyzer(store)
+        result = await analyzer.analyze_pair(PAPER_A, PAPER_B)
+
+        # Only PAPER_X is in the intersection — PAPER_A is not in PAPER_B's
+        # citer list so the intersection is exactly {PAPER_X}.
+        assert result.co_citation_count == 1
+
+    @pytest.mark.asyncio
+    async def test_co_citation_count_handles_one_paper_with_no_inbound_citers(
+        self,
+    ) -> None:
+        """If one paper has no inbound CITES edges, co_citation_count == 0."""
+        store = _mock_store_with_refs(
+            {PAPER_A: REFS_A, PAPER_B: REFS_B},
+            citers_map={PAPER_A: [PAPER_X, PAPER_Y]},
+            # PAPER_B has no citers → intersection is empty
+        )
+        analyzer = CouplingAnalyzer(store)
+        result = await analyzer.analyze_pair(PAPER_A, PAPER_B)
+
+        assert result.co_citation_count == 0
+
+    @pytest.mark.asyncio
+    async def test_co_citation_count_truncates_at_max(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When inbound-citer count exceeds cap, truncation audit event is emitted.
+
+        We patch MAX_INBOUND_CITERS_FOR_CO_CITATION to a tiny value (3) so
+        the test doesn't need to insert 50,001 rows.  The mock returns > 3
+        citers for PAPER_A, triggering the DoS guard.
+        """
+        monkeypatch.setattr(analyzer_mod, "logger", structlog.get_logger())
+        monkeypatch.setattr(analyzer_mod, "MAX_INBOUND_CITERS_FOR_CO_CITATION", 3)
+
+        # 4 citers for PAPER_A > cap of 3; 2 shared citers (PAPER_X, PAPER_Y).
+        citer_ids = [f"paper:s2:cit{i:04d}" for i in range(4)]
+        store = _mock_store_with_refs(
+            {PAPER_A: REFS_A, PAPER_B: REFS_B},
+            citers_map={
+                PAPER_A: citer_ids,
+                PAPER_B: citer_ids[:2],  # first 2 are shared
+            },
+        )
+        analyzer = CouplingAnalyzer(store)
+
+        with structlog.testing.capture_logs() as logs:
+            result = await analyzer.analyze_pair(PAPER_A, PAPER_B)
+
+        trunc_events = [
+            e for e in logs if e.get("event") == "coupling_co_citation_truncated"
+        ]
+        assert len(trunc_events) == 1
+        assert trunc_events[0]["paper_a_id"] == PAPER_A
+        assert trunc_events[0]["paper_b_id"] == PAPER_B
+        assert trunc_events[0]["inbound_count"] == 4
+        assert trunc_events[0]["cap"] == 3
+        # When truncation fires, the sentinel value 0 is returned — the
+        # expensive get_papers_citing_both walk is skipped entirely.
+        assert result.co_citation_count == 0
+
+    @pytest.mark.asyncio
+    async def test_compute_pair_populates_co_citation_count(self) -> None:
+        """Integration: analyze_pair returns non-zero co_citation_count."""
+        store = _mock_store_with_refs(
+            {PAPER_A: REFS_A, PAPER_B: REFS_B},
+            citers_map={
+                PAPER_A: [PAPER_X, PAPER_Y, PAPER_Z],
+                PAPER_B: [PAPER_X, PAPER_Z],
+            },
+        )
+        analyzer = CouplingAnalyzer(store)
+        result = await analyzer.analyze_pair(PAPER_A, PAPER_B)
+
+        # PAPER_X and PAPER_Z both cite A and B → co_citation_count == 2.
+        assert result.co_citation_count == 2
+        assert result.coupling_strength == pytest.approx(3 / 7, rel=1e-6)
+
+    @pytest.mark.asyncio
+    async def test_co_citation_count_truncation_skips_walk_entirely(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When DoS cap is exceeded, get_papers_citing_both is never called.
+
+        Sampling has been removed (H-1 fix): the old broken math was an
+        algebraic identity ``round(n * len(shared) / n) == len(shared)``.
+        The correct behaviour is to skip the expensive walk entirely and
+        return 0 as a sentinel.  This test verifies that
+        ``count_papers_citing_both`` is not called when the cap fires.
+        """
+        monkeypatch.setattr(analyzer_mod, "logger", structlog.get_logger())
+        monkeypatch.setattr(analyzer_mod, "MAX_INBOUND_CITERS_FOR_CO_CITATION", 2)
+
+        # 3 citers for PAPER_A (> cap of 2) → truncation fires.
+        citer_ids = [f"paper:s2:cit{i:04d}" for i in range(3)]
+        store = _mock_store_with_refs(
+            {PAPER_A: REFS_A, PAPER_B: REFS_B},
+            citers_map={
+                PAPER_A: citer_ids,
+                PAPER_B: citer_ids,
+            },
+        )
+        analyzer = CouplingAnalyzer(store)
+
+        with structlog.testing.capture_logs() as logs:
+            result = await analyzer.analyze_pair(PAPER_A, PAPER_B)
+
+        trunc_events = [
+            e for e in logs if e.get("event") == "coupling_co_citation_truncated"
+        ]
+        assert len(trunc_events) == 1
+        # Sentinel 0 returned; the expensive walk was NOT executed.
+        assert result.co_citation_count == 0
+        # Verify count_papers_citing_both was never called (DoS guard works).
+        store.count_papers_citing_both.assert_not_called()
+        store.get_papers_citing_both.assert_not_called()

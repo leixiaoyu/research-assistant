@@ -26,7 +26,8 @@ Design notes:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from typing import Optional
 
 import structlog
 from pydantic import BaseModel, ConfigDict
@@ -109,7 +110,12 @@ class ArxivMonitor:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    async def check(self, subscription: ResearchSubscription) -> ArxivMonitorResult:
+    async def check(
+        self,
+        subscription: ResearchSubscription,
+        *,
+        time_window: Optional[tuple[date, date]] = None,
+    ) -> ArxivMonitorResult:
         """Run one monitoring cycle for ``subscription``.
 
         Behavior:
@@ -117,6 +123,9 @@ class ArxivMonitor:
         1. Skip immediately if the subscription is not active or its
            sources don't include ArXiv.
         2. Build a ``ResearchTopic`` from ``query`` + ``poll_interval_hours``.
+           When ``time_window`` is provided, override the timeframe with an
+           explicit date range instead of the ``poll_interval_hours``-derived
+           window (used by the backfill step to search historical dates).
         3. Call ``ArxivProvider.search``; bound the result to
            ``max_papers_per_cycle``.
         4. For each paper, resolve identity against the registry. New
@@ -128,6 +137,13 @@ class ArxivMonitor:
         This method never raises on provider/registry failure — instead
         it returns a ``FAILED`` (or ``PARTIAL``) ``MonitoringRun`` so
         the scheduler keeps cycling through other subscriptions.
+
+        Args:
+            subscription: The subscription to check.
+            time_window: Optional ``(since_date, until_date)`` pair that
+                overrides the ``poll_interval_hours``-derived window.
+                The backfill step passes this to search a specific
+                historical window; the fresh-feed path leaves it ``None``.
         """
         run = MonitoringRun(
             subscription_id=subscription.subscription_id,
@@ -144,7 +160,7 @@ class ArxivMonitor:
             )
             return ArxivMonitorResult(run=run, new_papers=[], deduplicated_papers=[])
 
-        topic = self._build_topic(subscription)
+        topic = self._build_topic(subscription, time_window=time_window)
 
         try:
             fetched = await self._provider.search(topic)
@@ -251,13 +267,25 @@ class ArxivMonitor:
         return True
 
     @staticmethod
-    def _build_topic(subscription: ResearchSubscription) -> ResearchTopic:
+    def _build_topic(
+        subscription: ResearchSubscription,
+        *,
+        time_window: Optional[tuple[date, date]] = None,
+    ) -> ResearchTopic:
         """Map a subscription to a ``ResearchTopic`` for the provider.
 
         Delegates to the shared :func:`build_topic` helper in
         ``_paper_records`` (H-C3) so the clamping logic lives in one place.
+
+        When ``time_window`` is provided, the timeframe is set to an
+        explicit date range instead of the ``poll_interval_hours``-derived
+        window (used by the backfill step).
         """
-        return build_topic(subscription.query, subscription.poll_interval_hours)
+        return build_topic(
+            subscription.query,
+            subscription.poll_interval_hours,
+            time_window=time_window,
+        )
 
     def _topic_slug(self, subscription: ResearchSubscription) -> str:
         """Derive a topic slug for registry affiliation."""

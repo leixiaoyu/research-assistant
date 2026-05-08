@@ -67,7 +67,10 @@ from src.services.intelligence.citation.models import (
     make_citation_edge_id,
     make_paper_node_id,
 )
-from src.services.intelligence.citation.coupling_analyzer import CouplingAnalyzer
+from src.services.intelligence.citation.coupling_analyzer import (
+    CouplingAnalyzer,
+    MAX_INBOUND_CITERS_FOR_CO_CITATION,
+)
 from src.services.intelligence.citation.coupling_repository import (
     DEFAULT_MAX_AGE_DAYS,
     CitationCouplingRepository,
@@ -119,6 +122,7 @@ __all__ = [
     "MAX_GRAPH_NODES_FOR_PAGERANK",
     # Bibliographic Coupling Analyzer (Issue #128)
     "CouplingAnalyzer",
+    "MAX_INBOUND_CITERS_FOR_CO_CITATION",
     "CitationCouplingRepository",
     "CouplingResult",
     "DEFAULT_MAX_AGE_DAYS",

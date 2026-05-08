@@ -79,6 +79,13 @@ _ANALYZE_FOR_PAPER_CONCURRENCY: int = 10
 # Reference sets larger than this are truncated after emitting an audit log.
 _MAX_REFERENCES: int = 50_000
 
+# DoS cap: if either paper has more inbound CITES edges than this, the full
+# co-citation walk is skipped entirely and 0 is returned as a sentinel.
+# Rationale: 50K edges × ~100 bytes ≈ 5MB join; SQLite degrades >1s past this
+# point.  No useful estimate can be produced without an expensive subset query
+# that defeats the purpose of the guard.
+MAX_INBOUND_CITERS_FOR_CO_CITATION: int = 50_000
+
 
 def _validate_paper_id(paper_id: str) -> None:
     """Validate a canonical node id at the analyzer boundary.
@@ -260,6 +267,61 @@ class CouplingAnalyzer:
     # Internals
     # ------------------------------------------------------------------
 
+    def _compute_co_citation_count(
+        self,
+        paper_a_id: str,
+        paper_b_id: str,
+    ) -> int:
+        """Count distinct papers that cite both ``paper_a_id`` and ``paper_b_id``.
+
+        Implements the reverse-edge walk for co-citation (Issue #148).
+        Delegates the SQL to :meth:`SQLiteGraphStore.get_papers_citing_both`
+        so no raw SQL lives in the analyzer layer.
+
+        DoS guard:
+            If either paper has > :data:`MAX_INBOUND_CITERS_FOR_CO_CITATION`
+            inbound CITES edges, the walk is **skipped entirely** and ``0`` is
+            returned as a sentinel value.  A
+            ``coupling_co_citation_truncated`` audit event is emitted so
+            operators can monitor truncation frequency.
+
+            The previous implementation fetched the full shared-citer set
+            anyway and applied sampling math that reduced to an identity
+            (``round(sample_size * len(shared) / sample_size) == len(shared)``).
+            That approach provided no DoS protection.  The correct fix is to
+            skip the expensive ``get_papers_citing_both`` call entirely when
+            the DoS cap is exceeded; no useful estimate can be produced without
+            running an expensive subset query that defeats the purpose of the
+            guard.
+
+        Args:
+            paper_a_id: First paper (already validated, != paper_b_id).
+            paper_b_id: Second paper (already validated).
+
+        Returns:
+            Count of third-party papers that cite both inputs.  0 when either
+            paper has no inbound citations, when no shared citer exists, or
+            when the DoS cap is exceeded (sentinel).
+        """
+        count_a = self.store.get_inbound_citer_count(paper_a_id)
+        count_b = self.store.get_inbound_citer_count(paper_b_id)
+
+        offending_count = max(count_a, count_b)
+        if offending_count > MAX_INBOUND_CITERS_FOR_CO_CITATION:
+            logger.warning(
+                "coupling_co_citation_truncated",
+                paper_a_id=paper_a_id,
+                paper_b_id=paper_b_id,
+                inbound_count=offending_count,
+                cap=MAX_INBOUND_CITERS_FOR_CO_CITATION,
+            )
+            # Skip the expensive walk entirely — return 0 as a sentinel.
+            # Callers are expected to treat 0 under truncation as
+            # "count unavailable" rather than "no co-citation".
+            return 0
+
+        return self.store.count_papers_citing_both(paper_a_id, paper_b_id)
+
     def _get_references(self, paper_id: str) -> frozenset[str]:
         """Return the set of paper ids that ``paper_id`` references.
 
@@ -325,6 +387,8 @@ class CouplingAnalyzer:
         else:
             strength = len(shared) / len(union)
 
+        co_citation_count = self._compute_co_citation_count(paper_a_id, paper_b_id)
+
         logger.info(
             "coupling_analyzer_pair_computed",
             paper_a_id=paper_a_id,
@@ -332,16 +396,13 @@ class CouplingAnalyzer:
             shared=len(shared),
             union=len(union),
             coupling_strength=strength,
+            co_citation_count=co_citation_count,
         )
 
-        # TODO(issue #150): co_citation_count not yet computed; always 0.
-        # Full implementation requires a reverse-edge walk: find all papers
-        # with outgoing CITES edges to BOTH paper_a_id AND paper_b_id.
-        # Filed as a follow-up to keep this PR focused on Jaccard coupling.
         return CouplingResult(
             paper_a_id=paper_a_id,
             paper_b_id=paper_b_id,
             shared_references=sorted(shared),
             coupling_strength=strength,
-            co_citation_count=0,
+            co_citation_count=co_citation_count,
         )

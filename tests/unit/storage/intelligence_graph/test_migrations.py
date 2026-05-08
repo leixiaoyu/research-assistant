@@ -27,6 +27,7 @@ from src.storage.intelligence_graph.migrations import (
     MIGRATION_V5_PAPER_SOURCE_TRACKING,
     MIGRATION_V6_CITATION_COUPLING_CACHE,
     MIGRATION_V7_BACKFILL_COLUMNS,
+    MIGRATION_V8_BACKFILL_PAPERS,
 )
 from src.utils.security import SecurityError
 
@@ -1976,11 +1977,12 @@ class TestLatestMigrationVersion:
     def test_latest_version_constant_matches_all_migrations(self) -> None:
         assert LATEST_MIGRATION_VERSION == max(m.version for m in ALL_MIGRATIONS)
 
-    def test_latest_version_is_7(self) -> None:
+    def test_latest_version_is_8(self) -> None:
         # Pinned literal so an accidental version bump shows up in
         # review even if ``ALL_MIGRATIONS`` is also extended.
-        # Updated from 6 to 7 for the Phase 9.1 backfill migration (#145).
-        assert LATEST_MIGRATION_VERSION == 7
+        # Updated from 7 to 8 for the PR #152 fix-up: V8 adds
+        # backfill_papers column to monitoring_runs.
+        assert LATEST_MIGRATION_VERSION == 8
 
 
 class TestMigrationV7BackfillColumns:
@@ -2202,3 +2204,144 @@ class TestMigrationV7BackfillColumns:
             "V7 migration SQL must contain 0 as the lower bound "
             "for the backfill_days CHECK constraint."
         )
+
+
+class TestMigrationV8BackfillPapers:
+    """Tests for MIGRATION_V8_BACKFILL_PAPERS (PR #152 C-2 fix-up)."""
+
+    def test_migrate_v8_adds_backfill_papers_column(self, temp_db: Path) -> None:
+        """V8 must add a backfill_papers column to monitoring_runs."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            cols = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(monitoring_runs)").fetchall()
+            }
+        assert "backfill_papers" in cols, "V8 did not add backfill_papers column"
+
+    def test_migrate_v8_backfill_papers_default_is_zero(self, temp_db: Path) -> None:
+        """Pre-V8 monitoring_runs rows get backfill_papers=0 via DEFAULT."""
+        manager = MigrationManager(temp_db)
+        # Apply only V1-V7 first, insert a run row, then apply V8 in isolation.
+        v1_to_v7 = [m for m in ALL_MIGRATIONS if m.version <= 7]
+        conn = manager._get_connection()
+        try:
+            manager._ensure_migrations_table(conn)
+            for migration in v1_to_v7:
+                manager.apply_migration(conn, migration)
+        finally:
+            conn.close()
+
+        # Insert a subscription first (FK constraint from V3 requires it).
+        with open_connection(temp_db) as conn:
+            conn.execute(
+                """
+                INSERT INTO subscriptions
+                    (subscription_id, user_id, name, config,
+                     is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "sub-001",
+                    "alice",
+                    "Test Sub",
+                    "{}",
+                    1,
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            )
+            # Insert a monitoring_runs row without backfill_papers (pre-V8 style).
+            conn.execute(
+                """
+                INSERT INTO monitoring_runs
+                    (run_id, subscription_id, user_id, started_at, status,
+                     papers_found, papers_new)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "run-pre-v8",
+                    "sub-001",
+                    "alice",
+                    "2026-01-01T00:00:00+00:00",
+                    "success",
+                    5,
+                    3,
+                ),
+            )
+            conn.commit()
+
+        # Now apply V8 in isolation.
+        conn = manager._get_connection()
+        try:
+            manager.apply_migration(conn, MIGRATION_V8_BACKFILL_PAPERS)
+        finally:
+            conn.close()
+
+        # Pre-V8 row must have backfill_papers=0 via column DEFAULT.
+        with open_connection(temp_db) as conn:
+            row = conn.execute(
+                "SELECT backfill_papers FROM monitoring_runs WHERE run_id = ?",
+                ("run-pre-v8",),
+            ).fetchone()
+        assert row is not None, "Pre-V8 run row was destroyed by V8"
+        assert (
+            row["backfill_papers"] == 0
+        ), f"Pre-V8 row backfill_papers must default to 0, got {row['backfill_papers']}"
+
+    def test_migrate_v8_appears_in_schema_migrations(self, temp_db: Path) -> None:
+        """V8 must appear in schema_migrations after a full migrate()."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        with open_connection(temp_db) as conn:
+            row = conn.execute(
+                "SELECT version FROM schema_migrations WHERE version = 8"
+            ).fetchone()
+        assert row is not None, "V8 not recorded in schema_migrations table"
+
+    def test_migrate_v8_check_constraint_rejects_negative(self, temp_db: Path) -> None:
+        """V8 CHECK constraint must reject negative backfill_papers values."""
+        manager = MigrationManager(temp_db)
+        manager.migrate()
+        import sqlite3
+
+        with open_connection(temp_db) as conn:
+            # Insert a subscription first (FK constraint).
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO subscriptions
+                    (subscription_id, user_id, name, config,
+                     is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "sub-001",
+                    "alice",
+                    "Test Sub",
+                    "{}",
+                    1,
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            )
+            conn.commit()
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    """
+                    INSERT INTO monitoring_runs
+                        (run_id, subscription_id, user_id, started_at, status,
+                         papers_found, papers_new, backfill_papers)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "run-neg",
+                        "sub-001",
+                        "alice",
+                        "2026-01-01T00:00:00+00:00",
+                        "success",
+                        0,
+                        0,
+                        -1,
+                    ),
+                )

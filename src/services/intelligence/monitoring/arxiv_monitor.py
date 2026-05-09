@@ -183,7 +183,7 @@ class ArxivMonitor:
             logger.warning(
                 "monitor_provider_error",
                 subscription_id=subscription.subscription_id,
-                error=str(exc),
+                error=_trunc(exc),
             )
             return ArxivMonitorResult(run=run, new_papers=[], deduplicated_papers=[])
 

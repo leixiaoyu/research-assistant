@@ -55,6 +55,7 @@ from src.services.intelligence.monitoring.models import (
     MonitoringRunAudit,
     ResearchSubscription,
 )
+from src.storage.intelligence_graph.connection import _trunc
 from src.utils.security import PathSanitizer, SecurityError
 
 if TYPE_CHECKING:
@@ -430,7 +431,7 @@ class DigestGenerator:
             logger.warning(
                 "monitoring_digest_registry_lookup_failed",
                 paper_id=paper_id,
-                error=str(exc),
+                error=_trunc(exc),
             )
             return paper_id, None
         if entry is None:
@@ -462,7 +463,7 @@ class DigestGenerator:
             logger.warning(
                 "monitoring_digest_registry_load_failed",
                 paper_id=paper_id,
-                error=str(exc),
+                error=_trunc(exc),
             )
             return None
         candidates: list[str] = [paper_id]

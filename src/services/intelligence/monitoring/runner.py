@@ -487,7 +487,7 @@ class MonitoringRunner:
             logger.warning(
                 "monitoring_runner_check_error",
                 subscription_id=subscription.subscription_id,
-                error=str(exc),
+                error=_trunc(exc),
             )
             run = MonitoringRun(
                 subscription_id=subscription.subscription_id,

@@ -509,7 +509,7 @@ class MonitoringRun(BaseModel):
     (Week 1 keeps these in-memory; Week 2's scheduler will write them).
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     run_id: str = Field(
         default_factory=lambda: f"run-{uuid.uuid4().hex[:12]}",

@@ -356,6 +356,62 @@ ARISP Paper Registry + LLM Service
 
 ---
 
+### Phase 9: Research Intelligence Layer
+**Status:** 🔄 **IN PROGRESS** (9.1 + 9.2 shipped; 9.5 inserted; 9.3 + 9.4 deferred behind 9.5)
+**Duration:** ~12-14 weeks total across all sub-phases
+**Dependencies:** Phase 8 Complete (DRA), Phase 3.5 (Registry), Phase 6 Core (Enhanced Discovery)
+**Goal:** Transform ARISP from reactive paper-discovery system into proactive, relationship-aware research intelligence platform
+
+#### Sub-Phase Status
+
+| Sub-Phase | Title | Status | Notes |
+|---|---|---|---|
+| **9.1** | Monitoring (subscriptions, ArXiv polling, LLM query expansion, digests) | ✅ Shipped | Currently degraded in production (see 9.5); will be repaired by 9.5 Workstream A |
+| **9.2** | Citation Graph (BFS crawl, bibliographic coupling, recommender, co-citation) | ✅ Shipped | Built and CLI-accessible (#147, #150, #151, #152); not yet wired into daily discovery loop (see 9.5 Workstream B) |
+| **9.5** | Pipeline Reliability, Discovery Breadth, Learning Synthesis | 📋 Planning | **NEW** — addresses production pipeline gaps; blocks 9.3/9.4. See [PHASE_9.5_RELIABILITY_BREADTH_LEARNING_SPEC.md](specs/PHASE_9.5_RELIABILITY_BREADTH_LEARNING_SPEC.md) |
+| **9.3** | Knowledge Graph (entity extraction, cross-paper compare) | ⏸️ Deferred | Behind 9.5; will benefit from 9.5's reliability improvements and broader candidate pool |
+| **9.4** | Frontier Detection (trends, emergence, gaps) | ⏸️ Deferred | Behind 9.5; recommended order after 9.5 closeout: 9.4 then 9.3 (revisit during 9.5 closeout) |
+
+**Details:** See [PHASE_9_RESEARCH_INTELLIGENCE_SPEC.md](specs/PHASE_9_RESEARCH_INTELLIGENCE_SPEC.md) for the full Phase 9 specification.
+
+---
+
+### Phase 9.5: Pipeline Reliability, Discovery Breadth, and Targeted Learning Synthesis
+**Status:** 📋 **Planning** (drafted 2026-05-09)
+**Duration:** 4 weeks
+**Dependencies:** Phase 9.1 (shipped, degraded), Phase 9.2 (shipped), Phase 5.1 (LLM decomposition), Phase 3.7 (cross-topic synthesis)
+**Blocks:** Phase 9.3, Phase 9.4
+**Goal:** Restore the production pipeline to producing useful per-paper extractions, then layer cross-paper weekly synthesis on top — so daily output is curated learning, not a list of titles.
+
+#### Problem Addressed
+Production pipeline diagnostic (2026-05-09) reveals two interdependent gaps the original Phase 9 plan does not cover:
+
+1. **Ingestion produces degraded output.** ~54% of papers fail PDF extraction due to a URL-as-Path bug in `src/orchestration/paper_processor.py:138-145`; ~63% of LLM extraction attempts fail due to free-tier quota exhaustion; the Anthropic fallback provider is offline (invalid API key, silent degradation). Daily Delta briefs are abstract-only title lists.
+
+2. **Discovery is structurally narrow.** Only ArXiv reliably returns PDF-bearing papers (HuggingFace returns 0 after filtering, Semantic Scholar reports `pdf_available: 0`); topics are hand-picked and never rotate; the Phase 9.2 citation graph exists but is not used in the daily discovery loop; the Phase 9.1 monitoring service returns 0 new papers per cycle (cascading failure from broken Anthropic key).
+
+#### Three Workstreams
+
+**Workstream A: Pipeline Reliability (Week 1)** — fixes the URL-as-Path bug, surfaces LLM provider failures at startup with explicit signals, audits broken HuggingFace/SS provider PDF resolution, defines `using_abstract_fallback` SLO indicator. **Blocks Workstream C.**
+
+**Workstream B: Discovery Breadth (Weeks 2-3, parallel with C ramp)** — wires Phase 9.2 citation expansion into the daily flow (1-hop neighborhood of high-quality recent papers); extracts `QueryExpander` to a shared service used by both monitoring and discovery; tags candidate provenance for diagnostic attribution. **Does NOT add new providers in 9.5** (Crossref/CORE/etc. are explicitly out of scope).
+
+**Workstream C: Targeted Learning Synthesis (Weeks 3-4)** — adds a new weekly Learning Brief output that synthesizes successfully-extracted per-paper data into cross-paper findings: novel techniques, new benchmarks, contradictions, SOTA changes, engineering tips. CLI: `arisp learning generate|latest|list`; APScheduler `LearningBriefJob` runs weekly.
+
+#### Success Metrics
+- `using_abstract_fallback` rate ≤20% (baseline: ~70%)
+- PDF extraction success rate ≥95% (baseline: ~46%)
+- Net new papers via citation_expansion ≥20/run averaged over 7 days (baseline: 0)
+- Weekly Learning Brief generated with ≥3 substantive cited findings
+- Phase 9.3 and 9.4 unblocked
+
+#### Open Question (User Decision Needed Before Workstream C)
+LLM provider strategy: paid Gemini tier vs. rotate Anthropic key + paid Claude vs. throttle to free tier vs. local model. Workstream C is provider-agnostic via config; choice can land before C ships without rework.
+
+**Details:** See [PHASE_9.5_RELIABILITY_BREADTH_LEARNING_SPEC.md](specs/PHASE_9.5_RELIABILITY_BREADTH_LEARNING_SPEC.md) and [phase-9.5-execution-plan.md](../.omc/plans/phase-9.5-execution-plan.md).
+
+---
+
 ### Phase 4: Production Hardening
 **Duration:** 1 week
 **Dependencies:** Phase 3.6 (with security gates passed)

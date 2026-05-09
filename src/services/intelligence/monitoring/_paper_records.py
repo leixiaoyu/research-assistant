@@ -69,6 +69,7 @@ def build_topic(
     poll_interval_hours: int,
     *,
     time_window: Optional[tuple[date, date]] = None,
+    max_papers: Optional[int] = None,
 ) -> ResearchTopic:
     """Construct a :class:`ResearchTopic` for a given query and interval.
 
@@ -88,6 +89,11 @@ def build_topic(
     ``validate_recent_format``. We clamp ``poll_interval_hours`` to that
     ceiling here to avoid a validation error mid-cycle.
 
+    When ``max_papers`` is provided it is passed as
+    :attr:`ResearchTopic.max_papers` so the discovery provider never
+    fetches more than the caller's budget (H-2). When ``None`` the
+    ``ResearchTopic`` default (50) applies.
+
     Args:
         query: The search query string (already expanded / validated by
             the caller).
@@ -98,6 +104,9 @@ def build_topic(
             overrides the ``poll_interval_hours``-derived window.
             Callers that need an explicit historical range (backfill)
             pass this; the fresh-feed path leaves it ``None``.
+        max_papers: Optional provider-level paper cap injected into
+            :attr:`ResearchTopic.max_papers` (H-2). When ``None`` the
+            model's default of 50 is used.
 
     Returns:
         A ``ResearchTopic`` ready to be passed to a
@@ -117,4 +126,7 @@ def build_topic(
             type=TimeframeType.RECENT,
             value=f"{hours}h",
         )
-    return ResearchTopic(query=query, timeframe=timeframe)
+    kwargs: dict = {"query": query, "timeframe": timeframe}
+    if max_papers is not None:
+        kwargs["max_papers"] = max_papers
+    return ResearchTopic(**kwargs)

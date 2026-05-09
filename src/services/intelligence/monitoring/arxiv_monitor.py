@@ -40,6 +40,7 @@ from src.services.intelligence.monitoring._paper_records import (
     build_topic,
     to_paper_record,
 )
+from src.storage.intelligence_graph.connection import _trunc
 from src.services.intelligence.monitoring.models import (
     MAX_PAPERS_PER_CYCLE,
     MAX_POLL_HOURS,
@@ -115,6 +116,7 @@ class ArxivMonitor:
         subscription: ResearchSubscription,
         *,
         time_window: Optional[tuple[date, date]] = None,
+        max_papers: Optional[int] = None,
     ) -> ArxivMonitorResult:
         """Run one monitoring cycle for ``subscription``.
 
@@ -144,6 +146,11 @@ class ArxivMonitor:
                 overrides the ``poll_interval_hours``-derived window.
                 The backfill step passes this to search a specific
                 historical window; the fresh-feed path leaves it ``None``.
+            max_papers: Optional per-call paper cap passed directly to
+                the provider via ``ResearchTopic.max_papers`` (H-2).
+                The backfill step passes ``papers_cap`` so the provider
+                never fetches more than the budget allows. When ``None``
+                the topic's own default (50) is used.
         """
         run = MonitoringRun(
             subscription_id=subscription.subscription_id,
@@ -160,7 +167,9 @@ class ArxivMonitor:
             )
             return ArxivMonitorResult(run=run, new_papers=[], deduplicated_papers=[])
 
-        topic = self._build_topic(subscription, time_window=time_window)
+        topic = self._build_topic(
+            subscription, time_window=time_window, max_papers=max_papers
+        )
 
         try:
             fetched = await self._provider.search(topic)
@@ -202,7 +211,7 @@ class ArxivMonitor:
                     "monitor_identity_resolution_error",
                     subscription_id=subscription.subscription_id,
                     paper_id=paper.paper_id,
-                    error=str(exc),
+                    error=_trunc(exc),
                 )
                 continue
 
@@ -221,7 +230,7 @@ class ArxivMonitor:
                     "monitor_registry_write_error",
                     subscription_id=subscription.subscription_id,
                     paper_id=paper.paper_id,
-                    error=str(exc),
+                    error=_trunc(exc),
                 )
                 continue
 
@@ -271,6 +280,7 @@ class ArxivMonitor:
         subscription: ResearchSubscription,
         *,
         time_window: Optional[tuple[date, date]] = None,
+        max_papers: Optional[int] = None,
     ) -> ResearchTopic:
         """Map a subscription to a ``ResearchTopic`` for the provider.
 
@@ -280,11 +290,15 @@ class ArxivMonitor:
         When ``time_window`` is provided, the timeframe is set to an
         explicit date range instead of the ``poll_interval_hours``-derived
         window (used by the backfill step).
+
+        When ``max_papers`` is provided it overrides the default cap so
+        the provider never fetches more than the caller's budget (H-2).
         """
         return build_topic(
             subscription.query,
             subscription.poll_interval_hours,
             time_window=time_window,
+            max_papers=max_papers,
         )
 
     def _topic_slug(self, subscription: ResearchSubscription) -> str:

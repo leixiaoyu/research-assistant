@@ -789,7 +789,10 @@ class TestUnknownSourceFailLoud:
     """
 
     def test_fetch_papers_unknown_source_logs_and_reraises(
-        self, repo: MonitoringRunRepository, db_path: Path
+        self,
+        repo: MonitoringRunRepository,
+        db_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         import sqlite3 as _sqlite3
         import structlog
@@ -819,15 +822,12 @@ class TestUnknownSourceFailLoud:
             )
             conn.commit()
 
+        # H-5: use monkeypatch.setattr for safe logger rebinding so the
+        # original is always restored even if the test body raises.
+        monkeypatch.setattr(rr_mod, "logger", structlog.get_logger())
         with structlog.testing.capture_logs() as logs:
-            # Rebind module-level logger so capture_logs() intercepts it.
-            original_logger = rr_mod.logger
-            rr_mod.logger = structlog.get_logger()
-            try:
-                with pytest.raises(ValueError):
-                    repo.get_run("run-unknown-src")
-            finally:
-                rr_mod.logger = original_logger
+            with pytest.raises(ValueError, match=r"not a valid PaperSource"):
+                repo.get_run("run-unknown-src")
 
         error_events = [
             e for e in logs if e.get("event") == "monitoring_paper_unknown_source"

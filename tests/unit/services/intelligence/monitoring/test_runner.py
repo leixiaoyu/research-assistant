@@ -2288,3 +2288,98 @@ class TestRunnerBackfillPapersField:
             "confirms it's a real Pydantic field not a private attr"
         )
         assert run_dict["backfill_papers"] == 3
+
+
+# ===========================================================================
+# C-1 regression: record_run receives the real backfill_papers count
+# ===========================================================================
+
+
+class TestRunnerBackfillPapersPersistedBeforeRecordRun:
+    """C-1 regression guard: backfill_papers must be set on the run BEFORE
+    record_run is called so the DB row reflects the real count, not 0.
+    """
+
+    @pytest.mark.asyncio
+    async def test_record_run_receives_correct_backfill_papers_count(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """record_run must be called AFTER the backfill step so the run
+        object it receives has backfill_papers set to the actual count.
+
+        C-1 fix: reordered _run_one to run backfill before record_run.
+        Without the fix, record_run.call_args.kwargs["run"].backfill_papers
+        would always be 0 (Pydantic default) even though the in-memory
+        run ends up with backfill_papers=3.
+
+        This test captures record_run.call_args and asserts the run
+        object passed to it has backfill_papers == expected_count —
+        verifying the production code path (not just in-memory state).
+        """
+        from unittest.mock import AsyncMock, MagicMock
+        from src.services.intelligence.monitoring.models import (
+            MonitoringPaperRecord,
+        )
+        import src.services.intelligence.monitoring.runner as runner_module
+
+        monkeypatch.setattr(runner_module, "logger", structlog.get_logger())
+
+        sub = _make_subscription_with_backfill(backfill_days=7)
+        fresh_run = _make_run(subscription_id=sub.subscription_id)
+        fresh_result = ArxivMonitorResult(
+            run=fresh_run, new_papers=[], deduplicated_papers=[]
+        )
+
+        # Backfill run has 4 papers — a number distinct from 0 or 3.
+        backfill_papers_list = [
+            MonitoringPaperRecord(
+                paper_id=f"c1-bf:{i}",
+                title=f"C1 Backfill {i}",
+                is_new=True,
+                source=PaperSource.ARXIV,
+            )
+            for i in range(4)
+        ]
+        backfill_run = MonitoringRun(
+            subscription_id=sub.subscription_id,
+            status=MonitoringRunStatus.SUCCESS,
+            papers=backfill_papers_list,
+        )
+        backfill_result = ArxivMonitorResult(
+            run=backfill_run, new_papers=[], deduplicated_papers=[]
+        )
+
+        monitor = MagicMock()
+        monitor.check = AsyncMock(side_effect=[fresh_result, backfill_result])
+        repo = MagicMock()
+        repo.record_run = MagicMock()  # records call_args for inspection
+        sub_mgr = MagicMock()
+        sub_mgr.mark_checked = MagicMock()
+        sub_mgr.update_backfill_cursor = MagicMock()
+
+        runner = MonitoringRunner(
+            subscription_manager=sub_mgr,
+            monitor=monitor,
+            run_repo=repo,
+        )
+
+        returned_run = await runner._run_one(sub)
+
+        # ---------------------------------------------------------------
+        # C-1 regression assertion: inspect what record_run actually
+        # received. Before the C-1 fix this would be 0 because backfill
+        # ran AFTER record_run. Now it must be 4.
+        # ---------------------------------------------------------------
+        assert repo.record_run.call_count == 1, "record_run must be called exactly once"
+        call_args = repo.record_run.call_args
+        # record_run is called as record_run(run, user_id=...) so the run
+        # is the first positional arg.
+        persisted_run = call_args.args[0]
+        assert persisted_run.backfill_papers == 4, (
+            f"record_run must receive a run with backfill_papers=4, "
+            f"got {persisted_run.backfill_papers}. "
+            "C-1 fix: backfill step must run BEFORE record_run."
+        )
+
+        # Also confirm the in-memory run agrees.
+        assert returned_run.backfill_papers == 4

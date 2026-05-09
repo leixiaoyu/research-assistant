@@ -2326,7 +2326,7 @@ class TestMigrationV8BackfillPapers:
                 ),
             )
             conn.commit()
-            with pytest.raises(sqlite3.IntegrityError):
+            with pytest.raises(sqlite3.IntegrityError, match=r"CHECK constraint"):
                 conn.execute(
                     """
                     INSERT INTO monitoring_runs

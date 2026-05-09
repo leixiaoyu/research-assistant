@@ -378,7 +378,7 @@ class TestLimits:
         manager.add_subscription(sub)
         # Push past the cap directly on the model to bypass validation.
         sub.keywords = [f"k-{i}" for i in range(MAX_KEYWORDS_PER_SUBSCRIPTION + 1)]
-        with pytest.raises(SubscriptionLimitError):
+        with pytest.raises(SubscriptionLimitError, match=r"keywords per subscription"):
             manager.update_subscription(sub)
 
 
@@ -391,7 +391,7 @@ class TestPathSafety:
     def test_rejects_path_outside_approved_roots(self) -> None:
         from src.utils.security import SecurityError
 
-        with pytest.raises(SecurityError):
+        with pytest.raises(SecurityError, match=r"outside approved storage roots"):
             SubscriptionManager("/etc/forbidden.db")
 
 
@@ -659,7 +659,10 @@ class TestBackfillCursor:
         assert match.backfill_days == 14
 
     def test_deserialize_gracefully_handles_corrupted_backfill_cursor(
-        self, manager: SubscriptionManager, db_path: Path
+        self,
+        manager: SubscriptionManager,
+        db_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """M-1: Corrupted backfill_cursor_date degrades gracefully.
 
@@ -668,7 +671,9 @@ class TestBackfillCursor:
         log a warning and treat the value as None rather than raising
         ValueError and aborting the entire monitoring cycle.
         """
+        import structlog
         import structlog.testing
+        import src.services.intelligence.monitoring.subscription_manager as sm_module
 
         sub = ResearchSubscription(name="Corrupt Cursor", query="q", backfill_days=7)
         manager.add_subscription(sub)
@@ -683,6 +688,12 @@ class TestBackfillCursor:
                 ("NOT-A-DATE", sub.subscription_id),
             )
             conn.commit()
+
+        # H-6: use monkeypatch.setattr so the logger is safely restored
+        # even if the assertion inside capture_logs raises. Must be set
+        # BEFORE entering the capture_logs() context so the processor
+        # swap takes effect on the freshly-bound logger.
+        monkeypatch.setattr(sm_module, "logger", structlog.get_logger())
 
         # get_subscription must return the subscription (degraded to None cursor)
         # rather than raising ValueError.

@@ -50,7 +50,10 @@ from typing import Iterator, Optional
 
 import structlog
 
-from src.services.intelligence.models.monitoring import SubscriptionLimitError
+from src.services.intelligence.models.monitoring import (
+    PaperSource,
+    SubscriptionLimitError,
+)
 from src.services.intelligence.monitoring.models import (
     MAX_KEYWORDS_PER_SUBSCRIPTION,
     ResearchSubscription,
@@ -157,8 +160,6 @@ class SubscriptionManager:
 
     @staticmethod
     def _deserialize(row: sqlite3.Row) -> ResearchSubscription:
-        from src.services.intelligence.models.monitoring import PaperSource as _PS
-
         config = json.loads(row["config"])
         # H-4: ResearchSubscription now has strict=True. The ``sources``
         # field is stored in the JSON blob as a list of strings (e.g.,
@@ -166,7 +167,7 @@ class SubscriptionManager:
         # raw strings. Coerce them here so the round-trip works.
         if "sources" in config and isinstance(config["sources"], list):
             config["sources"] = [
-                _PS(s) if isinstance(s, str) else s for s in config["sources"]
+                PaperSource(s) if isinstance(s, str) else s for s in config["sources"]
             ]
         # Re-stitch the column-promoted fields back into the dict so we
         # round-trip via the model validator.
@@ -176,12 +177,18 @@ class SubscriptionManager:
         # (DEFAULT 0 / NULL). Older rows that pre-date the migration
         # already carry the defaults via SQLite's column default
         # mechanism, so these will never be absent from the Row object.
-        backfill_days_val = row["backfill_days"] if "backfill_days" in row.keys() else 0
-        backfill_cursor_raw = (
-            row["backfill_cursor_date"]
-            if "backfill_cursor_date" in row.keys()
-            else None
+        # L-2: assert loudly if the V7 migration was somehow skipped
+        # rather than silently returning 0 from a pre-V7 DB.
+        assert "backfill_days" in row.keys(), (
+            "backfill_days column missing — V7 migration has not been applied. "
+            "Run MigrationManager.migrate() before starting the scheduler."
         )
+        backfill_days_val = row["backfill_days"]
+        assert "backfill_cursor_date" in row.keys(), (
+            "backfill_cursor_date column missing — V7 migration has not been applied. "
+            "Run MigrationManager.migrate() before starting the scheduler."
+        )
+        backfill_cursor_raw = row["backfill_cursor_date"]
         # M-1: Wrap date.fromisoformat in try/except so a corrupted
         # backfill_cursor_date value (e.g., from a manual SQL UPDATE or
         # schema drift) degrades gracefully instead of aborting the

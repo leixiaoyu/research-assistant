@@ -12,10 +12,15 @@ H-C3: ``build_topic`` consolidates ``ArxivMonitor._build_topic`` and
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Optional
+from datetime import date, datetime
+from typing import Optional, Union
 
-from src.models.config.core import ResearchTopic, TimeframeRecent, TimeframeType
+from src.models.config.core import (
+    ResearchTopic,
+    TimeframeDateRange,
+    TimeframeRecent,
+    TimeframeType,
+)
 from src.models.paper import PaperMetadata
 from src.services.intelligence.models.monitoring import PaperSource
 from src.services.intelligence.monitoring.models import (
@@ -59,28 +64,69 @@ def to_paper_record(
     )
 
 
-def build_topic(query: str, poll_interval_hours: int) -> ResearchTopic:
+def build_topic(
+    query: str,
+    poll_interval_hours: int,
+    *,
+    time_window: Optional[tuple[date, date]] = None,
+    max_papers: Optional[int] = None,
+) -> ResearchTopic:
     """Construct a :class:`ResearchTopic` for a given query and interval.
+
+    When ``time_window`` is provided (a ``(since, until)`` date pair), the
+    topic's timeframe is set to a :class:`TimeframeDateRange` spanning that
+    explicit window.  This is used by the backfill step so each backfill
+    cycle searches the historical window it is assigned rather than
+    re-fetching the same fresh-feed window derived from
+    ``poll_interval_hours``.
+
+    When ``time_window`` is ``None`` (the default — normal fresh-feed path),
+    the timeframe is a :class:`TimeframeRecent` window derived from
+    ``poll_interval_hours`` as before.
 
     The ``TimeframeRecent`` value pattern is ``\\d+[hd]``, with a
     ``MAX_POLL_HOURS`` cap (~30 days) enforced by the model's
     ``validate_recent_format``. We clamp ``poll_interval_hours`` to that
     ceiling here to avoid a validation error mid-cycle.
 
+    When ``max_papers`` is provided it is passed as
+    :attr:`ResearchTopic.max_papers` so the discovery provider never
+    fetches more than the caller's budget (H-2). When ``None`` the
+    ``ResearchTopic`` default (50) applies.
+
     Args:
         query: The search query string (already expanded / validated by
             the caller).
         poll_interval_hours: The subscription's polling interval; used as
-            the look-back window. Values above ``MAX_POLL_HOURS`` are
-            silently clamped.
+            the look-back window for the default fresh-feed path. Values
+            above ``MAX_POLL_HOURS`` are silently clamped.
+        time_window: Optional ``(since_date, until_date)`` pair that
+            overrides the ``poll_interval_hours``-derived window.
+            Callers that need an explicit historical range (backfill)
+            pass this; the fresh-feed path leaves it ``None``.
+        max_papers: Optional provider-level paper cap injected into
+            :attr:`ResearchTopic.max_papers` (H-2). When ``None`` the
+            model's default of 50 is used.
 
     Returns:
         A ``ResearchTopic`` ready to be passed to a
         ``DiscoveryProvider.search`` call.
     """
-    hours = min(poll_interval_hours, MAX_POLL_HOURS)
-    timeframe = TimeframeRecent(
-        type=TimeframeType.RECENT,
-        value=f"{hours}h",
-    )
-    return ResearchTopic(query=query, timeframe=timeframe)
+    timeframe: Union[TimeframeDateRange, TimeframeRecent]
+    if time_window is not None:
+        since, until = time_window
+        timeframe = TimeframeDateRange(
+            type=TimeframeType.DATE_RANGE,
+            start_date=since,
+            end_date=until,
+        )
+    else:
+        hours = min(poll_interval_hours, MAX_POLL_HOURS)
+        timeframe = TimeframeRecent(
+            type=TimeframeType.RECENT,
+            value=f"{hours}h",
+        )
+    kwargs: dict = {"query": query, "timeframe": timeframe}
+    if max_papers is not None:
+        kwargs["max_papers"] = max_papers
+    return ResearchTopic(**kwargs)

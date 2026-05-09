@@ -43,7 +43,7 @@ returns its result.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 import structlog
@@ -66,6 +66,7 @@ from src.services.intelligence.monitoring.models import (
 )
 from src.services.providers.base import DiscoveryProvider
 from src.services.registry import RegistryService
+from src.storage.intelligence_graph.connection import _trunc
 
 if TYPE_CHECKING:
     from src.utils.query_expander import QueryExpander
@@ -170,6 +171,8 @@ class MultiProviderMonitor:
         *,
         llm_calls_used: Optional[list[int]] = None,
         max_calls: Optional[int] = None,
+        time_window: Optional[tuple[date, date]] = None,
+        max_papers: Optional[int] = None,
     ) -> ArxivMonitorResult:
         """Run one expanded multi-provider monitoring cycle.
 
@@ -209,6 +212,14 @@ class MultiProviderMonitor:
             max_calls: Maximum allowed LLM calls. Checked against
                 ``llm_calls_used[0]`` before the expander is invoked.
                 Ignored when ``llm_calls_used`` is ``None``.
+            time_window: Optional ``(since_date, until_date)`` pair that
+                overrides the ``poll_interval_hours``-derived window.
+                The backfill step passes this to search a specific
+                historical window; the fresh-feed path leaves it ``None``.
+            max_papers: Optional per-call paper cap injected into
+                ``ResearchTopic.max_papers`` for every provider call so
+                the provider never fetches more than the caller's budget
+                (H-2). When ``None`` the topic default (50) applies.
 
         This method never raises — it always returns a result with a
         meaningful :class:`MonitoringRun` status.
@@ -270,7 +281,12 @@ class MultiProviderMonitor:
                     # validation error on a bad variant (e.g., containing
                     # characters rejected by ResearchTopic) does not abort
                     # the whole cycle — it's treated as a provider failure.
-                    topic = self._build_topic_for_query(subscription, variant)
+                    topic = self._build_topic_for_query(
+                        subscription,
+                        variant,
+                        time_window=time_window,
+                        max_papers=max_papers,
+                    )
                     results = await provider.search(topic)
                 except Exception as exc:
                     partial_failure = True
@@ -279,7 +295,7 @@ class MultiProviderMonitor:
                         subscription_id=subscription.subscription_id,
                         source=source.value,
                         query=variant[:120],
-                        error=repr(str(exc)[:512]),
+                        error=_trunc(exc),
                     )
                     continue
                 for paper in results:
@@ -401,7 +417,7 @@ class MultiProviderMonitor:
             logger.warning(
                 "monitor_query_expansion_failed",
                 subscription_id=subscription.subscription_id,
-                error=repr(str(exc)[:512]),
+                error=_trunc(exc),
             )
             return [subscription.query], True
 
@@ -441,14 +457,31 @@ class MultiProviderMonitor:
         return validated, False
 
     def _build_topic_for_query(
-        self, subscription: ResearchSubscription, query: str
+        self,
+        subscription: ResearchSubscription,
+        query: str,
+        *,
+        time_window: Optional[tuple[date, date]] = None,
+        max_papers: Optional[int] = None,
     ) -> ResearchTopic:
         """Construct a :class:`ResearchTopic` for one query variant.
 
         Delegates to the shared :func:`build_topic` helper (H-C3) so
         the look-back-window clamping logic lives in one place.
+
+        When ``time_window`` is provided, the timeframe is set to an
+        explicit date range instead of the ``poll_interval_hours``-derived
+        window (used by the backfill step).
+
+        When ``max_papers`` is provided it overrides the default cap so
+        the provider never fetches more than the caller's budget (H-2).
         """
-        return build_topic(query, subscription.poll_interval_hours)
+        return build_topic(
+            query,
+            subscription.poll_interval_hours,
+            time_window=time_window,
+            max_papers=max_papers,
+        )
 
     @staticmethod
     def _dedup_by_paper_id(
@@ -503,7 +536,7 @@ class MultiProviderMonitor:
                     subscription_id=subscription.subscription_id,
                     paper_id=paper.paper_id,
                     source=source.value,
-                    error=repr(str(exc)[:512]),
+                    error=_trunc(exc),
                 )
                 continue
 
@@ -525,7 +558,7 @@ class MultiProviderMonitor:
                     subscription_id=subscription.subscription_id,
                     paper_id=paper.paper_id,
                     source=source.value,
-                    error=repr(str(exc)[:512]),
+                    error=_trunc(exc),
                 )
                 continue
 

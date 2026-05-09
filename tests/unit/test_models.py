@@ -42,6 +42,27 @@ def test_timeframe_date_range_validation():
         TimeframeDateRange(start_date=date(2023, 1, 31), end_date=date(2023, 1, 1))
 
 
+def test_timeframe_date_range_upper_bound():
+    """M-3: TimeframeDateRange must reject ranges wider than 5 years."""
+    from datetime import timedelta
+
+    # Just under the 5-year cap — must succeed.
+    start = date(2020, 1, 1)
+    end = start + timedelta(days=365 * 5 - 1)
+    t = TimeframeDateRange(start_date=start, end_date=end)
+    assert (t.end_date - t.start_date).days < 365 * 5
+
+    # Exactly at the cap (5 years) — must succeed.
+    end_at_cap = start + timedelta(days=365 * 5)
+    t2 = TimeframeDateRange(start_date=start, end_date=end_at_cap)
+    assert (t2.end_date - t2.start_date).days == 365 * 5
+
+    # One day over the cap — must raise ValidationError.
+    end_over = start + timedelta(days=365 * 5 + 1)
+    with pytest.raises(ValidationError, match=r"exceeds the maximum allowed"):
+        TimeframeDateRange(start_date=start, end_date=end_over)
+
+
 def test_research_topic_validation():
     # Valid
     topic = ResearchTopic(

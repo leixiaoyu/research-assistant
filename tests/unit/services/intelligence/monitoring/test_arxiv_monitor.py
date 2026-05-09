@@ -326,9 +326,11 @@ class TestPollHappyPath:
 
         await monitor.check(sub)
 
-        registry.register_paper.assert_called_once()
-        kwargs = registry.register_paper.call_args.kwargs
-        assert kwargs["topic_slug"] == "monitor-sub-abc"
+        registry.register_paper.assert_called_once_with(
+            paper=registry.register_paper.call_args.kwargs["paper"],
+            topic_slug="monitor-sub-abc",
+            discovery_only=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -452,3 +454,156 @@ class TestToRecord:
         rec = ArxivMonitor._to_record(paper, is_new=False)
         assert rec.pdf_url is None
         assert rec.is_new is False
+
+
+# ---------------------------------------------------------------------------
+# C-2: real-monitor tests for _paper_records.build_topic time_window→DateRange
+# ---------------------------------------------------------------------------
+
+
+class TestBuildTopicTimeWindowToDateRange:
+    """C-2: Exercises _paper_records.py:108-109 through the real ArxivMonitor.
+
+    These tests call monitor.check(sub, time_window=...) with stubbed
+    providers and assert that the ResearchTopic seen by the provider has
+    a TimeframeDateRange (not a TimeframeRecent) with the correct dates.
+    The provider is patched at the search boundary; the monitor's internal
+    build_topic call is exercised for real.
+    """
+
+    @pytest.mark.asyncio
+    async def test_time_window_produces_timeframe_date_range(self) -> None:
+        """When time_window is given, the provider sees a TimeframeDateRange.
+
+        This exercises _paper_records.py:108-109 (the ``if time_window is
+        not None:`` branch) through the real ArxivMonitor.check code path.
+        """
+        from datetime import date as date_t
+        from src.models.config.core import TimeframeDateRange
+
+        since = date_t(2025, 1, 1)
+        until = date_t(2025, 1, 8)
+
+        captured_topic: list = []
+
+        async def capture_search(topic):  # type: ignore[override]
+            captured_topic.append(topic)
+            return []
+
+        provider = MagicMock()
+        provider.search = AsyncMock(side_effect=capture_search)
+        registry = _make_registry()
+        monitor = ArxivMonitor(provider, registry)
+        sub = _make_subscription()
+
+        await monitor.check(sub, time_window=(since, until))
+
+        assert len(captured_topic) == 1, "provider.search must be called once"
+        topic = captured_topic[0]
+        assert isinstance(topic.timeframe, TimeframeDateRange), (
+            f"Expected TimeframeDateRange, got {type(topic.timeframe).__name__}. "
+            "C-2: _paper_records.py:108-109 must construct TimeframeDateRange "
+            "when time_window is not None."
+        )
+        assert (
+            topic.timeframe.start_date == since
+        ), f"start_date should be {since}, got {topic.timeframe.start_date}"
+        assert (
+            topic.timeframe.end_date == until
+        ), f"end_date should be {until}, got {topic.timeframe.end_date}"
+
+    @pytest.mark.asyncio
+    async def test_time_window_none_produces_timeframe_recent(self) -> None:
+        """When time_window is None, the provider sees a TimeframeRecent.
+
+        Regression guard: confirms that the fresh-feed path still uses
+        TimeframeRecent — the C-2 fix must not break the default path.
+        """
+        from src.models.config.core import TimeframeRecent
+
+        captured_topic: list = []
+
+        async def capture_search(topic):  # type: ignore[override]
+            captured_topic.append(topic)
+            return []
+
+        provider = MagicMock()
+        provider.search = AsyncMock(side_effect=capture_search)
+        registry = _make_registry()
+        monitor = ArxivMonitor(provider, registry)
+        sub = _make_subscription(poll_interval_hours=12)
+
+        await monitor.check(sub)  # no time_window
+
+        assert len(captured_topic) == 1
+        topic = captured_topic[0]
+        assert isinstance(topic.timeframe, TimeframeRecent), (
+            f"Expected TimeframeRecent for fresh-feed path, "
+            f"got {type(topic.timeframe).__name__}"
+        )
+        assert topic.timeframe.value == "12h"
+
+    @pytest.mark.asyncio
+    async def test_time_window_dates_not_swapped(self) -> None:
+        """start_date / end_date must not be swapped in the built topic.
+
+        This would catch a ``TimeframeDateRange(start_date=until,
+        end_date=since)`` bug (field-swap regression).
+        """
+        from datetime import date as date_t
+        from src.models.config.core import TimeframeDateRange
+
+        since = date_t(2025, 3, 1)
+        until = date_t(2025, 3, 8)
+
+        captured_topic: list = []
+
+        async def capture_search(topic):  # type: ignore[override]
+            captured_topic.append(topic)
+            return []
+
+        provider = MagicMock()
+        provider.search = AsyncMock(side_effect=capture_search)
+        registry = _make_registry()
+        monitor = ArxivMonitor(provider, registry)
+        sub = _make_subscription()
+
+        await monitor.check(sub, time_window=(since, until))
+
+        topic = captured_topic[0]
+        tf = topic.timeframe
+        assert isinstance(tf, TimeframeDateRange)
+        # If dates were swapped, start > end, which Pydantic would reject;
+        # explicitly assert the correct mapping so intent is clear.
+        assert tf.start_date == since
+        assert tf.end_date == until
+        assert tf.start_date < tf.end_date
+
+    @pytest.mark.asyncio
+    async def test_max_papers_passed_to_topic(self) -> None:
+        """When max_papers is given, the provider topic carries that cap (H-2).
+
+        Exercises _paper_records.py:131 (the ``if max_papers is not None:``
+        branch in build_topic) which was previously uncovered.
+        """
+        captured_topic: list = []
+
+        async def capture_search(topic):  # type: ignore[override]
+            captured_topic.append(topic)
+            return []
+
+        provider = MagicMock()
+        provider.search = AsyncMock(side_effect=capture_search)
+        registry = _make_registry()
+        monitor = ArxivMonitor(provider, registry)
+        sub = _make_subscription()
+
+        await monitor.check(sub, max_papers=25)
+
+        assert len(captured_topic) == 1
+        topic = captured_topic[0]
+        assert topic.max_papers == 25, (
+            f"ResearchTopic.max_papers must be 25 when max_papers=25 is "
+            f"passed, got {topic.max_papers}. "
+            "H-2: provider fetch cap must come from the caller, not default."
+        )

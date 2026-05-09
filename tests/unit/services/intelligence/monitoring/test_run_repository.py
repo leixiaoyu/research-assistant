@@ -789,7 +789,10 @@ class TestUnknownSourceFailLoud:
     """
 
     def test_fetch_papers_unknown_source_logs_and_reraises(
-        self, repo: MonitoringRunRepository, db_path: Path
+        self,
+        repo: MonitoringRunRepository,
+        db_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         import sqlite3 as _sqlite3
         import structlog
@@ -819,15 +822,12 @@ class TestUnknownSourceFailLoud:
             )
             conn.commit()
 
+        # H-5: use monkeypatch.setattr for safe logger rebinding so the
+        # original is always restored even if the test body raises.
+        monkeypatch.setattr(rr_mod, "logger", structlog.get_logger())
         with structlog.testing.capture_logs() as logs:
-            # Rebind module-level logger so capture_logs() intercepts it.
-            original_logger = rr_mod.logger
-            rr_mod.logger = structlog.get_logger()
-            try:
-                with pytest.raises(ValueError):
-                    repo.get_run("run-unknown-src")
-            finally:
-                rr_mod.logger = original_logger
+            with pytest.raises(ValueError, match=r"not a valid PaperSource"):
+                repo.get_run("run-unknown-src")
 
         error_events = [
             e for e in logs if e.get("event") == "monitoring_paper_unknown_source"
@@ -835,3 +835,62 @@ class TestUnknownSourceFailLoud:
         assert len(error_events) == 1
         assert error_events[0].get("paper_id") == "paper:bad:001"
         assert error_events[0].get("raw_value") == "not_a_real_source"
+
+
+# ===========================================================================
+# C-2: backfill_papers round-trips through the database (V8 migration)
+# ===========================================================================
+
+
+class TestBackfillPapersRoundTrip:
+    """C-2 drift-guard: backfill_papers is persisted and read back correctly."""
+
+    def test_record_run_persists_backfill_papers(
+        self, db_path: Path, repo: MonitoringRunRepository
+    ) -> None:
+        """backfill_papers is written to monitoring_runs and read back via get_run."""
+        from src.services.intelligence.monitoring.models import MonitoringRun
+
+        _seed_subscription(db_path, "sub-bf-persist")
+        run = MonitoringRun(
+            subscription_id="sub-bf-persist",
+            backfill_papers=12,
+        )
+        repo.record_run(run, user_id="alice")
+        audit = repo.get_run(run.run_id)
+        assert audit is not None
+        assert audit.backfill_papers == 12, (
+            f"backfill_papers should round-trip as 12, got {audit.backfill_papers}. "
+            "C-2 fix: ensure V8 migration, record_run INSERT, and _row_to_audit SELECT "
+            "all include the backfill_papers column."
+        )
+
+    def test_record_run_backfill_papers_zero_by_default(
+        self, db_path: Path, repo: MonitoringRunRepository
+    ) -> None:
+        """When backfill_papers is not set, it defaults to 0 in the audit."""
+        from src.services.intelligence.monitoring.models import MonitoringRun
+
+        _seed_subscription(db_path, "sub-bf-zero")
+        run = MonitoringRun(subscription_id="sub-bf-zero")
+        repo.record_run(run, user_id="alice")
+        audit = repo.get_run(run.run_id)
+        assert audit is not None
+        assert audit.backfill_papers == 0
+
+    def test_list_runs_includes_backfill_papers(
+        self, db_path: Path, repo: MonitoringRunRepository
+    ) -> None:
+        """list_runs reads backfill_papers from each row."""
+        from src.services.intelligence.monitoring.models import MonitoringRun
+
+        _seed_subscription(db_path, "sub-bl-001")
+        run_a = MonitoringRun(subscription_id="sub-bl-001", backfill_papers=5)
+        run_b = MonitoringRun(subscription_id="sub-bl-001", backfill_papers=0)
+        repo.record_run(run_a, user_id="alice")
+        repo.record_run(run_b, user_id="alice")
+        audits = repo.list_runs(subscription_id="sub-bl-001")
+        # list_runs orders by started_at DESC; both runs have the same sub_id
+        bp_values = {a.run_id: a.backfill_papers for a in audits}
+        assert bp_values[run_a.run_id] == 5
+        assert bp_values[run_b.run_id] == 0

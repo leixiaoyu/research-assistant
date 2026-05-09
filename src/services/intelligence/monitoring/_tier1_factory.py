@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING, Optional
 
 import structlog
 
+from src.storage.intelligence_graph.connection import _trunc
+
 if TYPE_CHECKING:
     from src.services.providers.base import DiscoveryProvider
     from src.services.intelligence.monitoring.models import PaperSource
@@ -81,7 +83,7 @@ def build_tier1_extras(
     except Exception as exc:
         logger.warning(
             "monitor_tier1_init_failed",
-            error=str(exc),
+            error=_trunc(exc),
             reason="falling_back_to_legacy_single_arxiv",
         )
         return None, None

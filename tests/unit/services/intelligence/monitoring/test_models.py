@@ -682,3 +682,89 @@ class TestMonitoringRunAudit:
                 started_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
                 status="bogus",  # type: ignore[arg-type]
             )
+
+
+# ---------------------------------------------------------------------------
+# Backfill fields (Phase 9.1 / Issue #145)
+# ---------------------------------------------------------------------------
+
+
+class TestResearchSubscriptionBackfillFields:
+    """Tests for backfill_days and backfill_cursor_date on ResearchSubscription."""
+
+    def test_subscription_default_backfill_days_zero(self) -> None:
+        """Backwards compatibility: backfill_days defaults to 0 (disabled)."""
+        sub = ResearchSubscription(name="Backfill Test", query="LoRA")
+        assert sub.backfill_days == 0
+        assert sub.backfill_cursor_date is None
+
+    def test_subscription_backfill_days_can_be_set(self) -> None:
+        from datetime import date
+
+        sub = ResearchSubscription(
+            name="Backfill",
+            query="LoRA",
+            backfill_days=30,
+            backfill_cursor_date=date(2024, 6, 1),
+        )
+        assert sub.backfill_days == 30
+        assert sub.backfill_cursor_date == date(2024, 6, 1)
+
+    def test_subscription_backfill_days_rejects_negative(self) -> None:
+        with pytest.raises(ValidationError, match="greater than or equal to 0"):
+            ResearchSubscription(name="Bad", query="q", backfill_days=-1)
+
+    def test_subscription_backfill_days_rejects_above_365(self) -> None:
+        with pytest.raises(ValidationError, match="less than or equal to 365"):
+            ResearchSubscription(name="Bad", query="q", backfill_days=366)
+
+    def test_subscription_backfill_days_accepts_boundary_365(self) -> None:
+        sub = ResearchSubscription(name="Max", query="q", backfill_days=365)
+        assert sub.backfill_days == 365
+
+    def test_subscription_backfill_days_accepts_zero(self) -> None:
+        sub = ResearchSubscription(name="Zero", query="q", backfill_days=0)
+        assert sub.backfill_days == 0
+
+
+class TestMonitoringRunAuditBackfillPapersField:
+    """Tests for MonitoringRunAudit.backfill_papers (Issue #145)."""
+
+    def test_audit_dto_backfill_papers_field_default_zero(self) -> None:
+        """backfill_papers defaults to 0 for backwards compat."""
+        from datetime import datetime, timezone
+
+        audit = MonitoringRunAudit(
+            run_id="run-001",
+            subscription_id="sub-001",
+            user_id="alice",
+            started_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            status=MonitoringRunStatus.SUCCESS,
+        )
+        assert audit.backfill_papers == 0
+
+    def test_audit_dto_backfill_papers_can_be_set(self) -> None:
+        from datetime import datetime, timezone
+
+        audit = MonitoringRunAudit(
+            run_id="run-002",
+            subscription_id="sub-002",
+            user_id="alice",
+            started_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            status=MonitoringRunStatus.SUCCESS,
+            backfill_papers=12,
+        )
+        assert audit.backfill_papers == 12
+
+    def test_audit_dto_backfill_papers_rejects_negative(self) -> None:
+        from datetime import datetime, timezone
+
+        with pytest.raises(ValidationError, match="greater than or equal to 0"):
+            MonitoringRunAudit(
+                run_id="run-003",
+                subscription_id="sub-003",
+                user_id="alice",
+                started_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                status=MonitoringRunStatus.SUCCESS,
+                backfill_papers=-1,
+            )

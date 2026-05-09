@@ -9,7 +9,7 @@ This module contains fundamental configuration types used across the pipeline:
 from enum import Enum
 from typing import Literal, Union, List, Optional
 from datetime import date
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.utils.security import InputValidation
 from src.models.extraction import ExtractionTarget
@@ -49,6 +49,10 @@ class TimeframeSinceYear(BaseModel):
 class TimeframeDateRange(BaseModel):
     """Custom date range"""
 
+    # M-3: Maximum allowed span between start_date and end_date (5 years).
+    # Prevents accidental DoS from unbounded backfill windows.
+    MAX_DATE_RANGE_DAYS: int = 365 * 5
+
     type: Literal[TimeframeType.DATE_RANGE] = TimeframeType.DATE_RANGE
     start_date: date
     end_date: date
@@ -61,6 +65,18 @@ class TimeframeDateRange(BaseModel):
         if "start_date" in values and v < values["start_date"]:
             raise ValueError("end_date must be after start_date")
         return v
+
+    @model_validator(mode="after")
+    def validate_date_range_span(self) -> "TimeframeDateRange":
+        """Reject date ranges wider than MAX_DATE_RANGE_DAYS (M-3)."""
+        span = (self.end_date - self.start_date).days
+        if span > self.MAX_DATE_RANGE_DAYS:
+            raise ValueError(
+                f"Date range span {span} days exceeds the maximum allowed "
+                f"{self.MAX_DATE_RANGE_DAYS} days (5 years). Use a narrower "
+                "window or split into multiple requests."
+            )
+        return self
 
 
 Timeframe = Union[TimeframeRecent, TimeframeSinceYear, TimeframeDateRange]

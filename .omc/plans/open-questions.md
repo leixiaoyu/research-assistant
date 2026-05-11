@@ -189,4 +189,52 @@ class SubscriptionManager:
 
 ---
 
-*Last updated: 2026-04-24 (5 Phase 9 decisions resolved: SR-9.3 entity sanitization, SR-9.5 subscription limits finalized)*
+## Phase 9.5: Pipeline Reliability, Discovery Breadth, and Learning Synthesis - 2026-05-09
+
+**Context:** Production diagnostic on 2026-05-09 revealed that the live pipeline produces degraded output (~70% abstract-only fallback, 54% PDF extraction failure due to URL-as-Path bug, silent Anthropic auth failure) and that discovery is structurally narrow (single effective provider, static topics, citation graph not in daily loop). Phase 9.5 inserted before 9.3/9.4 to address these gaps. See [PHASE_9.5_RELIABILITY_BREADTH_LEARNING_SPEC.md](../../docs/specs/PHASE_9.5_RELIABILITY_BREADTH_LEARNING_SPEC.md).
+
+### Architecture Decisions
+
+- [ ] **OQ-9.5.1: LLM provider strategy** — Current Gemini free-tier (5 RPM) is incompatible with daily volume (~180 papers); Anthropic key is invalid (401). Workstream A surfaces this; Workstream C requires a working provider with adequate quota for weekly synthesis.
+
+  **Options:**
+  - (a) Move to paid Gemini tier (raises RPM substantially; lowest friction if Google billing is set up)
+  - (b) Rotate Anthropic key and use Claude Haiku/Sonnet as primary (better quality for synthesis; requires Anthropic billing)
+  - (c) Stay on free tier; throttle pipeline (fewer topics, slower extraction; no external billing)
+  - (d) Local LLM for extraction (Ollama + small model); paid API only for weekly synthesis
+
+  **Resolution Status:** Deferred to user (per AskUserQuestion 2026-05-09). 9.5 plan accommodates any choice via config; user decision required before Workstream C Week 4.
+
+- [ ] **OQ-9.5.2: Citation expansion seed selection** — REQ-9.5.2.1 caps seeds at 10 per topic by `quality_score`. Should seeds also be biased toward papers the user has interacted with (Phase 7 feedback signals)?
+
+  **Default for 9.5:** Pure quality_score. Revisit when integrating with Phase 9.4 frontier detection.
+
+- [ ] **OQ-9.5.3: Learning Brief cadence** — Spec defaults to weekly. Some users may want daily mini-briefs and a weekly comprehensive one.
+
+  **Default for 9.5:** Weekly only. Daily briefs deferred until weekly is proven valuable.
+
+- [ ] **OQ-9.5.4: HuggingFace and Semantic Scholar provider audit outcome** — REQ-9.5.1.5 audits these providers and either fixes their PDF resolution or documents them as non-PDF-bearing. The audit outcome determines whether either is removed from the default discovery chain.
+
+  **Resolution:** Resolve during Workstream A implementation; update spec Section 11 if audit materially changes the "single effective provider" framing.
+
+### Scope Clarifications
+
+- [x] **9.5 explicitly does NOT add new providers** (Crossref/CORE/etc.) — DECIDED 2026-05-09 per user AskUserQuestion answer (option "Add PDF-bearing providers" was NOT selected; user chose citation expansion + LLM query auto-expansion + auto-rotate via 9.4 instead). 9.5 audits existing providers only; new provider integration is left to a future phase.
+
+- [x] **Topic auto-rotation deferred behind 9.4** — DECIDED 2026-05-09. User selected "auto-rotate / auto-discover topics" as a desired capability, but it depends on Phase 9.4 frontier detection. 9.5 ships only citation expansion + LLM query variants as breadth mechanisms; topic rotation is the natural follow-up once 9.4 lands.
+
+- [x] **Phase 9.3 and 9.4 deferred behind 9.5** — DECIDED 2026-05-09. Both depend on a working ingestion pipeline (which 9.5 restores) and benefit from a broader candidate pool (which 9.5 provides). Recommended post-9.5 order: 9.4 → 9.3 (revisit during 9.5 closeout).
+
+### Security Considerations
+
+- [x] **Provider health probes MUST NOT log API keys** — DECIDED 2026-05-09 (SR-9.5.A.1). Health check log events SHALL include provider name and HTTP status / error class only. No auth header values, request bodies, or response bodies SHALL be logged.
+
+- [x] **Type guard MUST NOT swallow path traversal** — DECIDED 2026-05-09 (SR-9.5.A.2). The `http:`/`https:` rejection guard runs AFTER existing path sanitization in `src/utils/path_sanitization.py`, not as a replacement.
+
+- [x] **Learning brief MUST NOT re-load raw PDF text** — DECIDED 2026-05-09 (SR-9.5.C.1). Synthesis prompt consumes only already-extracted structured fields; raw PDF text SHALL NOT be re-loaded or re-sent to the LLM. This bounds privacy/copyright exposure to what extraction has already approved.
+
+- [x] **Learning brief LLM response sanitization** — DECIDED 2026-05-09 (SR-9.5.C.2). Output parsed with permissive Markdown parser; `<script>`, `<iframe>`, etc. stripped; orphan citations (`[paper_id_X]` not in input set) removed with log warning.
+
+---
+
+*Last updated: 2026-05-09 (Phase 9.5 inserted: 4 open questions tracked, 3 scope clarifications resolved, 4 security decisions resolved)*

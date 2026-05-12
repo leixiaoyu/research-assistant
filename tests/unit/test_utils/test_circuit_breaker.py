@@ -273,3 +273,70 @@ class TestCircuitBreakerThresholds:
         # Any failure in HALF_OPEN should reopen
         cb.record_failure()
         assert cb.state == CircuitState.OPEN
+
+
+class TestForceOpen:
+    """Phase 9.5 review fix #2: force_open() bypasses failure-threshold counting.
+
+    Used by ``LLMService.ensure_health_checked`` so a probe-failed
+    provider's circuit immediately fails-fast without waiting for N
+    consecutive runtime failures to accumulate.
+    """
+
+    def test_force_open_transitions_closed_to_open_immediately(self):
+        config = CircuitBreakerConfig(
+            failure_threshold=3,
+            success_threshold=2,
+            cooldown_seconds=60,
+        )
+        cb = CircuitBreaker("test", config)
+        assert cb.state == CircuitState.CLOSED
+
+        cb.force_open()
+
+        assert cb.state == CircuitState.OPEN
+        # Single force_open must trip even though only 1 failure happened.
+        assert cb.allow_request() is False
+        with pytest.raises(ProviderUnavailableError):
+            cb.check_or_raise()
+
+    def test_force_open_records_failure_in_stats(self):
+        config = CircuitBreakerConfig(failure_threshold=3, cooldown_seconds=60)
+        cb = CircuitBreaker("test", config)
+        before = cb.get_stats()["total_failures"]
+
+        cb.force_open()
+
+        after = cb.get_stats()["total_failures"]
+        assert after == before + 1, (
+            "force_open must increment total_failures so operators do not "
+            "see status=OPEN with consecutive_failures=0 in dashboards"
+        )
+
+    def test_force_open_respects_cooldown_and_eventually_half_opens(self):
+        config = CircuitBreakerConfig(
+            failure_threshold=3,
+            success_threshold=2,
+            cooldown_seconds=0.1,
+        )
+        cb = CircuitBreaker("test", config)
+
+        cb.force_open()
+        assert cb.state == CircuitState.OPEN
+
+        # The auto HALF_OPEN cooldown still applies — force_open is a
+        # one-time push, not a permanent OPEN.
+        time.sleep(0.15)
+        assert cb.state == CircuitState.HALF_OPEN
+
+    def test_force_open_is_idempotent(self):
+        config = CircuitBreakerConfig(failure_threshold=3, cooldown_seconds=60)
+        cb = CircuitBreaker("test", config)
+
+        cb.force_open()
+        cb.force_open()
+        cb.force_open()
+
+        assert cb.state == CircuitState.OPEN
+        # Counter accumulates but state never leaves OPEN.
+        assert cb.get_stats()["total_failures"] == 3

@@ -27,6 +27,24 @@ from src.services.pdf_extractors.pandoc_extractor import PandocExtractor
 logger = structlog.get_logger()
 
 
+_REJECTED_URL_SCHEMES: tuple[str, ...] = (
+    # Schemes the original PR #156 bug could produce by casting URL-typed
+    # values to Path():
+    "http:",
+    "https:",
+    # Other URI schemes a future caller might mistakenly hand to an
+    # extractor. None of these are valid local file paths, and accepting
+    # them risks information disclosure (file://) or arbitrary fetches
+    # (ftp://, data:, javascript:) downstream:
+    "file:",
+    "ftp:",
+    "ftps:",
+    "data:",
+    "javascript:",
+    "gopher:",
+)
+
+
 def _reject_url_path(pdf_path: Path) -> None:
     """Defense-in-depth guard against the URL-as-Path bug (REQ-9.5.1.2).
 
@@ -36,9 +54,14 @@ def _reject_url_path(pdf_path: Path) -> None:
     file. The canonical fix is :func:`src.services.pdf_acquisition.acquire_pdf`
     which downloads the URL first. This guard catches any future caller
     that bypasses ``acquire_pdf`` so the bug cannot recur silently.
+
+    The check covers more than http(s) — see :data:`_REJECTED_URL_SCHEMES`
+    — because handing other URI schemes (``file://``, ``ftp://``, etc.)
+    to a PDF extractor is never correct and a few of them have security
+    implications if accepted by the underlying backend.
     """
     path_str = str(pdf_path).lower()
-    if path_str.startswith(("http:", "https:")):
+    if path_str.startswith(_REJECTED_URL_SCHEMES):
         raise InvalidPDFPathError(
             f"PDF path is a URL, not a local file: {pdf_path!r}. "
             "Call src.services.pdf_acquisition.acquire_pdf() to download "

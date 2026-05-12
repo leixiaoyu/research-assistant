@@ -21,23 +21,51 @@ if str(scripts_path) not in sys.path:
     sys.path.insert(0, str(scripts_path))
 
 
+# Capture the real LLMService.ensure_health_checked at import time, BEFORE
+# the autouse fixture replaces it. The opt-in fixture restores this exact
+# reference so tests that verify the wiring exercise production code
+# (and contribute coverage to src/services/llm/service.py).
+def _capture_real_ensure_health_checked():
+    from src.services.llm.service import LLMService
+
+    return LLMService.ensure_health_checked
+
+
+_REAL_ENSURE_HEALTH_CHECKED = _capture_real_ensure_health_checked()
+
+
 @pytest.fixture(autouse=True)
 def _disable_llm_provider_health_check(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Skip the Phase 9.5 provider health probe in unit tests.
+    """Skip the Phase 9.5 provider startup health probe in unit tests.
 
     REQ-9.5.1.3 introduced an automatic startup probe that calls
     ``provider.generate(prompt="ping", max_tokens=1)`` on first
-    ``LLMService.extract()`` / ``complete()`` invocation. That probe is
-    correct for production but adds an unwanted call to provider mocks
-    in many existing unit tests (e.g. those that assert
-    ``provider.generate.assert_called_once()``).
+    ``LLMService.extract()`` / ``complete()`` invocation, AND force-opens
+    the circuit breaker for any probe-failed provider so subsequent
+    calls fail-fast (per spec Section 3, Workstream A).
 
-    This autouse fixture short-circuits the probe to a no-op for the
-    entire suite. Tests that specifically exercise the probe (see
-    :mod:`tests.unit.test_services.test_llm_health_check`) call the
-    underlying :class:`ProviderHealthChecker` directly and are unaffected.
-    The wiring between ``LLMService`` and the probe is verified by the
-    opt-in :func:`enable_llm_provider_health_check` fixture.
+    That behavior is correct for production but interacts with most
+    existing unit tests in three ways that need neutralization:
+
+    1. Tests that mock ``provider.generate`` with an exception side_effect
+       (to exercise extract()'s retry/fallback branches) would have the
+       probe trip first, force-open the circuit, and prevent extract()
+       from even reaching the branch under test.
+    2. Tests that assert exact ``provider.generate.assert_called_once()``
+       see two calls (1 probe + 1 real) instead of one.
+    3. Tests that don't care about the probe still pay its (small) cost
+       of an extra await in setup, masking warning-on-noise discipline.
+
+    This fixture short-circuits the probe to a no-op for the entire
+    suite. The opt-in :func:`enable_llm_provider_health_check` fixture
+    re-enables the real implementation for tests that specifically
+    verify the probe wiring (see
+    :mod:`tests.unit.test_services.test_llm_health_check`).
+
+    The ``ProviderHealthChecker`` class itself is exercised directly
+    (without going through ``LLMService``) by the unit tests in
+    ``test_llm_health_check.py``, so probe behavior is not vacuous —
+    only the wiring path is short-circuited.
     """
     from src.services.llm.service import LLMService
 
@@ -52,22 +80,20 @@ def _disable_llm_provider_health_check(monkeypatch: pytest.MonkeyPatch) -> None:
 def enable_llm_provider_health_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Re-enable the real provider health probe for opt-in wiring tests.
+    """Re-enable the real provider startup health probe.
 
-    Pair with the autouse :func:`_disable_llm_provider_health_check` to
-    restore the real :meth:`LLMService.ensure_health_checked` for one
-    specific test that wants to verify the probe runs at first use.
+    Pair with the autouse :func:`_disable_llm_provider_health_check`.
+    Tests that exercise the wiring between :class:`LLMService` and the
+    probe (e.g. asserting first ``extract()`` triggers ``check_all`` and
+    a probe-failed provider has its circuit breaker force-opened) MUST
+    request this fixture so the real implementation runs.
+
+    Restores the exact production method (captured at import time before
+    the autouse replaced it) — not a copy — so coverage of
+    ``src/services/llm/service.py`` reflects real execution.
     """
     from src.services.llm.service import LLMService
-    from src.services.llm.health_check import ProviderHealthChecker
 
-    async def _real(self: LLMService) -> "list[ProviderHealthResult]":
-        if self._health_checked:
-            return self._health_results
-        self._health_results = await ProviderHealthChecker.check_all(
-            list(self._providers.values())
-        )
-        self._health_checked = True
-        return self._health_results
-
-    monkeypatch.setattr(LLMService, "ensure_health_checked", _real)
+    monkeypatch.setattr(
+        LLMService, "ensure_health_checked", _REAL_ENSURE_HEALTH_CHECKED
+    )

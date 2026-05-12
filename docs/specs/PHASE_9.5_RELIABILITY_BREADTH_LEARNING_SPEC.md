@@ -214,8 +214,10 @@ For each non-ArXiv provider in the discovery chain (HuggingFace, Semantic Schola
 #### SR-9.5.A.1: Provider health probes MUST NOT log API keys
 Health probe events SHALL include provider name and HTTP status / error class only. No auth header values, request bodies containing secrets, or response bodies SHALL be logged.
 
-#### SR-9.5.A.2: Type guard MUST NOT swallow path traversal attempts
-The `http:`/`https:` rejection guard SHALL run AFTER existing path sanitization in `src/utils/path_sanitization.py`, not as a replacement. A malicious path like `../../../etc/passwd` must still be caught by the existing sanitizer.
+#### SR-9.5.A.2: Type guard MUST NOT replace existing path validation
+The URL-scheme rejection guard at the extractor entry point is a defense-in-depth complement to (NOT a replacement for) any path-validation logic that lives in upstream callers (e.g. `PDFService.download_pdf` enforces HTTPS; `src/utils/path_sanitization.py` is available for callers that need traversal-safe filename construction). The guard's job is to catch URL-shaped values; traversal-safe path handling remains the responsibility of whoever constructs the path.
+
+> **Implementation note (review fix #4 in PR #157):** the guard rejects more than just `http:`/`https:` schemes — see `_REJECTED_URL_SCHEMES` in `src/services/pdf_extractors/fallback_service.py` for the full list (`file:`, `ftp:`, `ftps:`, `data:`, `javascript:`, `gopher:` are also covered as defense-in-depth against future regressions). `extract_with_fallback` does not currently invoke `path_sanitization.py` directly; integrating that is tracked as a follow-up hardening item.
 
 ---
 

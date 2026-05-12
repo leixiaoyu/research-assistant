@@ -380,7 +380,7 @@ class TestExtractorRejectsUrlPath:
     @pytest.mark.asyncio
     async def test_rejects_https_url_as_path(self, service):
         """A pdf_path that looks like an https URL raises InvalidPDFPathError."""
-        with pytest.raises(InvalidPDFPathError, match="URL"):
+        with pytest.raises(InvalidPDFPathError, match="not a local file"):
             await service.extract_with_fallback(
                 Path("https://arxiv.org/pdf/2605.06641v1")
             )
@@ -388,7 +388,7 @@ class TestExtractorRejectsUrlPath:
     @pytest.mark.asyncio
     async def test_rejects_http_url_as_path(self, service):
         """Plain http URLs are rejected too (defense-in-depth)."""
-        with pytest.raises(InvalidPDFPathError, match="URL"):
+        with pytest.raises(InvalidPDFPathError, match="not a local file"):
             await service.extract_with_fallback(Path("http://example.com/paper.pdf"))
 
     @pytest.mark.asyncio
@@ -399,7 +399,7 @@ class TestExtractorRejectsUrlPath:
         repr is ``"https:/..."`` (single slash). The guard matches both
         forms via lowercase-prefix check on ``http:``/``https:``.
         """
-        with pytest.raises(InvalidPDFPathError, match="URL"):
+        with pytest.raises(InvalidPDFPathError, match="not a local file"):
             await service.extract_with_fallback(
                 Path("https:/arxiv.org/pdf/2605.06641v1")
             )
@@ -417,3 +417,26 @@ class TestExtractorRejectsUrlPath:
         with patch.object(service.validator, "score_extraction", return_value=0.9):
             result = await service.extract_with_fallback(Path("/tmp/local.pdf"))
         assert result.success is True
+
+    @pytest.mark.parametrize(
+        "scheme_path",
+        [
+            "file:///etc/passwd",
+            "ftp://example.com/paper.pdf",
+            "ftps://example.com/paper.pdf",
+            "data:application/pdf;base64,JVBERi0=",
+            "javascript:alert(1)",
+            "gopher://example.com/0/paper.pdf",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_rejects_other_url_schemes(self, service, scheme_path):
+        """Phase 9.5 review fix #6: guard covers more than http/https.
+
+        ``file://`` is the most security-relevant — the underlying PDF
+        backends would otherwise read arbitrary local files. Each
+        rejected scheme is intentional defense-in-depth, not a known
+        production bug.
+        """
+        with pytest.raises(InvalidPDFPathError, match="not a local file"):
+            await service.extract_with_fallback(Path(scheme_path))

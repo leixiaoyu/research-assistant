@@ -176,10 +176,11 @@ class ExtractionService:
                 # Phase 9.5 REQ-9.5.1.1: shared download path (acquire_pdf
                 # is also used by PaperProcessor — both routes materialize
                 # URLs identically so the URL-as-Path bug cannot recur).
-                acquired = await acquire_pdf(self.pdf_service, paper)
-                # Outer guard guarantees URL exists, so acquired is a Path.
-                assert acquired is not None
-                pdf_path = acquired
+                pdf_path = await acquire_pdf(
+                    self.pdf_service,
+                    str(paper.open_access_pdf),
+                    paper.paper_id,
+                )
                 extracted.pdf_available = True
                 extracted.pdf_path = str(pdf_path)
 

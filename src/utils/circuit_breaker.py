@@ -135,6 +135,33 @@ class CircuitBreaker:
                 f"Circuit breaker '{self.name}' is OPEN - provider unavailable"
             )
 
+    def force_open(self) -> None:
+        """Force the circuit breaker to OPEN immediately, bypassing the
+        consecutive-failure counter.
+
+        Use this when an out-of-band check (e.g. the Phase 9.5 startup
+        provider health probe) has already determined the upstream is
+        unavailable, so subsequent calls should fail-fast rather than
+        waste retries against the known-bad endpoint. The CLOSED → OPEN
+        transition normally requires ``failure_threshold`` consecutive
+        failures; ``force_open`` collapses that to a single decision.
+
+        Records a failure timestamp so the auto HALF_OPEN cooldown still
+        applies — the circuit will eventually retry per its existing
+        configuration.
+        """
+        with self._lock:
+            self._state = CircuitState.OPEN
+            self._last_failure_time = time.time()
+            # Bump the failure counter so get_stats() reflects that we
+            # deliberately tripped the circuit (avoids confusing operators
+            # who see status=OPEN with consecutive_failures=0).
+            self._total_failures += 1
+            self._consecutive_failures = max(
+                self._consecutive_failures + 1, self.config.failure_threshold
+            )
+            self._consecutive_successes = 0
+
     def reset(self) -> None:
         """Manually reset circuit breaker to CLOSED state."""
         with self._lock:

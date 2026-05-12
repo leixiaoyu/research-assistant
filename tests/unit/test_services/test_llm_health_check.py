@@ -37,6 +37,22 @@ def _provider(name: str, generate_side_effect=None, generate_return=None) -> Moc
     return provider
 
 
+@pytest.fixture(autouse=True)
+def _isolate_circuit_breaker_registry():
+    """Clear the CircuitBreakerRegistry singleton between tests.
+
+    The registry is process-wide, so a force_open from one test would
+    leak into the next test's "fresh" LLMService construction (which
+    pulls the same breaker by name). Clearing before+after isolates
+    the tests in this module that care about breaker state.
+    """
+    from src.utils.circuit_breaker import CircuitBreakerRegistry
+
+    CircuitBreakerRegistry.clear_instance()
+    yield
+    CircuitBreakerRegistry.clear_instance()
+
+
 class TestSingleProviderProbe:
     """Single-provider probe behavior (per-class outcome paths)."""
 
@@ -180,14 +196,15 @@ class TestParallelProbe:
 class TestLLMServiceWiring:
     """REQ-9.5.1.3 wiring: extract()/complete() trigger health check first.
 
-    The autouse ``_disable_llm_provider_health_check`` conftest fixture
-    no-ops the probe for the rest of the suite; this class opts back in
-    to the real implementation so the wiring is exercised end-to-end.
+    The suite-wide autouse in :mod:`tests.conftest` no-ops the probe for
+    most tests; this class opts back in to the real implementation via
+    the :func:`enable_llm_provider_health_check` fixture so the wiring
+    is exercised end-to-end. A future regression in
+    :meth:`LLMService.ensure_health_checked` surfaces here.
     """
 
     @pytest.fixture(autouse=True)
     def _enable_real_probe(self, enable_llm_provider_health_check):
-        """Re-enable the real probe for tests in this class."""
         return enable_llm_provider_health_check
 
     @pytest.mark.asyncio
@@ -271,3 +288,280 @@ class TestLLMServiceWiring:
             # First call = 1 probe + 1 complete; subsequent calls each
             # add 1 complete only. Expect 1 + 3 = 4 awaits.
             assert provider.generate.await_count == 4
+
+    @pytest.mark.asyncio
+    async def test_concurrent_first_callers_do_not_double_probe(self, monkeypatch):
+        """Phase 9.5 review fix #7: ensure_health_checked has a Lock.
+
+        If two coroutines both pass the ``_health_checked`` check before
+        either sets the flag, they MUST NOT both run the probe. The
+        double-checked locking inside ``ensure_health_checked`` ensures
+        the probe runs exactly once even under concurrent first-callers.
+        """
+        import asyncio as _asyncio
+
+        from src.models.llm import CostLimits, LLMConfig
+        from src.services.llm.providers.base import LLMResponse
+        from src.services.llm.service import LLMService
+
+        config = LLMConfig(
+            provider="anthropic",
+            api_key="test-key",
+            model="claude-3-5-sonnet",
+            max_tokens=4096,
+            temperature=0.0,
+        )
+        cost_limits = CostLimits(
+            max_tokens_per_paper=10_000,
+            max_daily_spend_usd=10.0,
+            max_total_spend_usd=100.0,
+        )
+
+        with monkeypatch.context() as mp:
+            mp.setattr("anthropic.AsyncAnthropic", Mock())
+            service = LLMService(config=config, cost_limits=cost_limits)
+            mock_response = LLMResponse(
+                content="x",
+                input_tokens=1,
+                output_tokens=1,
+                model="claude-3-5-sonnet",
+                provider="anthropic",
+                latency_ms=1.0,
+            )
+            provider = service._providers["anthropic"]
+            provider.generate = AsyncMock(return_value=mock_response)
+
+            # Fire many concurrent first-callers; the lock must serialize
+            # the probe so generate sees exactly N + 1 calls (N completes
+            # + 1 probe), not N + N.
+            n = 5
+            await _asyncio.gather(*(service.complete(prompt=f"q{i}") for i in range(n)))
+            assert provider.generate.await_count == n + 1
+
+
+class TestProbeOpensCircuitBreaker:
+    """Phase 9.5 review fix #2: REQ-9.5.1.3 fail-fast wiring.
+
+    When a probe fails for a provider whose circuit breaker is enabled,
+    ``ensure_health_checked`` must force the breaker OPEN so subsequent
+    runtime ``extract()`` / ``complete()`` calls fail fast against that
+    provider rather than re-discovering the same failure under retry.
+
+    The module-level ``_isolate_circuit_breaker_registry`` fixture
+    clears the registry before and after each test so a force-opened
+    breaker from one test does not bleed into the next.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _enable_real_probe(self, enable_llm_provider_health_check):
+        """Opt back in to the real probe for these wiring tests."""
+        return enable_llm_provider_health_check
+
+    @pytest.mark.asyncio
+    async def test_failed_probe_forces_circuit_breaker_open(self, monkeypatch):
+        from src.models.llm import (
+            CircuitBreakerConfig,
+            CostLimits,
+            FallbackProviderConfig,
+            LLMConfig,
+        )
+        from src.services.llm.exceptions import AuthenticationError
+        from src.services.llm.service import LLMService
+
+        # Configure both providers with circuit breakers enabled so the
+        # probe-driven force_open is observable on the primary while the
+        # secondary stays CLOSED.
+        config = LLMConfig(
+            provider="anthropic",
+            api_key="bad-key",
+            model="claude-3-5-sonnet",
+            max_tokens=4096,
+            temperature=0.0,
+            circuit_breaker=CircuitBreakerConfig(enabled=True),
+            fallback=FallbackProviderConfig(
+                enabled=True,
+                provider="google",
+                model="gemini-1.5-pro",
+                api_key="ok-key",
+            ),
+        )
+        cost_limits = CostLimits(
+            max_tokens_per_paper=10_000,
+            max_daily_spend_usd=10.0,
+            max_total_spend_usd=100.0,
+        )
+
+        with monkeypatch.context() as mp:
+            mp.setattr("anthropic.AsyncAnthropic", Mock())
+            mp.setattr("google.genai.Client", Mock())
+            service = LLMService(config=config, cost_limits=cost_limits)
+
+            # Primary fails the probe with AuthenticationError; secondary
+            # passes the probe normally.
+            primary = service._providers["anthropic"]
+            primary.generate = AsyncMock(
+                side_effect=AuthenticationError(
+                    "invalid x-api-key", provider="anthropic"
+                )
+            )
+            secondary = service._providers["google"]
+            secondary.generate = AsyncMock(
+                side_effect=AuthenticationError(  # tearing down quickly
+                    "ignored", provider="google"
+                )
+            )
+            # Override secondary to succeed AFTER the probe so we can
+            # reach the assertion path.
+            secondary.generate = AsyncMock()
+
+            primary_health = service._provider_health["anthropic"]
+            assert primary_health.circuit_breaker is not None
+            # Pre-condition: circuit is CLOSED before any probe runs.
+            assert primary_health.circuit_breaker.allow_request() is True
+
+            await service.ensure_health_checked()
+
+            # Post-condition: probe failure forced the circuit OPEN, so
+            # subsequent runtime calls fail-fast without hitting the
+            # provider.
+            assert primary_health.circuit_breaker.allow_request() is False
+
+    @pytest.mark.asyncio
+    async def test_failed_probe_with_no_circuit_breaker_skips_force_open(
+        self, monkeypatch
+    ):
+        """Defensive branch: probe-failed provider with CB disabled.
+
+        When ``circuit_breaker.enabled=False``, the provider has no
+        breaker to force-open. ``ensure_health_checked`` MUST log the
+        failure (per REQ-9.5.1.3) but skip the force_open step rather
+        than crashing.
+        """
+        from src.models.llm import CircuitBreakerConfig, CostLimits, LLMConfig
+        from src.services.llm.exceptions import AuthenticationError
+        from src.services.llm.service import LLMService
+
+        config = LLMConfig(
+            provider="anthropic",
+            api_key="bad-key",
+            model="claude-3-5-sonnet",
+            max_tokens=4096,
+            temperature=0.0,
+            circuit_breaker=CircuitBreakerConfig(enabled=False),
+        )
+        cost_limits = CostLimits(
+            max_tokens_per_paper=10_000,
+            max_daily_spend_usd=10.0,
+            max_total_spend_usd=100.0,
+        )
+
+        with monkeypatch.context() as mp:
+            mp.setattr("anthropic.AsyncAnthropic", Mock())
+            service = LLMService(config=config, cost_limits=cost_limits)
+            primary = service._providers["anthropic"]
+            primary.generate = AsyncMock(
+                side_effect=AuthenticationError("bad", provider="anthropic")
+            )
+
+            # Should not raise even though CB is disabled (line 174 branch)
+            results = await service.ensure_health_checked()
+
+            assert len(results) == 1
+            assert results[0].healthy is False
+            # No CB exists to be opened, but health-check still completed.
+            primary_health = service._provider_health["anthropic"]
+            assert getattr(primary_health, "circuit_breaker", None) is None
+
+    @pytest.mark.asyncio
+    async def test_failed_probe_for_unregistered_provider_skips_safely(
+        self, monkeypatch
+    ):
+        """Defensive branch: result for a name not in _provider_health.
+
+        Should never happen in practice (probe iterates _providers, which
+        is populated alongside _provider_health by ProviderManager), but
+        a defensive ``continue`` guards against future drift between the
+        two collections.
+        """
+        from src.models.llm import CostLimits, LLMConfig
+        from src.services.llm.health_check import ProviderHealthResult
+        from src.services.llm.service import LLMService
+
+        config = LLMConfig(
+            provider="anthropic",
+            api_key="ok-key",
+            model="claude-3-5-sonnet",
+            max_tokens=4096,
+            temperature=0.0,
+        )
+        cost_limits = CostLimits(
+            max_tokens_per_paper=10_000,
+            max_daily_spend_usd=10.0,
+            max_total_spend_usd=100.0,
+        )
+
+        with monkeypatch.context() as mp:
+            mp.setattr("anthropic.AsyncAnthropic", Mock())
+            service = LLMService(config=config, cost_limits=cost_limits)
+
+            # Inject a synthetic probe result for a provider that has no
+            # entry in _provider_health (drift simulation).
+            ghost_result = ProviderHealthResult(
+                provider="ghost-provider",
+                healthy=False,
+                error_class="LLMProviderError",
+            )
+
+            async def _fake_check_all(_providers):
+                return [ghost_result]
+
+            mp.setattr(
+                "src.services.llm.service.ProviderHealthChecker.check_all",
+                staticmethod(_fake_check_all),
+            )
+
+            # Should complete without raising (line 171 branch)
+            results = await service.ensure_health_checked()
+            assert results == [ghost_result]
+
+    @pytest.mark.asyncio
+    async def test_passed_probe_leaves_circuit_breaker_closed(self, monkeypatch):
+        from src.models.llm import CircuitBreakerConfig, CostLimits, LLMConfig
+        from src.services.llm.providers.base import LLMResponse
+        from src.services.llm.service import LLMService
+
+        config = LLMConfig(
+            provider="anthropic",
+            api_key="good-key",
+            model="claude-3-5-sonnet",
+            max_tokens=4096,
+            temperature=0.0,
+            circuit_breaker=CircuitBreakerConfig(enabled=True),
+        )
+        cost_limits = CostLimits(
+            max_tokens_per_paper=10_000,
+            max_daily_spend_usd=10.0,
+            max_total_spend_usd=100.0,
+        )
+
+        with monkeypatch.context() as mp:
+            mp.setattr("anthropic.AsyncAnthropic", Mock())
+            service = LLMService(config=config, cost_limits=cost_limits)
+            primary = service._providers["anthropic"]
+            primary.generate = AsyncMock(
+                return_value=LLMResponse(
+                    content="ok",
+                    input_tokens=1,
+                    output_tokens=1,
+                    model="claude-3-5-sonnet",
+                    provider="anthropic",
+                    latency_ms=1.0,
+                )
+            )
+
+            await service.ensure_health_checked()
+
+            primary_health = service._provider_health["anthropic"]
+            assert primary_health.circuit_breaker is not None
+            # Probe passed → circuit stays CLOSED.
+            assert primary_health.circuit_breaker.allow_request() is True

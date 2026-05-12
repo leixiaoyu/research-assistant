@@ -1,12 +1,16 @@
 """Unit tests for the shared acquire_pdf helper (Phase 9.5 REQ-9.5.1.1).
 
-Verifies that the helper:
+The helper is intentionally minimal: it stringifies the URL, forwards it
+plus the paper_id to ``PDFService.download_pdf``, and returns the
+resulting Path. Callers are responsible for the up-front
+``if paper.open_access_pdf:`` guard. Tests verify:
 
-- Returns ``None`` when the paper has no ``open_access_pdf`` URL.
-- Delegates to ``PDFService.download_pdf`` with the URL stringified and
-  the paper_id forwarded (i.e. it does NOT cast the URL to ``Path``,
-  which is the bug PR #156 documented).
-- Propagates download errors so callers can apply their own fallback.
+- Helper passes URL as a plain string (never via ``Path()``, the bug
+  that PR #156 documented).
+- Returned Path is the one ``download_pdf`` produced — no Optional, no
+  intermediate casting.
+- Typed download exceptions propagate so callers can apply an abstract
+  fallback strategy.
 """
 
 from pathlib import Path
@@ -14,33 +18,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from src.models.paper import PaperMetadata
 from src.services.pdf_acquisition import acquire_pdf
 from src.utils.exceptions import PDFDownloadError
-
-
-def _make_paper(
-    pdf_url: str | None = "https://arxiv.org/pdf/2605.06641v1",
-) -> PaperMetadata:
-    return PaperMetadata(
-        paper_id="test-paper-1",
-        title="Test Paper",
-        abstract="Test abstract",
-        url="https://example.com/paper",
-        open_access_pdf=pdf_url,
-    )
-
-
-@pytest.mark.asyncio
-async def test_returns_none_for_paper_without_pdf_url():
-    """When paper has no PDF URL, helper returns None and never downloads."""
-    pdf_service = Mock()
-    pdf_service.download_pdf = AsyncMock()
-
-    result = await acquire_pdf(pdf_service, _make_paper(pdf_url=None))
-
-    assert result is None
-    pdf_service.download_pdf.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -55,7 +34,11 @@ async def test_delegates_to_download_pdf_with_string_url_not_path():
     pdf_service = Mock()
     pdf_service.download_pdf = AsyncMock(return_value=expected_path)
 
-    result = await acquire_pdf(pdf_service, _make_paper())
+    result = await acquire_pdf(
+        pdf_service,
+        "https://arxiv.org/pdf/2605.06641v1",
+        "test-paper-1",
+    )
 
     assert result == expected_path
     pdf_service.download_pdf.assert_awaited_once_with(
@@ -71,6 +54,23 @@ async def test_delegates_to_download_pdf_with_string_url_not_path():
 
 
 @pytest.mark.asyncio
+async def test_returns_path_directly_no_optional():
+    """Helper return type is non-Optional Path (Phase 9.5 review fix).
+
+    The original signature returned Optional[Path] which forced callers
+    to ``assert local_path is not None`` for type narrowing. The
+    refactor pushes the URL-presence check up to the caller so this
+    helper always returns a real Path.
+    """
+    pdf_service = Mock()
+    pdf_service.download_pdf = AsyncMock(return_value=Path("/tmp/x.pdf"))
+
+    result = await acquire_pdf(pdf_service, "https://x.example/y.pdf", "id-1")
+
+    assert isinstance(result, Path)
+
+
+@pytest.mark.asyncio
 async def test_propagates_download_errors():
     """Download failures bubble up so callers can apply abstract fallback."""
     pdf_service = Mock()
@@ -79,4 +79,4 @@ async def test_propagates_download_errors():
     )
 
     with pytest.raises(PDFDownloadError, match="HTTP 404"):
-        await acquire_pdf(pdf_service, _make_paper())
+        await acquire_pdf(pdf_service, "https://example.com/missing", "id-2")

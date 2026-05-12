@@ -1,4 +1,4 @@
-"""Shared PDF acquisition: materialize a paper's PDF URL into a local Path.
+"""Shared PDF acquisition: materialize a URL into a local Path.
 
 Phase 9.5 Workstream A (REQ-9.5.1.1) — eliminates the URL-as-Path bug
 documented in PR #156. Both the synchronous extraction path
@@ -9,24 +9,22 @@ acquire PDFs through this single helper so they cannot diverge again.
 """
 
 from pathlib import Path
-from typing import Optional
 
-import structlog
-
-from src.models.paper import PaperMetadata
 from src.services.pdf_service import PDFService
-
-logger = structlog.get_logger()
 
 
 async def acquire_pdf(
     pdf_service: PDFService,
-    paper: PaperMetadata,
-) -> Optional[Path]:
-    """Materialize ``paper.open_access_pdf`` into a downloaded local Path.
+    pdf_url: str,
+    paper_id: str,
+) -> Path:
+    """Materialize a PDF URL into a downloaded local Path.
 
-    Returns ``None`` when the paper has no PDF URL — callers MUST handle
-    this case (typically by falling back to abstract-only processing).
+    Callers are responsible for first verifying the paper actually has a
+    URL (e.g. ``if paper.open_access_pdf:``); passing an empty or invalid
+    URL here will surface as ``PDFDownloadError`` from the underlying
+    download primitive.
+
     Propagates typed exceptions from the underlying download so callers
     can apply their own fallback strategy:
 
@@ -36,16 +34,15 @@ async def acquire_pdf(
 
     Args:
         pdf_service: PDF service providing the ``download_pdf`` primitive.
-        paper: Paper whose ``open_access_pdf`` URL to materialize.
+        pdf_url: HTTPS URL of the PDF to download. Must be a string —
+            passing a Pydantic ``HttpUrl`` works because Pydantic
+            stringifies cleanly, but callers should ``str(...)``-coerce
+            for clarity at the call site.
+        paper_id: Stable identifier used to build the local filename.
 
     Returns:
-        Local ``Path`` to the downloaded PDF, or ``None`` if the paper has
-        no PDF URL.
+        Local ``Path`` to the downloaded PDF. The caller can pass this
+        directly to any extractor without intermediate ``Path()``
+        casting (which is the bug this helper exists to prevent).
     """
-    if not paper.open_access_pdf:
-        return None
-
-    return await pdf_service.download_pdf(
-        url=str(paper.open_access_pdf),
-        paper_id=paper.paper_id,
-    )
+    return await pdf_service.download_pdf(url=pdf_url, paper_id=paper_id)

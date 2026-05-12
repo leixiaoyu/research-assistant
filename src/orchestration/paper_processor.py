@@ -153,11 +153,11 @@ class PaperProcessor:
                     # directly to Path() (the prior bug) collapsed
                     # 'https://' to 'https:/' and failed extraction
                     # silently for ~54% of papers per daily run.
-                    local_pdf_path = await acquire_pdf(self.pdf_service, paper)
-                    # The outer `if paper.open_access_pdf:` guarantees
-                    # acquire_pdf() returned a Path here. assert narrows
-                    # the type for mypy and documents the invariant.
-                    assert local_pdf_path is not None
+                    local_pdf_path = await acquire_pdf(
+                        self.pdf_service,
+                        str(paper.open_access_pdf),
+                        paper.paper_id,
+                    )
 
                     # Phase 2.5 FallbackPDFService automatically tries:
                     # PyMuPDF → pdfplumber → marker → pandoc

@@ -23,6 +23,10 @@ from src.models.llm import LLMConfig, CostLimits, EnhancedUsageStats, ProviderUs
 from src.models.extraction import ExtractionTarget, PaperExtraction
 from src.models.paper import PaperMetadata
 from src.services.llm.cost_tracker import CostTracker
+from src.services.llm.health_check import (  # Phase 9.5 REQ-9.5.1.3
+    ProviderHealthChecker,
+    ProviderHealthResult,
+)
 from src.services.llm.prompt_builder import PromptBuilder
 from src.services.llm.response_parser import ResponseParser
 from src.services.llm.providers.base import LLMResponse, ProviderHealth
@@ -105,6 +109,11 @@ class LLMService:
         self._provider_health = self._provider_manager.get_all_health()
         self.fallback_provider = self._provider_manager.fallback_provider
 
+        # Phase 9.5 REQ-9.5.1.3: lazy startup health check (runs once
+        # per process on first extract()/complete() call).
+        self._health_checked: bool = False
+        self._health_results: list[ProviderHealthResult] = []
+
         logger.info(
             "llm_service_initialized",
             provider=config.provider,
@@ -114,6 +123,26 @@ class LLMService:
             fallback_enabled=self._provider_manager.has_fallback(),
             circuit_breaker_enabled=config.circuit_breaker.enabled,
         )
+
+    async def ensure_health_checked(self) -> list[ProviderHealthResult]:
+        """Run provider health probes if they have not run for this process.
+
+        Phase 9.5 REQ-9.5.1.3 — surfaces auth/quota/network failures as a
+        single distinct ``provider_health_check_failed`` event at first
+        use, instead of leaving them buried in the per-extraction retry
+        warnings the prior code emitted.
+
+        Returns the per-provider results so callers (CLI, scheduled jobs,
+        tests) can inspect them. Subsequent calls within the same process
+        return the cached results without re-probing.
+        """
+        if self._health_checked:
+            return self._health_results
+        self._health_results = await ProviderHealthChecker.check_all(
+            list(self._providers.values())
+        )
+        self._health_checked = True
+        return self._health_results
 
     async def extract(
         self,
@@ -138,6 +167,10 @@ class LLMService:
             AllProvidersFailedError: If all providers fail
             JSONParseError: If response parsing fails
         """
+        # Phase 9.5 REQ-9.5.1.3: surface provider auth/connectivity
+        # failures up-front the first time we use this service.
+        await self.ensure_health_checked()
+
         # Check for daily reset
         # Check both cost_tracker and usage_stats for backward compat
         should_reset = self._cost_tracker.should_reset_daily()
@@ -239,6 +272,10 @@ class LLMService:
             LLMAPIError: If the API call fails
             AllProvidersFailedError: If all providers fail
         """
+        # Phase 9.5 REQ-9.5.1.3: surface provider auth/connectivity
+        # failures up-front on first use.
+        await self.ensure_health_checked()
+
         # Check cost limits before calling
         self._check_cost_limits()
 

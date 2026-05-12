@@ -64,6 +64,20 @@ class PDFValidationError(PipelineError):
     pass
 
 
+class InvalidPDFPathError(PipelineError):
+    """PDF extractor was handed a value that is not a local file path.
+
+    Phase 9.5 REQ-9.5.1.2 — defense-in-depth against the URL-as-Path bug
+    that PR #156 documented (orchestration cast `open_access_pdf` URLs to
+    `Path()`, collapsing `https://` to `https:/`, then failed silently in
+    extractor backends with `no such file` errors). Use
+    :func:`src.services.pdf_acquisition.acquire_pdf` to materialize a URL
+    into a local Path before invoking any extractor.
+    """
+
+    pass
+
+
 class ConversionError(PipelineError):
     """PDF to markdown conversion failed
 

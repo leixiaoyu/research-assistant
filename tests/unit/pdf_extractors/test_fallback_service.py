@@ -11,6 +11,7 @@ from src.models.pdf_extraction import (
     ExtractionMetadata,
 )
 from src.services.pdf_extractors.fallback_service import FallbackPDFService
+from src.utils.exceptions import InvalidPDFPathError
 
 
 @pytest.fixture
@@ -366,3 +367,53 @@ async def test_enabled_but_not_installed_extractors():
         # Should succeed with pdfplumber even though pymupdf is not installed
         assert result.success is True
         assert result.backend == PDFBackend.PDFPLUMBER
+
+
+# Phase 9.5 REQ-9.5.1.2 — defense-in-depth type guard at the extractor
+# entry point. PR #156 documented the URL-as-Path bug; this guard ensures
+# the bug cannot recur silently if a future caller bypasses acquire_pdf().
+
+
+class TestExtractorRejectsUrlPath:
+    """Type guard: extract_with_fallback MUST reject URL strings."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_https_url_as_path(self, service):
+        """A pdf_path that looks like an https URL raises InvalidPDFPathError."""
+        with pytest.raises(InvalidPDFPathError, match="URL"):
+            await service.extract_with_fallback(
+                Path("https://arxiv.org/pdf/2605.06641v1")
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_http_url_as_path(self, service):
+        """Plain http URLs are rejected too (defense-in-depth)."""
+        with pytest.raises(InvalidPDFPathError, match="URL"):
+            await service.extract_with_fallback(Path("http://example.com/paper.pdf"))
+
+    @pytest.mark.asyncio
+    async def test_rejects_collapsed_url_pattern(self, service):
+        """The exact bug pattern (collapsed 'https:/' single slash) is caught.
+
+        The original bug produced ``Path("https://...")`` whose string
+        repr is ``"https:/..."`` (single slash). The guard matches both
+        forms via lowercase-prefix check on ``http:``/``https:``.
+        """
+        with pytest.raises(InvalidPDFPathError, match="URL"):
+            await service.extract_with_fallback(
+                Path("https:/arxiv.org/pdf/2605.06641v1")
+            )
+
+    @pytest.mark.asyncio
+    async def test_accepts_local_path(self, service, mock_extractors):
+        """Local file paths pass the guard (regression check)."""
+        mock_extractors["pymupdf"].extract = AsyncMock(
+            return_value=PDFExtractionResult(
+                success=True,
+                markdown="ok",
+                metadata=ExtractionMetadata(backend=PDFBackend.PYMUPDF),
+            )
+        )
+        with patch.object(service.validator, "score_extraction", return_value=0.9):
+            result = await service.extract_with_fallback(Path("/tmp/local.pdf"))
+        assert result.success is True

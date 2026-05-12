@@ -128,6 +128,7 @@ async def test_concurrent_pipeline_e2e_mock_llm(
         dedup_service=dedup_service,
         filter_service=filter_service,
         checkpoint_service=checkpoint_service,
+        pdf_service=Mock(),  # Phase 9.5 REQ-9.5.1.1
     )
 
     # Process papers concurrently
@@ -188,6 +189,7 @@ async def test_checkpoint_resume_e2e(
         dedup_service=dedup_service,
         filter_service=filter_service,
         checkpoint_service=checkpoint_service,
+        pdf_service=Mock(),  # Phase 9.5 REQ-9.5.1.1
     )
 
     run_id = "e2e-checkpoint-test"
@@ -224,6 +226,7 @@ async def test_checkpoint_resume_e2e(
         dedup_service=dedup_service,
         filter_service=filter_service,
         checkpoint_service=checkpoint_service,
+        pdf_service=Mock(),  # Phase 9.5 REQ-9.5.1.1
     )
 
     second_results = []
@@ -279,6 +282,7 @@ async def test_cache_integration_e2e(
         dedup_service=dedup_service,
         filter_service=filter_service,
         checkpoint_service=checkpoint_service,
+        pdf_service=Mock(),  # Phase 9.5 REQ-9.5.1.1
     )
 
     # First run
@@ -306,6 +310,7 @@ async def test_cache_integration_e2e(
         dedup_service=dedup_service,
         filter_service=filter_service,
         checkpoint_service=checkpoint_service,
+        pdf_service=Mock(),  # Phase 9.5 REQ-9.5.1.1
     )
 
     second_results = []
@@ -378,6 +383,7 @@ async def test_deduplication_e2e(concurrency_config, extraction_targets, tmp_pat
         dedup_service=dedup_service,
         filter_service=filter_service,
         checkpoint_service=checkpoint_service,
+        pdf_service=Mock(),  # Phase 9.5 REQ-9.5.1.1
     )
 
     # First batch

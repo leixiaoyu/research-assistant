@@ -17,6 +17,7 @@ from src.models.pdf_extraction import (
 )
 from src.services.pdf_extractors.base import PDFExtractor
 from src.services.pdf_extractors.validators.quality_validator import QualityValidator
+from src.utils.exceptions import InvalidPDFPathError
 
 # Import extractors
 from src.services.pdf_extractors.pymupdf_extractor import PyMuPDFExtractor
@@ -24,6 +25,25 @@ from src.services.pdf_extractors.pdfplumber_extractor import PDFPlumberExtractor
 from src.services.pdf_extractors.pandoc_extractor import PandocExtractor
 
 logger = structlog.get_logger()
+
+
+def _reject_url_path(pdf_path: Path) -> None:
+    """Defense-in-depth guard against the URL-as-Path bug (REQ-9.5.1.2).
+
+    PR #156 documented that the orchestration layer was casting
+    ``open_access_pdf`` URLs to ``Path()`` directly, which collapses
+    ``https://`` to ``https:/`` and fails downstream as a non-existent
+    file. The canonical fix is :func:`src.services.pdf_acquisition.acquire_pdf`
+    which downloads the URL first. This guard catches any future caller
+    that bypasses ``acquire_pdf`` so the bug cannot recur silently.
+    """
+    path_str = str(pdf_path).lower()
+    if path_str.startswith(("http:", "https:")):
+        raise InvalidPDFPathError(
+            f"PDF path is a URL, not a local file: {pdf_path!r}. "
+            "Call src.services.pdf_acquisition.acquire_pdf() to download "
+            "the URL to a local Path before invoking extraction."
+        )
 
 
 class FallbackPDFService:
@@ -111,11 +131,19 @@ class FallbackPDFService:
         Attempt extraction using the configured fallback chain.
 
         Args:
-            pdf_path: Path to PDF file
+            pdf_path: Path to PDF file (MUST be a local file, NOT a URL —
+                see :func:`src.services.pdf_acquisition.acquire_pdf`)
 
         Returns:
             Best PDFExtractionResult obtained from the chain
+
+        Raises:
+            InvalidPDFPathError: If ``pdf_path`` is a URL rather than a
+                local file path (Phase 9.5 REQ-9.5.1.2 type guard).
         """
+        # Phase 9.5 REQ-9.5.1.2: defense-in-depth against URL-as-Path bug
+        _reject_url_path(pdf_path)
+
         results: List[PDFExtractionResult] = []
 
         # Filter enabled backends from config

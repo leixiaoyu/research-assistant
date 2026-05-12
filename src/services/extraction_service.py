@@ -21,6 +21,7 @@ from src.models.paper import PaperMetadata
 from src.models.extraction import ExtractionTarget, ExtractedPaper
 
 from src.services.pdf_service import PDFService
+from src.services.pdf_acquisition import acquire_pdf  # Phase 9.5 REQ-9.5.1.1
 from src.services.llm import LLMService
 from src.services.pdf_extractors.fallback_service import FallbackPDFService
 from src.utils.exceptions import (
@@ -132,6 +133,7 @@ class ExtractionService:
                 dedup_service=dedup_service,
                 filter_service=filter_service,
                 checkpoint_service=checkpoint_service,
+                pdf_service=pdf_service,  # Phase 9.5 REQ-9.5.1.1
                 registry_service=registry_service,  # Phase 3.5
             )
             self._concurrent_enabled = True
@@ -171,10 +173,13 @@ class ExtractionService:
         # Attempt PDF pipeline
         if paper.open_access_pdf:
             try:
-                # Download PDF
-                pdf_path = await self.pdf_service.download_pdf(
-                    url=str(paper.open_access_pdf), paper_id=paper.paper_id
-                )
+                # Phase 9.5 REQ-9.5.1.1: shared download path (acquire_pdf
+                # is also used by PaperProcessor — both routes materialize
+                # URLs identically so the URL-as-Path bug cannot recur).
+                acquired = await acquire_pdf(self.pdf_service, paper)
+                # Outer guard guarantees URL exists, so acquired is a Path.
+                assert acquired is not None
+                pdf_path = acquired
                 extracted.pdf_available = True
                 extracted.pdf_path = str(pdf_path)
 

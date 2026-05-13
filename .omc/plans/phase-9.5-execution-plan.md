@@ -131,41 +131,49 @@ C ramps Week 3 (data models, generator, CLI), runs first brief Week 4
 
 ### Weeks 2-3: Workstream B — Discovery Breadth
 
+> **Plan revision (PR α, 2026-05-12):** Pre-execution audit revealed **Phase 7.2 already shipped the core mechanisms** — `QueryExpander` (`src/utils/query_expander.py`), `CitationExplorer` (`src/services/citation_explorer.py`), and DEEP-mode wiring in `DiscoveryPhase` (`discovery.py:227-228`). The original B.1–B.9 task list assumed greenfield; reality is that production never *activated* Phase 7.2 (no `query_expansion`/`citation_exploration` keys in `research_config.yaml`).
+>
+> **Revised execution: two PRs.**
+>
+> - **PR α (this commit):** Add `citation_exploration: enabled: true` to prod config to activate what already exists; amend spec/plan to reflect as-built reality. Citation expansion runs without LLM, so it ships today even with OQ-9.5.1 unresolved. Query expansion stays off until OQ-9.5.1 is sorted.
+> - **PR β (next):** Six concrete gaps tracked as B-G1 through B-G6 in the spec. Highest priority is **B-G6** (`pipeline_health_breadth_metric` event) — without it we can't verify activation broadens the funnel.
+>
+> The original B.1–B.9 task list below is preserved for traceability; each item is annotated with its as-built status from the audit.
+
 **Objective:** Activate citation expansion in the daily flow; share QueryExpander across monitoring + discovery.
 
-**Week 2 Deliverables:**
-1. `src/services/llm/query_expander.py` — extracted shared service
-2. `src/services/intelligence/monitoring/` updated to consume from shared location (no behavior change)
-3. `src/services/discovery/citation_expansion.py` — new wrapper around Phase 9.2 `BFSCrawler` for daily-loop use
+**PR α Deliverables (this commit):**
+1. `config/research_config.yaml` — add `citation_exploration` section (`enabled: true`, depth=1, fwd+bwd both on, 10 each)
+2. `docs/specs/PHASE_9.5_RELIABILITY_BREADTH_LEARNING_SPEC.md` §4 — annotate each REQ with as-built status; add §4.3 gap summary
+3. `.omc/plans/phase-9.5-execution-plan.md` — this revision block
 
-**Week 3 Deliverables:**
-1. `src/orchestration/phases/discovery.py` updated to invoke citation expansion + query variants
-2. `ScoredPaper.source` field added per spec Section 6
-3. `pipeline_health_breadth_metric` event emitted
-4. Configuration support in `config/research_config.yaml` (with sensible defaults so existing configs continue to work)
-5. CLI flag `--no-citation-expansion` for opt-out
+**PR β Deliverables (deferred, depends on OQ-9.5.1 partly):**
+1. `pipeline_health_breadth_metric` event in `DiscoveryPhase.execute()` end-of-run (B-G6, HIGH)
+2. Seed-selection algorithm aligned with spec (B-G1, MED)
+3. Reconcile field naming for provenance (B-G5, LOW)
+4. After OQ-9.5.1 resolves: activate query expansion + add `recent_paper_titles` + 7-day TTL (B-G2/G3/G4)
 
-**Detailed TODOs:**
+**Original detailed TODOs (B.1–B.9), annotated with as-built status:**
 
-| ID | Task | Acceptance Criteria | REQ |
+| ID | Task | As-built status | REQ |
 |---|---|---|---|
-| B.1 | Extract `QueryExpander` from monitoring | Shared class in `src/services/llm/query_expander.py`; monitoring uses it; existing monitoring tests pass | REQ-9.5.2.2 |
-| B.2 | Add 7-day cache to `QueryExpander` | Cache key = `(base_query, hash(sorted(titles)))`; TTL configurable | REQ-9.5.2.2 |
-| B.3 | Build `CitationExpansionService` | Wraps `BFSCrawler`; honors quality_threshold, seed cap, candidate cap, hop count, directions | REQ-9.5.2.1 |
-| B.4 | Wire citation expansion into `DiscoveryPhase` | After provider queries + quality filter, expansion adds candidates; respects rate limits; degrades gracefully | REQ-9.5.2.1 |
-| B.5 | Wire query variants into `DiscoveryPhase` | Original query + N variants run through each provider; per-variant deduplication | REQ-9.5.2.2 |
-| B.6 | Add `source` and `seed_paper_id` to `ScoredPaper` | Pydantic model updated; all existing call sites set `source` correctly; tests assert provenance is preserved end-to-end | REQ-9.5.2.3 |
-| B.7 | Implement `pipeline_health_breadth_metric` | Event emitted at end of `DiscoveryPhase` with breakdown by source | REQ-9.5.2.4 |
-| B.8 | Display source in Delta brief | Existing `DeltaGenerator` updated to show `source` per paper | REQ-9.5.2.3 |
-| B.9 | Unit + integration tests for B | 99%+ coverage; recorded `BFSCrawler` response fixture for citation expansion test | All B REQs |
+| B.1 | Extract `QueryExpander` from monitoring | ✅ **Already shipped** in Phase 7.2 at `src/utils/query_expander.py`; monitoring consumes it (`_tier1_factory.py:35,78`). Discovery uses a different class (`QueryIntelligenceService`) — see B-G3. | REQ-9.5.2.2 |
+| B.2 | Add 7-day cache to `QueryExpander` | ⚠️ In-memory cache exists (`query_expander.py:57`); 7-day TTL not implemented. Tracked as **B-G4**. | REQ-9.5.2.2 |
+| B.3 | Build `CitationExpansionService` | ✅ Already exists as `CitationExplorer` (`src/services/citation_explorer.py`); uses Phase 7.2's own implementation, NOT the Phase 9.2 `BFSCrawler` the original spec referenced. Functionally equivalent for daily-loop use. | REQ-9.5.2.1 |
+| B.4 | Wire citation expansion into `DiscoveryPhase` | ✅ Wired via `pipeline.py:_create_discovery_phase` → `DiscoveryPhase(multi_source_enabled=True)` → DEEP mode. Gated on config presence. PR α flips the config switch. | REQ-9.5.2.1 |
+| B.5 | Wire query variants into `DiscoveryPhase` | ✅ Wired in DEEP mode (same path). PR α does NOT activate (blocked on OQ-9.5.1); tracked as **B-G2**. | REQ-9.5.2.2 |
+| B.6 | Add `source` and `seed_paper_id` to `ScoredPaper` | ⚠️ Phase 7.2 ships `discovery_source` + `discovery_method` on `PaperMetadata` with values like `"arxiv"`, `"forward_citation"`. Field names differ from spec's `source`/`seed_paper_id`. Tracked as **B-G5**. | REQ-9.5.2.3 |
+| B.7 | Implement `pipeline_health_breadth_metric` | ❌ **Not done.** Per-source counts are logged separately (`discover_deep_citation_exploration` event) but no aggregated end-of-run event. Tracked as **B-G6 (HIGH)**. | REQ-9.5.2.4 |
+| B.8 | Display source in Delta brief | ❌ **Not done.** `DeltaGenerator` doesn't show provenance. Tracked as part of **B-G5**. | REQ-9.5.2.3 |
+| B.9 | Unit + integration tests for B | ⚠️ Existing Phase 7.2 tests (`tests/unit/test_phase_7_2_integration.py`) cover aggregation + query-expansion fallback. PR β adds tests for B-G1, B-G6 specifically. | All B REQs |
 
-**Review Gate G2:** End of Week 3
-- ✅ All B REQs implemented
+**Review Gate G2:** End of PR β
+- ✅ All B REQs implemented OR explicitly deferred with rationale
 - ✅ `verify.sh` passes
-- ✅ Manual run shows ≥10 net-new papers from `citation_expansion` in a single run (≥20 averaged target deferred to 7-day rolling measurement post-merge)
-- ✅ Monitoring service still functions identically (regression check)
+- ✅ Manual run after PR α shows DEEP mode activated (`phase72_discovery_enabled` log event present); manual run after PR β shows ≥10 net-new papers from citation expansion in a single run via the new `pipeline_health_breadth_metric` event
+- ✅ Monitoring service still functions identically (regression check via existing `tests/unit/services/intelligence/monitoring/`)
 
-**Risk:** Citation expansion may produce many low-relevance candidates if seed papers are noisy. Mitigation: existing `QualityFilterService` runs after expansion, filtering as for any other provider result.
+**Risk:** Citation expansion may produce many low-relevance candidates if seed papers are noisy. Mitigation: existing `QualityFilterService` runs after expansion, filtering as for any other provider result. Additional mitigation in B-G1: replace top-10-by-discovery-order seed selection with last-7-days quality-≥-0.7 cohort for higher-signal seeds.
 
 ---
 

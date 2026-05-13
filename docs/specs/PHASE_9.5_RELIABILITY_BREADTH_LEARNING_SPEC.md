@@ -227,17 +227,19 @@ The URL-scheme rejection guard at the extractor entry point is a defense-in-dept
 
 ## 4. Workstream B — Discovery Breadth
 
-**Objective:** Increase the diversity of papers reaching extraction without adding new providers. Two mechanisms: (1) citation expansion using the already-shipped Phase 9.2 work, (2) LLM-driven query variants extracted as a shared service from Phase 9.1 monitoring.
+**Objective:** Increase the diversity of papers reaching extraction without adding new providers. Two mechanisms: (1) citation expansion using the already-shipped Phase 7.2 `CitationExplorer`, (2) LLM-driven query variants via the already-shipped Phase 7.2 `QueryIntelligenceService`.
+
+> **Audit correction (PR α, 2026-05-12):** The original wording of this section assumed Workstream B was greenfield work. A code audit at branch creation time revealed that **Phase 7.2 (Discovery Expansion) already shipped both mechanisms** — `src/utils/query_expander.py`, `src/services/citation_explorer.py`, and the `multi_source_enabled` path in `src/orchestration/phases/discovery.py:227-228`. What was missing was production *activation* (the prod `research_config.yaml` had no `query_expansion` or `citation_exploration` section, so `_create_discovery_phase` fell through to single-source mode) and a small set of genuine gaps listed at the end of this section. Each REQ below is annotated with its **as-built status** plus the residual gap.
 
 ### 4.1 Requirements
 
 #### REQ-9.5.2.1: Citation expansion in daily discovery
 The `DiscoveryPhase` SHALL, after running provider queries and quality filtering, expand the candidate pool by traversing the citation neighborhood of recently extracted high-quality papers.
 
-**Algorithm:**
+**Algorithm (as-spec'd):**
 
 1. Identify "seed" papers: papers extracted in the last 7 days for the current topic with `quality_score >= 0.7`. Cap at 10 seeds per topic (highest-scored first).
-2. For each seed, traverse 1 hop in both directions (forward citations + backward references) using the existing `BFSCrawler`.
+2. For each seed, traverse 1 hop in both directions (forward citations + backward references).
 3. Deduplicate candidates against:
    - The current run's discovery results (in-memory)
    - The global registry (already extracted)
@@ -247,20 +249,22 @@ The `DiscoveryPhase` SHALL, after running provider queries and quality filtering
 **Configuration** (`config/research_config.yaml`):
 
 ```yaml
-discovery:
-  citation_expansion:
-    enabled: true            # default: true
-    seed_quality_threshold: 0.7
-    max_seeds_per_topic: 10
-    max_candidates_per_topic: 50
-    hop_count: 1
-    directions: ["forward", "backward"]
+settings:
+  citation_exploration:
+    enabled: true
+    forward: true
+    backward: true
+    max_citation_depth: 1
+    max_forward_per_paper: 10
+    max_backward_per_paper: 10
 ```
+
+> **As-built status (PR α activates; PR β closes gaps):** The traversal infrastructure is shipped — `src/services/citation_explorer.py` walks Semantic Scholar forward/backward citations and `DiscoveryPhase._discover_topic` invokes it via DEEP mode (`discovery.py:227-228`). PR α turns the feature on in `config/research_config.yaml`. The seed-selection algorithm in Phase 7.2 differs from the spec: it takes the top 10 papers from the *current* run's provider results (`src/services/discovery/service.py:1131`), not "papers extracted in the last 7 days with quality_score ≥ 0.7". This divergence is acceptable for PR α (still broadens vs. single-source) and is tracked as **Gap B-G1** for PR β.
 
 #### REQ-9.5.2.2: Shared query expansion service
 Phase 9.1 monitoring contains LLM-based query expansion logic. This SHALL be extracted into a shared `QueryExpander` service usable by both monitoring and the daily discovery flow.
 
-**Interface:**
+**Interface (as-spec'd):**
 ```python
 class QueryExpander:
     async def expand(
@@ -276,8 +280,20 @@ class QueryExpander:
 
 **Activation in daily flow:** `DiscoveryPhase` SHALL run the original query plus expanded variants through each provider, deduplicating across queries.
 
+> **As-built status:** Two query-expansion paths exist in the codebase, neither matching the spec interface:
+> - `src/utils/query_expander.py::QueryExpander.expand(query, max_variants)` — used by Phase 9.1 monitoring; in-memory cache, no TTL.
+> - `src/services/discovery/service.py` calls `QueryIntelligenceService.enhance(...)` from DEEP mode — used by discovery.
+>
+> Both ignore `recent_paper_titles`. **PR α does NOT activate query expansion** in `research_config.yaml` because it requires a working LLM, which is currently blocked on **OQ-9.5.1 (LLM provider strategy)**. Citation expansion (above) runs without LLM, so DEEP mode still adds value via citation traversal alone (the `query_service is None` branch at `service.py:1056-1064` falls through to the original query and continues with citation work). Once OQ-9.5.1 is resolved, PR β will:
+>
+> - **Gap B-G2:** Add `query_expansion: enabled: true` to prod config to activate the existing path.
+> - **Gap B-G3:** Add `recent_paper_titles` parameter to `QueryExpander` (and reconcile with `QueryIntelligenceService`).
+> - **Gap B-G4:** Add 7-day TTL to `QueryExpander._cache`.
+
 #### REQ-9.5.2.3: Tag candidate provenance
 Every paper added to the candidate pool SHALL carry a `source` field with one of: `provider:arxiv`, `provider:semantic_scholar`, `provider:huggingface`, `citation_expansion`, `query_variant`. This is used in the Delta brief and for diagnostic tracking.
+
+> **As-built status:** Phase 7.2 ships `discovery_source` and `discovery_method` fields on `PaperMetadata` (`src/models/paper.py:63`) and `ResultAggregator` populates them with values like `"arxiv"`, `"semantic_scholar"`, `"forward_citation"`, `"backward_citation"` (`src/services/citation_explorer.py:135, 151`). Field name and value vocabulary differ from the spec but the *function* is provided. **Gap B-G5:** PR β should either align the spec to the as-built names or rename the as-built fields to match the spec; either way, no new tracking is needed.
 
 #### REQ-9.5.2.4: Discovery breadth metric
 The system SHALL emit `pipeline_health_breadth_metric` at end-of-run with:
@@ -286,6 +302,19 @@ The system SHALL emit `pipeline_health_breadth_metric` at end-of-run with:
 - Net new papers (post-dedup) by `source`
 
 **SLO indicator:** Citation-expansion contribution SHALL be ≥ 20 net-new papers per run averaged over 7 days, once enabled.
+
+> **As-built status:** Per-source counts are logged separately (e.g. `discover_deep_citation_exploration` event with `forward` + `backward` counts at `discovery/service.py:1150-1152`) but there is no aggregated `pipeline_health_breadth_metric` event analogous to the Phase 9.5 Workstream A `pipeline_health_abstract_fallback_rate` event. **Gap B-G6:** PR β implements this single new event in `DiscoveryPhase.execute()` end-of-run, with the same shape as the abstract-fallback SLO event (rate, counts, threshold, within_slo).
+
+### 4.3 Gap summary for follow-up PR β
+
+| Gap | Description | Source REQ | Priority |
+|---|---|---|---|
+| **B-G1** | Seed selection: replace hardcoded top-10 with "last-7-days, quality ≥ 0.7" cohort | REQ-9.5.2.1 | MED — current behavior still broadens; spec algorithm gives higher-signal seeds |
+| **B-G2** | Activate `query_expansion: enabled: true` in `research_config.yaml` | REQ-9.5.2.2 | BLOCKED on OQ-9.5.1 |
+| **B-G3** | Add `recent_paper_titles` param to `QueryExpander.expand` | REQ-9.5.2.2 | LOW — only matters if seeds inform variant generation |
+| **B-G4** | Add 7-day TTL to `QueryExpander._cache` | REQ-9.5.2.2 | LOW — bounded cache size; current in-memory is fine for single-process runs |
+| **B-G5** | Reconcile `discovery_source` / `discovery_method` field naming with spec's `source` / `seed_paper_id` (or amend spec) | REQ-9.5.2.3 | LOW — function works; cosmetic |
+| **B-G6** | Implement `pipeline_health_breadth_metric` end-of-run event | REQ-9.5.2.4 | **HIGH** — without this, we can't verify the activation actually broadens the funnel |
 
 ### 4.2 Security Requirements
 

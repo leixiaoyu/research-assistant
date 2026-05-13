@@ -205,6 +205,15 @@ class DailyResearchJob(BaseJob):
         # per-run building block.
         self._emit_abstract_fallback_slo(result)
 
+        # Phase 9.5 REQ-9.5.2.4: emit breadth-metric SLO event so ops
+        # can grep `pipeline_health_breadth_metric` in daily logs to
+        # verify citation expansion is actually broadening the funnel
+        # (and not silently regressing if e.g. Semantic Scholar
+        # rate-limits or the registry seed pool is too sparse). Same
+        # per-run-building-block-of-rolling-SLO convention as the
+        # abstract-fallback event above.
+        self._emit_breadth_metric_slo(result)
+
         # Phase 3.7 + 3.8: Send notifications with deduplication (fail-safe)
         await self._send_notifications(result, config, pipeline)
 
@@ -241,6 +250,35 @@ class DailyResearchJob(BaseJob):
             papers_with_abstract_fallback=result.papers_with_abstract_fallback,
             slo_target_pct=ABSTRACT_FALLBACK_RATE_SLO_PCT,
             within_slo=result.abstract_fallback_within_slo,
+        )
+
+    @staticmethod
+    def _emit_breadth_metric_slo(result: Any) -> None:
+        """Emit the Phase 9.5 breadth-metric SLO event (REQ-9.5.2.4).
+
+        Pulls the per-run rate from :class:`PipelineResult` and logs it
+        with the per-source breakdown so ops can grep
+        ``pipeline_health_breadth_metric`` for the daily building block
+        of the rolling 7-day SLO. The single-run rate is not itself the
+        SLO; ops aggregates over the window. The breakdown distinguishes
+        provider-sourced papers from citation-sourced papers using the
+        canonical ``CITATION_SOURCE_KEYS`` partition in
+        :mod:`src.orchestration.phases.discovery`.
+
+        Side-effect-free with respect to the pipeline result: this is
+        observability only.
+        """
+        from src.orchestration.result import BREADTH_METRIC_SLO_MIN_PCT
+
+        logger.info(
+            "pipeline_health_breadth_metric",
+            rate_pct=result.breadth_metric_rate_pct,
+            papers_discovered=result.papers_discovered,
+            papers_from_providers=result.papers_from_providers,
+            papers_from_citations=result.papers_from_citations,
+            source_breakdown=dict(result.source_breakdown),
+            slo_target_pct=BREADTH_METRIC_SLO_MIN_PCT,
+            within_slo=result.breadth_metric_within_slo,
         )
 
     async def _send_notifications(

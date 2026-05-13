@@ -4,8 +4,10 @@ This module provides query operations for the registry:
 - Lookup by paper ID
 - Filter by topic affiliation
 - Statistics aggregation
+- Phase 9.5 PR β: recent-cohort filter for citation seed selection
 """
 
+from datetime import datetime
 from typing import Optional, List
 import structlog
 
@@ -53,6 +55,36 @@ class RegistryQueries:
             entry
             for entry in state.entries.values()
             if topic_slug in entry.topic_affiliations
+        ]
+
+    def get_recent_entries_for_topic(
+        self,
+        topic_slug: str,
+        since: datetime,
+        state: RegistryState,
+    ) -> List[RegistryEntry]:
+        """Get entries for a topic with ``processed_at >= since``.
+
+        Phase 9.5 REQ-9.5.2.1 (PR β): used by the citation seed selector
+        to surface "papers extracted in the last 7 days for this topic"
+        as candidates for the quality-cohort filter. Returning entries
+        rather than papers keeps quality_score reachable via
+        ``entry.metadata_snapshot["quality_score"]``.
+
+        Args:
+            topic_slug: Topic slug to filter by.
+            since: Lower-bound timestamp (inclusive). Entries with
+                ``processed_at < since`` are excluded.
+            state: Current registry state.
+
+        Returns:
+            List of recent registry entries for the topic. Empty when
+            no entries match (caller's responsibility to fall back).
+        """
+        return [
+            entry
+            for entry in state.entries.values()
+            if topic_slug in entry.topic_affiliations and entry.processed_at >= since
         ]
 
     def get_stats(self, state: RegistryState) -> dict:

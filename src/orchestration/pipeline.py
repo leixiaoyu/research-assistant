@@ -106,6 +106,21 @@ class ResearchPipeline:
             result.topics_processed += discovery_result.topics_processed
             result.topics_failed += discovery_result.topics_failed
             result.papers_discovered = discovery_result.total_papers
+            # Phase 9.5 REQ-9.5.2.4: thread per-source breakdown up so the
+            # daily-run job can compute the breadth metric SLO rate.
+            # Partition the breakdown into provider vs. citation totals
+            # using the canonical CITATION_SOURCE_KEYS set.
+            from src.orchestration.phases.discovery import CITATION_SOURCE_KEYS
+
+            result.source_breakdown = dict(discovery_result.source_breakdown)
+            result.papers_from_citations = sum(
+                count
+                for src, count in result.source_breakdown.items()
+                if src in CITATION_SOURCE_KEYS
+            )
+            result.papers_from_providers = (
+                sum(result.source_breakdown.values()) - result.papers_from_citations
+            )
 
             # Phase 2: Extraction
             extraction_phase = ExtractionPhase(self._context)
@@ -190,15 +205,19 @@ class ResearchPipeline:
         config = config_manager.load_config()
 
         # Core services
+        # Phase 9.5 REQ-9.5.2.1 (PR β): construct registry FIRST so it
+        # can be injected into DiscoveryService for the citation
+        # quality-cohort seed selector.
+        registry_service = RegistryService()
+
         discovery_service = DiscoveryService(
             api_key=config.settings.semantic_scholar_api_key or "",
             config=config.settings.provider_selection,
+            registry_service=registry_service,
         )
 
         catalog_service = CatalogService(config_manager)
         catalog_service.load()
-
-        registry_service = RegistryService()
 
         # Create context
         context = PipelineContext(

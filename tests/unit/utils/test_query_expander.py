@@ -106,10 +106,15 @@ class TestQueryExpander:
         assert expander._parse_response("invalid") == []
 
     def test_cache_key_normalization(self, expander):
-        """Test cache key normalization (lowercase and strip)."""
-        key1 = expander._cache_key("Machine Learning")
-        key2 = expander._cache_key("machine learning")
-        key3 = expander._cache_key("  machine learning  ")
+        """Test cache key normalization (lowercase and strip).
+
+        Phase 9.5 PR β: `_cache_key` now takes a second
+        ``recent_paper_titles`` argument; pass an empty list so the
+        normalization assertion still pins the query-side behavior.
+        """
+        key1 = expander._cache_key("Machine Learning", [])
+        key2 = expander._cache_key("machine learning", [])
+        key3 = expander._cache_key("  machine learning  ", [])
 
         # Same content after lowercase and strip should have same key
         assert key1 == key2
@@ -282,3 +287,202 @@ class TestQueryExpanderEdgeCases:
 
         # Should fall back to original query after JSONDecodeError
         assert result == ["test query"]
+
+
+class TestRecentPaperTitlesContext:
+    """Phase 9.5 REQ-9.5.2.2 (PR β) — recent_paper_titles biases variants.
+
+    Backward compatibility: calling expand() without the new param
+    behaves identically to the pre-9.5 API. New param injects a
+    "Recent papers in this topic area include" section into the prompt
+    and caps at RECENT_TITLES_PROMPT_CAP titles.
+    """
+
+    @pytest.fixture
+    def mock_llm_service(self):
+        llm = MagicMock()
+        llm.complete = AsyncMock()
+        return llm
+
+    @pytest.fixture
+    def expander(self, mock_llm_service):
+        return QueryExpander(llm_service=mock_llm_service)
+
+    @pytest.mark.asyncio
+    async def test_backward_compat_no_titles_param(self, expander, mock_llm_service):
+        """Calling expand(query) without titles works identically to pre-9.5."""
+        response = MagicMock()
+        response.content = '["variant 1", "variant 2"]'
+        mock_llm_service.complete.return_value = response
+
+        result = await expander.expand("test query")
+
+        assert result == ["test query", "variant 1", "variant 2"]
+        # The prompt sent to the LLM must NOT contain the context section
+        sent_prompt = mock_llm_service.complete.call_args.args[0]
+        assert "Recent papers in this topic area" not in sent_prompt
+
+    @pytest.mark.asyncio
+    async def test_titles_inject_into_prompt(self, expander, mock_llm_service):
+        """When titles are provided, the prompt includes them as bullets."""
+        response = MagicMock()
+        response.content = '["v1"]'
+        mock_llm_service.complete.return_value = response
+
+        await expander.expand(
+            "machine translation",
+            recent_paper_titles=["Tree of Thoughts in NMT", "Sparse attention for MT"],
+        )
+
+        sent_prompt = mock_llm_service.complete.call_args.args[0]
+        assert "Recent papers in this topic area include" in sent_prompt
+        assert "Tree of Thoughts in NMT" in sent_prompt
+        assert "Sparse attention for MT" in sent_prompt
+
+    @pytest.mark.asyncio
+    async def test_titles_capped_at_prompt_cap(self, expander, mock_llm_service):
+        """More than 20 titles → only first 20 reach the prompt + log event."""
+        import structlog
+        from src.utils.query_expander import RECENT_TITLES_PROMPT_CAP
+
+        response = MagicMock()
+        response.content = '["v1"]'
+        mock_llm_service.complete.return_value = response
+
+        many_titles = [f"Title {i}" for i in range(25)]
+
+        with structlog.testing.capture_logs() as logs:
+            await expander.expand("q", recent_paper_titles=many_titles)
+
+        sent_prompt = mock_llm_service.complete.call_args.args[0]
+        # Title 0..19 should be in prompt; title 20..24 should not
+        assert "Title 19" in sent_prompt
+        assert "Title 20" not in sent_prompt
+        # And a truncation event MUST fire so audit grep sees it
+        trunc = [e for e in logs if e["event"] == "query_expansion_context_truncated"]
+        assert len(trunc) == 1
+        assert trunc[0]["original_count"] == 25
+        assert trunc[0]["used_count"] == RECENT_TITLES_PROMPT_CAP
+
+    @pytest.mark.asyncio
+    async def test_cache_key_differs_per_title_set(self, expander, mock_llm_service):
+        """Same query, different titles → different cache entries (no collision)."""
+        response = MagicMock()
+        response.content = '["v1"]'
+        mock_llm_service.complete.return_value = response
+
+        await expander.expand("q", recent_paper_titles=["A"])
+        await expander.expand("q", recent_paper_titles=["B"])
+
+        # Two distinct calls because the cache key includes the title hash
+        assert mock_llm_service.complete.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_cache_key_same_for_same_titles_unordered(
+        self, expander, mock_llm_service
+    ):
+        """Same query + same titles (different order) → cache hit on second call."""
+        response = MagicMock()
+        response.content = '["v1"]'
+        mock_llm_service.complete.return_value = response
+
+        await expander.expand("q", recent_paper_titles=["A", "B"])
+        await expander.expand("q", recent_paper_titles=["B", "A"])
+
+        # Order-insensitive cache key → only one LLM call
+        assert mock_llm_service.complete.call_count == 1
+
+
+class TestQueryExpanderCacheTTL:
+    """Phase 9.5 REQ-9.5.2.2 (PR β) — 7-day cache TTL.
+
+    Uses time monkeypatching so tests don't actually sleep. Confirms
+    the cache returns hits before TTL expiry, returns misses after,
+    and respects the configurable ``cache_ttl_days`` setting.
+    """
+
+    @pytest.fixture
+    def mock_llm_service(self):
+        llm = MagicMock()
+        llm.complete = AsyncMock()
+        return llm
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_within_ttl(self, monkeypatch, mock_llm_service):
+        """Entry inserted now, looked up 6 days later → hit, no second LLM call."""
+        from src.utils import query_expander as qe_module
+
+        response = MagicMock()
+        response.content = '["v1"]'
+        mock_llm_service.complete.return_value = response
+
+        # Pin clock at t=0 for insert
+        fake_now = [1_000_000.0]
+        monkeypatch.setattr(qe_module.time, "time", lambda: fake_now[0])
+
+        expander = QueryExpander(llm_service=mock_llm_service)
+        await expander.expand("q")
+
+        # Advance 6 days
+        fake_now[0] += 6 * 86400
+        await expander.expand("q")
+
+        assert mock_llm_service.complete.call_count == 1, "Cache MUST hit within TTL"
+
+    @pytest.mark.asyncio
+    async def test_cache_miss_after_ttl_expiry(self, monkeypatch, mock_llm_service):
+        """Entry expires after 7 days → second call re-fetches + emits event."""
+        import structlog
+        from src.utils import query_expander as qe_module
+
+        response = MagicMock()
+        response.content = '["v1"]'
+        mock_llm_service.complete.return_value = response
+
+        fake_now = [1_000_000.0]
+        monkeypatch.setattr(qe_module.time, "time", lambda: fake_now[0])
+
+        expander = QueryExpander(llm_service=mock_llm_service)
+        await expander.expand("q")  # insert at t=0
+
+        # Advance 8 days → entry is expired
+        fake_now[0] += 8 * 86400
+
+        with structlog.testing.capture_logs() as logs:
+            await expander.expand("q")
+
+        assert mock_llm_service.complete.call_count == 2, "Cache MUST miss after TTL"
+        expired_events = [
+            e for e in logs if e["event"] == "query_expansion_cache_expired"
+        ]
+        assert len(expired_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_configurable_ttl(self, monkeypatch, mock_llm_service):
+        """``cache_ttl_days`` override is honored (1-day TTL expires after 25h)."""
+        from src.models.config import QueryExpansionConfig
+        from src.utils import query_expander as qe_module
+
+        response = MagicMock()
+        response.content = '["v1"]'
+        mock_llm_service.complete.return_value = response
+
+        fake_now = [1_000_000.0]
+        monkeypatch.setattr(qe_module.time, "time", lambda: fake_now[0])
+
+        expander = QueryExpander(
+            llm_service=mock_llm_service,
+            config=QueryExpansionConfig(cache_ttl_days=1),
+        )
+        await expander.expand("q")
+
+        # Advance 25 hours (>1 day TTL)
+        fake_now[0] += 25 * 3600
+        await expander.expand("q")
+
+        assert mock_llm_service.complete.call_count == 2
+
+    def test_default_ttl_is_seven_days(self):
+        """Default TTL matches spec (7 days = 604800 seconds)."""
+        expander = QueryExpander()
+        assert expander._cache_ttl_seconds == 7 * 86400.0

@@ -105,6 +105,25 @@ class DeltaGenerator:
             ProcessingStatus.FAILED: "❌",
         }.get(status, "❓")
 
+    @staticmethod
+    def _format_provenance(result: ProcessingResult) -> Optional[str]:
+        """Render the per-paper provenance string for the Delta brief.
+
+        Phase 9.5 REQ-9.5.2.3 (PR β). Returns ``None`` when the
+        ProcessingResult carries no provenance — that case keeps the
+        existing Quality/Source line unchanged so historical briefs
+        remain diff-clean. When at least one of source/method is
+        present, renders ``"<source> (<method>)"`` (e.g. ``"arxiv
+        (keyword)"`` or ``"citation_expansion (forward_citation)"``).
+        """
+        source = getattr(result, "discovery_source", None)
+        method = getattr(result, "discovery_method", None)
+        if not source and not method:
+            return None
+        if source and method:
+            return f"{source} ({method})"
+        return source or method
+
     def _render_paper_entry(self, result: ProcessingResult) -> str:
         """Render a single paper entry for the delta brief.
 
@@ -121,7 +140,19 @@ class DeltaGenerator:
         pdf_status = "📄 PDF" if result.pdf_available else "📋 Abstract"
 
         lines.append(f"### {status_emoji} {result.title}")
-        lines.append(f"**Quality:** {quality_badge} | **Source:** {pdf_status}")
+        # Phase 9.5 REQ-9.5.2.3 (PR β): show per-paper provenance when
+        # we have it. discovery_source / discovery_method default to
+        # None for ProcessingResult instances built before Workstream B
+        # activated; in that case we render the original quality+content
+        # line unchanged so existing Delta briefs stay diff-clean.
+        provenance = self._format_provenance(result)
+        if provenance:
+            lines.append(
+                f"**Quality:** {quality_badge} | **Content:** {pdf_status}"
+                f" | **Provenance:** {provenance}"
+            )
+        else:
+            lines.append(f"**Quality:** {quality_badge} | **Source:** {pdf_status}")
         lines.append("")
 
         if result.extraction_success:

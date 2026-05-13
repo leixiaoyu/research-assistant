@@ -145,10 +145,15 @@ class TestQueryExpander:
         assert expander._parse_response("invalid") == []
 
     def test_cache_key_normalization(self, expander):
-        """Test cache key normalization (lowercase and strip)."""
-        key1 = expander._cache_key("Machine Learning")
-        key2 = expander._cache_key("machine learning")
-        key3 = expander._cache_key("  machine learning  ")
+        """Test cache key normalization (lowercase and strip).
+
+        Phase 9.5 PR β: ``_cache_key`` now takes ``recent_paper_titles``
+        as a second positional arg; pass an empty list to preserve the
+        original normalization assertion.
+        """
+        key1 = expander._cache_key("Machine Learning", [])
+        key2 = expander._cache_key("machine learning", [])
+        key3 = expander._cache_key("  machine learning  ", [])
 
         # Same content after lowercase and strip should have same key
         assert key1 == key2

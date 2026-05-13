@@ -96,6 +96,13 @@ class QueryExpansionConfig(BaseModel):
         5, ge=1, le=10, description="Max query variants to generate"
     )
     cache_expansions: bool = Field(True, description="Cache expanded queries")
+    # Phase 9.5 REQ-9.5.2.2 (PR β): TTL for cached query expansions.
+    # Default 7 days matches the spec's "Variants SHALL be cached for
+    # 7 days" wording. Lazy expiry — entries are removed on lookup
+    # after they exceed this age.
+    cache_ttl_days: int = Field(
+        7, ge=1, le=365, description="Days before cached expansions expire"
+    )
     llm_model: str = Field("gemini-1.5-flash", description="LLM model for expansion")
 
 

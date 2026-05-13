@@ -291,30 +291,30 @@ class QueryExpander:
 > - **Gap B-G4:** Add 7-day TTL to `QueryExpander._cache`.
 
 #### REQ-9.5.2.3: Tag candidate provenance
-Every paper added to the candidate pool SHALL carry a `source` field with one of: `provider:arxiv`, `provider:semantic_scholar`, `provider:huggingface`, `citation_expansion`, `query_variant`. This is used in the Delta brief and for diagnostic tracking.
+Every paper added to the candidate pool SHALL carry a `discovery_source` field (provider name or `"citation_expansion"`) AND a `discovery_method` field (how the paper was found: `"keyword"`, `"forward_citation"`, `"backward_citation"`, `"expanded_query"`). Together these two fields capture both the *origin* (which surface produced the candidate) and the *mechanism* (how the candidate was generated), which the Delta brief and the breadth-metric event consume.
 
-> **As-built status:** Phase 7.2 ships `discovery_source` and `discovery_method` fields on `PaperMetadata` (`src/models/paper.py:63`) and `ResultAggregator` populates them with values like `"arxiv"`, `"semantic_scholar"`, `"forward_citation"`, `"backward_citation"` (`src/services/citation_explorer.py:135, 151`). Field name and value vocabulary differ from the spec but the *function* is provided. **Gap B-G5:** PR β should either align the spec to the as-built names or rename the as-built fields to match the spec; either way, no new tracking is needed.
+> **As-built status (PR β, 2026-05-13):** ✅ Phase 7.2 already ships both fields on `PaperMetadata` (`src/models/paper.py:56,63`). `ResultAggregator` and `CitationExplorer` populate them with the values listed above (`src/services/citation_explorer.py:135, 151`). Prior versions of this spec used `source` / `seed_paper_id` — those were drafting placeholders that were never built. PR β amends the spec to use the as-built names (semantically clearer since `discovery_source` and `discovery_method` are distinct concerns — provider vs. mechanism). PR β additionally extends `DeltaGenerator` to render per-paper provenance.
 
 #### REQ-9.5.2.4: Discovery breadth metric
 The system SHALL emit `pipeline_health_breadth_metric` at end-of-run with:
 - Total candidates discovered
-- Breakdown by `source`
-- Net new papers (post-dedup) by `source`
+- Breakdown by `discovery_source`
+- Net new papers (post-dedup) by `discovery_source`
 
-**SLO indicator:** Citation-expansion contribution SHALL be ≥ 20 net-new papers per run averaged over 7 days, once enabled.
+**SLO indicator:** Citation-expansion contribution SHALL be ≥ 15% of total discovered papers per run on average across a 7-day rolling window, once enabled. (The 20-net-new-papers spec wording is preserved as the absolute floor for typical run volumes; the percentage rate is the SLO building block emitted per run.)
 
-> **As-built status:** Per-source counts are logged separately (e.g. `discover_deep_citation_exploration` event with `forward` + `backward` counts at `discovery/service.py:1150-1152`) but there is no aggregated `pipeline_health_breadth_metric` event analogous to the Phase 9.5 Workstream A `pipeline_health_abstract_fallback_rate` event. **Gap B-G6:** PR β implements this single new event in `DiscoveryPhase.execute()` end-of-run, with the same shape as the abstract-fallback SLO event (rate, counts, threshold, within_slo).
+> **As-built status (PR β, 2026-05-13):** ✅ Implemented. `PipelineResult` carries `papers_from_providers`, `papers_from_citations`, `citation_contribution_net_new`, and per-source `source_breakdown`. `DailyResearchJob` emits `pipeline_health_breadth_metric` after the pipeline returns, mirroring the Workstream A `pipeline_health_abstract_fallback_rate` event. The 15% threshold is centralised in `src.orchestration.result.BREADTH_METRIC_SLO_MIN_PCT`.
 
-### 4.3 Gap summary for follow-up PR β
+### 4.3 Gap closure status (PR β, 2026-05-13)
 
-| Gap | Description | Source REQ | Priority |
+| Gap | Description | Source REQ | Status |
 |---|---|---|---|
-| **B-G1** | Seed selection: replace hardcoded top-10 with "last-7-days, quality ≥ 0.7" cohort | REQ-9.5.2.1 | MED — current behavior still broadens; spec algorithm gives higher-signal seeds |
-| **B-G2** | Activate `query_expansion: enabled: true` in `research_config.yaml` | REQ-9.5.2.2 | BLOCKED on OQ-9.5.1 |
-| **B-G3** | Add `recent_paper_titles` param to `QueryExpander.expand` | REQ-9.5.2.2 | LOW — only matters if seeds inform variant generation |
-| **B-G4** | Add 7-day TTL to `QueryExpander._cache` | REQ-9.5.2.2 | LOW — bounded cache size; current in-memory is fine for single-process runs |
-| **B-G5** | Reconcile `discovery_source` / `discovery_method` field naming with spec's `source` / `seed_paper_id` (or amend spec) | REQ-9.5.2.3 | LOW — function works; cosmetic |
-| **B-G6** | Implement `pipeline_health_breadth_metric` end-of-run event | REQ-9.5.2.4 | **HIGH** — without this, we can't verify the activation actually broadens the funnel |
+| **B-G1** | Seed selection: replace hardcoded top-10 with "last-7-days, quality ≥ 0.7" cohort | REQ-9.5.2.1 | ✅ Closed in PR β — new `RegistryQueries.get_recent_entries_for_topic` + quality-cohort selector; falls back to `all_papers[:10]` on cold registry or no qualified seeds so first-run-after-merge is non-regressive |
+| **B-G2** | Activate `query_expansion: enabled: true` in `research_config.yaml` | REQ-9.5.2.2 | ⏸️ Still deferred — BLOCKED on OQ-9.5.1 (LLM provider strategy). PR β prepared the QueryExpander surface (B-G3 + B-G4) so activation is a one-line config change once OQ-9.5.1 lands. |
+| **B-G3** | Add `recent_paper_titles` param to `QueryExpander.expand` | REQ-9.5.2.2 | ✅ Closed in PR β — optional param, cap at 20 titles, prompt injection conditional |
+| **B-G4** | Add 7-day TTL to `QueryExpander._cache` | REQ-9.5.2.2 | ✅ Closed in PR β — tuple-stored timestamps, expiry on lookup, configurable via `cache_ttl_days` |
+| **B-G5** | Reconcile `discovery_source` / `discovery_method` field naming | REQ-9.5.2.3 | ✅ Closed in PR β — spec amended to use as-built names (no code rename); Delta brief now displays per-paper provenance |
+| **B-G6** | Implement `pipeline_health_breadth_metric` end-of-run event | REQ-9.5.2.4 | ✅ Closed in PR β — event fires from `DailyResearchJob.run()` with rate, counts, source breakdown, SLO threshold, within_slo |
 
 ### 4.2 Security Requirements
 

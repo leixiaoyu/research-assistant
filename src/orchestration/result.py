@@ -16,6 +16,18 @@ from src.models.discovery import DiscoveryStats
 # degraded output (abstract-only briefs instead of full PDF extractions).
 ABSTRACT_FALLBACK_RATE_SLO_PCT: float = 20.0
 
+# Phase 9.5 REQ-9.5.2.4: SLO floor for citation breadth.
+# Citation expansion is expected to contribute at least this percentage
+# of discovered papers per run (the spec phrases the absolute target as
+# "≥ 20 net-new per run averaged over 7 days"; the percentage rate is
+# the building block emitted per run for the rolling SLO). When the
+# per-run rate dips below this floor the SLO event reports
+# `within_slo=False`, signalling that citation expansion is not
+# meaningfully broadening the funnel — typically because the registry
+# has too few qualifying seeds (e.g. first week post-activation) or
+# Semantic Scholar is rate-limiting the citation walk.
+BREADTH_METRIC_SLO_MIN_PCT: float = 15.0
+
 
 @dataclass
 class PipelineResult:
@@ -45,6 +57,17 @@ class PipelineResult:
     # SLO denominator).
     papers_with_pdf: int = 0
     papers_with_abstract_fallback: int = 0
+    # Phase 9.5 REQ-9.5.2.4: breadth metric provenance counts.
+    # papers_from_providers is the number of post-dedup papers whose
+    # discovery_source is a provider name ("arxiv", "semantic_scholar",
+    # "huggingface", ...); papers_from_citations counts those whose
+    # source is the citation walk ("citation_expansion" / values like
+    # "forward_citations" / "backward_citations" in the source breakdown
+    # dict). source_breakdown carries the per-source totals so the SLO
+    # event payload can publish it without re-aggregating.
+    papers_from_providers: int = 0
+    papers_from_citations: int = 0
+    source_breakdown: Dict[str, int] = field(default_factory=dict)
     total_tokens_used: int = 0
     total_cost_usd: float = 0.0
     output_files: List[str] = field(default_factory=list)
@@ -86,12 +109,49 @@ class PipelineResult:
         """
         return self.abstract_fallback_rate_pct <= ABSTRACT_FALLBACK_RATE_SLO_PCT
 
+    @property
+    def breadth_metric_rate_pct(self) -> float:
+        """Phase 9.5 REQ-9.5.2.4 — citation contribution rate (percent).
+
+        Computed as ``papers_from_citations / papers_discovered * 100``.
+        Returns 0.0 when no papers were discovered — there is no SLO
+        violation when nothing was attempted (mirrors the
+        abstract-fallback convention for the empty-denominator case).
+
+        SLO floor: ``BREADTH_METRIC_SLO_MIN_PCT`` (15%) on the 7-day
+        rolling window. The per-run rate is the building block ops
+        aggregates.
+        """
+        if self.papers_discovered <= 0:
+            return 0.0
+        return round(
+            self.papers_from_citations / self.papers_discovered * 100.0,
+            2,
+        )
+
+    @property
+    def breadth_metric_within_slo(self) -> bool:
+        """Phase 9.5 REQ-9.5.2.4 — convenience guard for breadth SLO.
+
+        True when the per-run rate meets or exceeds the floor, False
+        when citation expansion under-contributed. As with the
+        abstract-fallback SLO, the per-run signal is a building block
+        of the 7-day rolling SLO, not a hard gate.
+        """
+        # Zero-denominator case (no papers discovered): treat as
+        # within-SLO. There is nothing to broaden if nothing was found.
+        if self.papers_discovered <= 0:
+            return True
+        return self.breadth_metric_rate_pct >= BREADTH_METRIC_SLO_MIN_PCT
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for logging/serialization.
 
         Phase 7.1: Added discovery_stats to output.
         Phase 9.5: Added papers_with_pdf / papers_with_abstract_fallback /
-        abstract_fallback_rate_pct (REQ-9.5.1.4).
+        abstract_fallback_rate_pct (REQ-9.5.1.4) and
+        papers_from_providers / papers_from_citations /
+        breadth_metric_rate_pct / source_breakdown (REQ-9.5.2.4).
         """
         result = {
             "topics_processed": self.topics_processed,
@@ -102,6 +162,10 @@ class PipelineResult:
             "papers_with_pdf": self.papers_with_pdf,
             "papers_with_abstract_fallback": self.papers_with_abstract_fallback,
             "abstract_fallback_rate_pct": self.abstract_fallback_rate_pct,
+            "papers_from_providers": self.papers_from_providers,
+            "papers_from_citations": self.papers_from_citations,
+            "source_breakdown": dict(self.source_breakdown),
+            "breadth_metric_rate_pct": self.breadth_metric_rate_pct,
             "total_tokens_used": self.total_tokens_used,
             "total_cost_usd": self.total_cost_usd,
             "output_files": self.output_files,

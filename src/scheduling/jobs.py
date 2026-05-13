@@ -197,6 +197,14 @@ class DailyResearchJob(BaseJob):
             errors=len(result.errors),
         )
 
+        # Phase 9.5 REQ-9.5.1.4: emit abstract-fallback SLO event so ops
+        # can grep `pipeline_health_abstract_fallback_rate` in daily logs
+        # to verify the pipeline is producing full-text extractions, not
+        # silently degrading to abstract-only briefs. Per spec the SLO
+        # is defined on a 7-day rolling window; this event is the
+        # per-run building block.
+        self._emit_abstract_fallback_slo(result)
+
         # Phase 3.7 + 3.8: Send notifications with deduplication (fail-safe)
         await self._send_notifications(result, config, pipeline)
 
@@ -207,6 +215,33 @@ class DailyResearchJob(BaseJob):
         result_dict = result.to_dict()
         result_dict["dra_corpus_refresh"] = dra_result
         return result_dict
+
+    @staticmethod
+    def _emit_abstract_fallback_slo(result: Any) -> None:
+        """Emit the Phase 9.5 abstract-fallback SLO event (REQ-9.5.1.4).
+
+        Pulls the per-run rate from :class:`PipelineResult` and logs it
+        with the underlying counts so ops can grep
+        ``pipeline_health_abstract_fallback_rate`` for the daily
+        building block of the rolling 7-day SLO. The single-run rate is
+        not itself the SLO; ops aggregates over the window.
+
+        Side-effect-free with respect to the pipeline result: this is
+        observability only. The event includes ``within_slo`` so a
+        single run that breaches the threshold is filterable, but the
+        method does NOT raise or alter result state.
+        """
+        from src.orchestration.result import ABSTRACT_FALLBACK_RATE_SLO_PCT
+
+        logger.info(
+            "pipeline_health_abstract_fallback_rate",
+            rate_pct=result.abstract_fallback_rate_pct,
+            papers_with_extraction=result.papers_with_extraction,
+            papers_with_pdf=result.papers_with_pdf,
+            papers_with_abstract_fallback=result.papers_with_abstract_fallback,
+            slo_target_pct=ABSTRACT_FALLBACK_RATE_SLO_PCT,
+            within_slo=result.abstract_fallback_within_slo,
+        )
 
     async def _send_notifications(
         self,

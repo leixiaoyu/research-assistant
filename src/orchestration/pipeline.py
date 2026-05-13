@@ -114,6 +114,12 @@ class ResearchPipeline:
             result.papers_with_extraction = (
                 extraction_result.total_papers_with_extraction
             )
+            # Phase 9.5 REQ-9.5.1.4: thread provenance counts up so the
+            # daily-run job can compute the abstract-fallback SLO rate.
+            result.papers_with_pdf = extraction_result.total_papers_with_pdf
+            result.papers_with_abstract_fallback = (
+                extraction_result.total_papers_with_abstract_fallback
+            )
             result.total_tokens_used = extraction_result.total_tokens_used
             result.total_cost_usd = extraction_result.total_cost_usd
             result.output_files = extraction_result.output_files

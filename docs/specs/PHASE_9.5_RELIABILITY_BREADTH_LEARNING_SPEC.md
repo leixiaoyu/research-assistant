@@ -201,6 +201,8 @@ The system SHALL track the percentage of papers that fall back to abstract-only 
 
 **Note:** The metric is an SLO indicator, not a hard gate. Phase 9.5 does not add automated alerting (deferred to Phase 4 production-hardening); the metric is for human review of `logs/daily_run_*.log`.
 
+> **Implementation status (PR #157):** ✅ implemented. `PipelineResult` now carries `papers_with_pdf`, `papers_with_abstract_fallback`, `abstract_fallback_rate_pct`, and `abstract_fallback_within_slo`. `DailyResearchJob.run()` emits `pipeline_health_abstract_fallback_rate` as the per-run building block of the rolling SLO. The 20% threshold is centralised in `src.orchestration.result.ABSTRACT_FALLBACK_RATE_SLO_PCT`.
+
 #### REQ-9.5.1.5: Provider integration audit
 For each non-ArXiv provider in the discovery chain (HuggingFace, Semantic Scholar), the implementation SHALL be audited and either:
 
@@ -208,6 +210,8 @@ For each non-ArXiv provider in the discovery chain (HuggingFace, Semantic Schola
 - (b) Documented as non-PDF-bearing (e.g., "Semantic Scholar API plan does not return open-access PDFs") with a deprecation notice in the daily-run log if the provider continues to return zero PDFs
 
 **Out of scope:** Adding new providers (Crossref, CORE, OpenAlex-as-PDF-source). Phase 9.5 audits and either fixes or documents existing ones; new provider work is left to a future phase.
+
+> **Implementation status (PR #157):** ✅ audited; outcome (b). See [`docs/audits/2026-05_provider_pdf_audit.md`](../audits/2026-05_provider_pdf_audit.md). Both providers operate as designed — HuggingFace's daily-papers feed plus AND-semantics filter genuinely cannot match the project's narrow queries; Semantic Scholar's `openAccessPdf` field is sparsely populated by S2 itself, not gated by our auth or code. Both providers stay in the default chain (they contribute non-PDF metadata that downstream features depend on); broader PDF coverage is deferred to a future phase that adds Unpaywall or similar.
 
 ### 3.2 Security Requirements
 

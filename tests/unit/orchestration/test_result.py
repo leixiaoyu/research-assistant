@@ -256,3 +256,109 @@ class TestPipelineResult:
         d = result.to_dict()
 
         assert "discovery_stats" not in d
+
+
+class TestAbstractFallbackSLO:
+    """Phase 9.5 REQ-9.5.1.4 — abstract-fallback rate computation.
+
+    The rate is the per-run building block of a 7-day rolling SLO. The
+    spec defines: rate = papers_with_abstract_fallback /
+    papers_with_extraction (zero when denominator is zero, no SLO breach
+    when nothing was attempted).
+    """
+
+    def test_rate_zero_when_no_extractions_attempted(self):
+        """No extractions → rate is 0.0 (not NaN/division-by-zero).
+
+        The SLO does not signal a breach when the pipeline made no
+        attempt at all (e.g., all topics failed at discovery).
+        """
+        result = PipelineResult(papers_with_extraction=0)
+        assert result.abstract_fallback_rate_pct == 0.0
+        assert result.abstract_fallback_within_slo is True
+
+    def test_rate_zero_when_all_pdf_extractions(self):
+        """All PDF extractions → 0% fallback rate."""
+        result = PipelineResult(
+            papers_with_extraction=10,
+            papers_with_pdf=10,
+            papers_with_abstract_fallback=0,
+        )
+        assert result.abstract_fallback_rate_pct == 0.0
+        assert result.abstract_fallback_within_slo is True
+
+    def test_rate_one_hundred_when_all_abstract_fallback(self):
+        """All abstract-only fallbacks → 100% (well above SLO)."""
+        result = PipelineResult(
+            papers_with_extraction=10,
+            papers_with_pdf=0,
+            papers_with_abstract_fallback=10,
+        )
+        assert result.abstract_fallback_rate_pct == 100.0
+        assert result.abstract_fallback_within_slo is False
+
+    def test_rate_at_slo_boundary(self):
+        """Exactly 20% is within SLO (inclusive boundary)."""
+        result = PipelineResult(
+            papers_with_extraction=10,
+            papers_with_pdf=8,
+            papers_with_abstract_fallback=2,
+        )
+        assert result.abstract_fallback_rate_pct == 20.0
+        assert result.abstract_fallback_within_slo is True
+
+    def test_rate_just_over_slo(self):
+        """21% is OUT of SLO."""
+        result = PipelineResult(
+            papers_with_extraction=100,
+            papers_with_pdf=79,
+            papers_with_abstract_fallback=21,
+        )
+        assert result.abstract_fallback_rate_pct == 21.0
+        assert result.abstract_fallback_within_slo is False
+
+    def test_rate_rounds_to_two_decimals(self):
+        """Rate is rounded for log-event readability (1/3 → 33.33%)."""
+        result = PipelineResult(
+            papers_with_extraction=3,
+            papers_with_pdf=2,
+            papers_with_abstract_fallback=1,
+        )
+        assert result.abstract_fallback_rate_pct == 33.33
+
+    def test_to_dict_includes_slo_fields(self):
+        """to_dict() exposes counts + computed rate for log emission."""
+        result = PipelineResult(
+            papers_with_extraction=10,
+            papers_with_pdf=7,
+            papers_with_abstract_fallback=3,
+        )
+        d = result.to_dict()
+        assert d["papers_with_pdf"] == 7
+        assert d["papers_with_abstract_fallback"] == 3
+        assert d["abstract_fallback_rate_pct"] == 30.0
+
+    def test_merge_topic_result_aggregates_provenance_counts(self):
+        """merge_topic_result accumulates per-topic provenance counts."""
+        result = PipelineResult()
+        result.merge_topic_result(
+            {
+                "success": True,
+                "papers_processed": 5,
+                "papers_with_extraction": 5,
+                "papers_with_pdf": 4,
+                "papers_with_abstract_fallback": 1,
+            }
+        )
+        result.merge_topic_result(
+            {
+                "success": True,
+                "papers_processed": 3,
+                "papers_with_extraction": 3,
+                "papers_with_pdf": 1,
+                "papers_with_abstract_fallback": 2,
+            }
+        )
+        assert result.papers_with_pdf == 5
+        assert result.papers_with_abstract_fallback == 3
+        assert result.abstract_fallback_rate_pct == 37.5

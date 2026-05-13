@@ -1,5 +1,7 @@
 """Unit tests for ConcurrentPipeline (Phase 3.1)"""
 
+from pathlib import Path
+
 import pytest
 from unittest.mock import Mock, AsyncMock
 
@@ -35,6 +37,10 @@ def mock_services():
         "dedup": Mock(),
         "filter": Mock(),
         "checkpoint": Mock(),
+        # Phase 9.5 REQ-9.5.1.1: PaperProcessor now requires pdf_service
+        # so it can route URL → local Path through the shared
+        # acquire_pdf helper instead of the prior URL-as-Path bug.
+        "pdf": Mock(),
     }
 
     # Configure mocks
@@ -49,6 +55,7 @@ def mock_services():
     services["checkpoint"].get_processed_ids = Mock(return_value=set())
     services["checkpoint"].save_checkpoint = Mock()
     services["checkpoint"].clear_checkpoint = Mock()
+    services["pdf"].download_pdf = AsyncMock(return_value=Path("/tmp/mock-paper.pdf"))
 
     return services
 
@@ -64,6 +71,7 @@ def pipeline(concurrency_config, mock_services):
         dedup_service=mock_services["dedup"],
         filter_service=mock_services["filter"],
         checkpoint_service=mock_services["checkpoint"],
+        pdf_service=mock_services["pdf"],
     )
 
 
@@ -108,6 +116,7 @@ async def test_pipeline_initialization(concurrency_config, mock_services):
         dedup_service=mock_services["dedup"],
         filter_service=mock_services["filter"],
         checkpoint_service=mock_services["checkpoint"],
+        pdf_service=mock_services["pdf"],
     )
 
     assert pipeline.config == concurrency_config
@@ -727,6 +736,7 @@ class TestRegistryIntegration:
             dedup_service=mock_services["dedup"],
             filter_service=mock_services["filter"],
             checkpoint_service=mock_services["checkpoint"],
+            pdf_service=mock_services["pdf"],
             registry_service=mock_registry_service,
         )
 
@@ -1075,6 +1085,7 @@ class TestRegistryIntegration:
             dedup_service=mock_services["dedup"],
             filter_service=mock_services["filter"],
             checkpoint_service=mock_services["checkpoint"],
+            pdf_service=mock_services["pdf"],
             registry_service=None,  # No registry
         )
 

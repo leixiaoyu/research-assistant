@@ -201,6 +201,8 @@ The system SHALL track the percentage of papers that fall back to abstract-only 
 
 **Note:** The metric is an SLO indicator, not a hard gate. Phase 9.5 does not add automated alerting (deferred to Phase 4 production-hardening); the metric is for human review of `logs/daily_run_*.log`.
 
+> **Implementation status (PR #157):** ✅ implemented. `PipelineResult` now carries `papers_with_pdf`, `papers_with_abstract_fallback`, `abstract_fallback_rate_pct`, and `abstract_fallback_within_slo`. `DailyResearchJob.run()` emits `pipeline_health_abstract_fallback_rate` as the per-run building block of the rolling SLO. The 20% threshold is centralised in `src.orchestration.result.ABSTRACT_FALLBACK_RATE_SLO_PCT`.
+
 #### REQ-9.5.1.5: Provider integration audit
 For each non-ArXiv provider in the discovery chain (HuggingFace, Semantic Scholar), the implementation SHALL be audited and either:
 
@@ -209,13 +211,17 @@ For each non-ArXiv provider in the discovery chain (HuggingFace, Semantic Schola
 
 **Out of scope:** Adding new providers (Crossref, CORE, OpenAlex-as-PDF-source). Phase 9.5 audits and either fixes or documents existing ones; new provider work is left to a future phase.
 
+> **Implementation status (PR #157):** ✅ audited; outcome (b). See [`docs/audits/2026-05_provider_pdf_audit.md`](../audits/2026-05_provider_pdf_audit.md). Both providers operate as designed — HuggingFace's daily-papers feed plus AND-semantics filter genuinely cannot match the project's narrow queries; Semantic Scholar's `openAccessPdf` field is sparsely populated by S2 itself, not gated by our auth or code. Both providers stay in the default chain (they contribute non-PDF metadata that downstream features depend on); broader PDF coverage is deferred to a future phase that adds Unpaywall or similar.
+
 ### 3.2 Security Requirements
 
 #### SR-9.5.A.1: Provider health probes MUST NOT log API keys
 Health probe events SHALL include provider name and HTTP status / error class only. No auth header values, request bodies containing secrets, or response bodies SHALL be logged.
 
-#### SR-9.5.A.2: Type guard MUST NOT swallow path traversal attempts
-The `http:`/`https:` rejection guard SHALL run AFTER existing path sanitization in `src/utils/path_sanitization.py`, not as a replacement. A malicious path like `../../../etc/passwd` must still be caught by the existing sanitizer.
+#### SR-9.5.A.2: Type guard MUST NOT replace existing path validation
+The URL-scheme rejection guard at the extractor entry point is a defense-in-depth complement to (NOT a replacement for) any path-validation logic that lives in upstream callers (e.g. `PDFService.download_pdf` enforces HTTPS; `src/utils/path_sanitization.py` is available for callers that need traversal-safe filename construction). The guard's job is to catch URL-shaped values; traversal-safe path handling remains the responsibility of whoever constructs the path.
+
+> **Implementation note (review fix #4 in PR #157):** the guard rejects more than just `http:`/`https:` schemes — see `_REJECTED_URL_SCHEMES` in `src/services/pdf_extractors/fallback_service.py` for the full list (`file:`, `ftp:`, `ftps:`, `data:`, `javascript:`, `gopher:` are also covered as defense-in-depth against future regressions). `extract_with_fallback` does not currently invoke `path_sanitization.py` directly; integrating that is tracked as a follow-up hardening item.
 
 ---
 

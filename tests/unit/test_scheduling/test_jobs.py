@@ -156,6 +156,167 @@ class TestDailyResearchJob:
         assert result["papers_discovered"] == 5
 
 
+class TestAbstractFallbackSLOEvent:
+    """Phase 9.5 REQ-9.5.1.4 — DailyResearchJob emits the SLO event.
+
+    The event is the building block of the rolling 7-day SLO; ops greps
+    ``pipeline_health_abstract_fallback_rate`` in daily-run logs to
+    verify the pipeline is producing full-text extractions.
+    """
+
+    @pytest.mark.asyncio
+    async def test_emits_event_with_rate_and_counts(self):
+        """Event MUST include rate_pct, counts, threshold, and SLO compliance."""
+        import structlog
+        from src.orchestration import PipelineResult
+        from src.models.notification import NotificationSettings
+
+        job = DailyResearchJob()
+
+        mock_config = MagicMock()
+        mock_config.settings.notification_settings = NotificationSettings()
+
+        with (
+            patch(
+                "src.services.config_manager.ConfigManager"
+            ) as mock_config_manager_class,
+            patch("src.orchestration.ResearchPipeline") as mock_pipeline_class,
+        ):
+            mock_config_manager = MagicMock()
+            mock_config_manager.load_config.return_value = mock_config
+            mock_config_manager_class.return_value = mock_config_manager
+
+            mock_result = PipelineResult(
+                topics_processed=1,
+                papers_processed=10,
+                papers_with_extraction=10,
+                papers_with_pdf=8,
+                papers_with_abstract_fallback=2,
+            )
+            mock_pipeline = MagicMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_result)
+            mock_pipeline_class.return_value = mock_pipeline
+
+            # Phase 9.5 review fix: rebind src.scheduling.jobs.logger
+            # to a fresh structlog logger before capture_logs() so the
+            # cached production logger (cache_logger_on_first_use=True
+            # in src/utils/logging.py) does not bypass the test
+            # processor chain. Documented pattern in
+            # CLAUDE.md "Test Authoring Conventions".
+            import src.scheduling.jobs as _jobs_module
+
+            with patch.object(_jobs_module, "logger", structlog.get_logger()):
+                with structlog.testing.capture_logs() as logs:
+                    await job.run()
+
+        slo_events = [
+            e for e in logs if e["event"] == "pipeline_health_abstract_fallback_rate"
+        ]
+        assert len(slo_events) == 1, "Exactly one SLO event MUST fire per run"
+        evt = slo_events[0]
+        assert evt["rate_pct"] == 20.0
+        assert evt["papers_with_extraction"] == 10
+        assert evt["papers_with_pdf"] == 8
+        assert evt["papers_with_abstract_fallback"] == 2
+        assert evt["slo_target_pct"] == 20.0
+        assert evt["within_slo"] is True
+
+    @pytest.mark.asyncio
+    async def test_emits_event_when_slo_breached(self):
+        """When the per-run rate exceeds the threshold, within_slo=False."""
+        import structlog
+        from src.orchestration import PipelineResult
+        from src.models.notification import NotificationSettings
+
+        job = DailyResearchJob()
+        mock_config = MagicMock()
+        mock_config.settings.notification_settings = NotificationSettings()
+
+        with (
+            patch(
+                "src.services.config_manager.ConfigManager"
+            ) as mock_config_manager_class,
+            patch("src.orchestration.ResearchPipeline") as mock_pipeline_class,
+        ):
+            mock_config_manager = MagicMock()
+            mock_config_manager.load_config.return_value = mock_config
+            mock_config_manager_class.return_value = mock_config_manager
+
+            mock_result = PipelineResult(
+                topics_processed=1,
+                papers_processed=10,
+                papers_with_extraction=10,
+                papers_with_pdf=3,
+                papers_with_abstract_fallback=7,
+            )
+            mock_pipeline = MagicMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_result)
+            mock_pipeline_class.return_value = mock_pipeline
+
+            # Phase 9.5 review fix: rebind src.scheduling.jobs.logger
+            # to a fresh structlog logger before capture_logs() so the
+            # cached production logger (cache_logger_on_first_use=True
+            # in src/utils/logging.py) does not bypass the test
+            # processor chain. Documented pattern in
+            # CLAUDE.md "Test Authoring Conventions".
+            import src.scheduling.jobs as _jobs_module
+
+            with patch.object(_jobs_module, "logger", structlog.get_logger()):
+                with structlog.testing.capture_logs() as logs:
+                    await job.run()
+
+        slo_events = [
+            e for e in logs if e["event"] == "pipeline_health_abstract_fallback_rate"
+        ]
+        assert len(slo_events) == 1
+        assert slo_events[0]["rate_pct"] == 70.0
+        assert slo_events[0]["within_slo"] is False
+
+    @pytest.mark.asyncio
+    async def test_emits_event_with_zero_extractions(self):
+        """No extractions → rate=0.0, within_slo=True (no breach signal)."""
+        import structlog
+        from src.orchestration import PipelineResult
+        from src.models.notification import NotificationSettings
+
+        job = DailyResearchJob()
+        mock_config = MagicMock()
+        mock_config.settings.notification_settings = NotificationSettings()
+
+        with (
+            patch(
+                "src.services.config_manager.ConfigManager"
+            ) as mock_config_manager_class,
+            patch("src.orchestration.ResearchPipeline") as mock_pipeline_class,
+        ):
+            mock_config_manager = MagicMock()
+            mock_config_manager.load_config.return_value = mock_config
+            mock_config_manager_class.return_value = mock_config_manager
+
+            mock_pipeline = MagicMock()
+            mock_pipeline.run = AsyncMock(return_value=PipelineResult())
+            mock_pipeline_class.return_value = mock_pipeline
+
+            # Phase 9.5 review fix: rebind src.scheduling.jobs.logger
+            # to a fresh structlog logger before capture_logs() so the
+            # cached production logger (cache_logger_on_first_use=True
+            # in src/utils/logging.py) does not bypass the test
+            # processor chain. Documented pattern in
+            # CLAUDE.md "Test Authoring Conventions".
+            import src.scheduling.jobs as _jobs_module
+
+            with patch.object(_jobs_module, "logger", structlog.get_logger()):
+                with structlog.testing.capture_logs() as logs:
+                    await job.run()
+
+        slo_events = [
+            e for e in logs if e["event"] == "pipeline_health_abstract_fallback_rate"
+        ]
+        assert len(slo_events) == 1
+        assert slo_events[0]["rate_pct"] == 0.0
+        assert slo_events[0]["within_slo"] is True
+
+
 class TestDailyResearchJobErrors:
     """Tests for DailyResearchJob error handling."""
 

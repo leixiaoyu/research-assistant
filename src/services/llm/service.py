@@ -14,6 +14,7 @@ This service orchestrates LLM extraction by delegating to:
 The service maintains backward compatibility with the original API.
 """
 
+import asyncio
 import time
 from typing import List, Any, Optional, Dict
 from datetime import datetime, timezone
@@ -23,6 +24,10 @@ from src.models.llm import LLMConfig, CostLimits, EnhancedUsageStats, ProviderUs
 from src.models.extraction import ExtractionTarget, PaperExtraction
 from src.models.paper import PaperMetadata
 from src.services.llm.cost_tracker import CostTracker
+from src.services.llm.health_check import (  # Phase 9.5 REQ-9.5.1.3
+    ProviderHealthChecker,
+    ProviderHealthResult,
+)
 from src.services.llm.prompt_builder import PromptBuilder
 from src.services.llm.response_parser import ResponseParser
 from src.services.llm.providers.base import LLMResponse, ProviderHealth
@@ -105,6 +110,14 @@ class LLMService:
         self._provider_health = self._provider_manager.get_all_health()
         self.fallback_provider = self._provider_manager.fallback_provider
 
+        # Phase 9.5 REQ-9.5.1.3: lazy startup health check (runs once
+        # per process on first extract()/complete() call). The lock
+        # protects against the race where two concurrent first-callers
+        # both pass the `_health_checked` check before either sets it.
+        self._health_checked: bool = False
+        self._health_results: list[ProviderHealthResult] = []
+        self._health_check_lock: asyncio.Lock = asyncio.Lock()
+
         logger.info(
             "llm_service_initialized",
             provider=config.provider,
@@ -114,6 +127,59 @@ class LLMService:
             fallback_enabled=self._provider_manager.has_fallback(),
             circuit_breaker_enabled=config.circuit_breaker.enabled,
         )
+
+    async def ensure_health_checked(self) -> list[ProviderHealthResult]:
+        """Run provider health probes if they have not run for this process.
+
+        Phase 9.5 REQ-9.5.1.3 — surfaces auth/quota/network failures as a
+        single distinct ``provider_health_check_failed`` event at first
+        use, instead of leaving them buried in the per-extraction retry
+        warnings the prior code emitted. For each probe-failed provider
+        whose circuit breaker is enabled, the breaker is force-opened so
+        subsequent runtime calls fail-fast (per spec) rather than waste
+        retries against the known-bad endpoint. Providers without a
+        circuit breaker are still flagged in the returned results, but
+        their runtime behavior is unchanged (caller-side handling).
+
+        Returns the per-provider results so callers (CLI, scheduled jobs,
+        tests) can inspect them. Subsequent calls within the same process
+        return the cached results without re-probing.
+
+        Concurrency: the body is guarded by an :class:`asyncio.Lock` and
+        uses double-checked locking — two coroutines that both pass the
+        first ``_health_checked`` check will not both run the probe.
+        """
+        if self._health_checked:
+            return self._health_results
+        async with self._health_check_lock:
+            # Re-check inside the lock: a coroutine that was waiting may
+            # find the work has already completed.
+            if self._health_checked:
+                return self._health_results
+            self._health_results = await ProviderHealthChecker.check_all(
+                list(self._providers.values())
+            )
+            # Force-open the circuit breaker for any probe-failed
+            # provider so existing _extract_with_provider /
+            # _complete_with_provider check_or_raise() guards fire on
+            # subsequent calls.
+            for result in self._health_results:
+                if result.healthy:
+                    continue
+                health = self._provider_health.get(result.provider)
+                if health is None:
+                    continue
+                circuit_breaker = getattr(health, "circuit_breaker", None)
+                if circuit_breaker is None:
+                    continue
+                circuit_breaker.force_open()
+                logger.warning(
+                    "provider_circuit_breaker_forced_open",
+                    provider=result.provider,
+                    reason=result.error_class,
+                )
+            self._health_checked = True
+            return self._health_results
 
     async def extract(
         self,
@@ -138,6 +204,10 @@ class LLMService:
             AllProvidersFailedError: If all providers fail
             JSONParseError: If response parsing fails
         """
+        # Phase 9.5 REQ-9.5.1.3: surface provider auth/connectivity
+        # failures up-front the first time we use this service.
+        await self.ensure_health_checked()
+
         # Check for daily reset
         # Check both cost_tracker and usage_stats for backward compat
         should_reset = self._cost_tracker.should_reset_daily()
@@ -239,6 +309,10 @@ class LLMService:
             LLMAPIError: If the API call fails
             AllProvidersFailedError: If all providers fail
         """
+        # Phase 9.5 REQ-9.5.1.3: surface provider auth/connectivity
+        # failures up-front on first use.
+        await self.ensure_health_checked()
+
         # Check cost limits before calling
         self._check_cost_limits()
 

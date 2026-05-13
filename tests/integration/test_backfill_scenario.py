@@ -9,6 +9,7 @@ Tests the complete flow:
 
 import pytest
 from datetime import datetime, timezone
+from unittest.mock import Mock
 
 from src.models.paper import PaperMetadata, Author
 from src.models.extraction import ExtractionTarget
@@ -406,6 +407,7 @@ class TestRegistryPersistenceE2E:
             dedup_service=mock_services["dedup"],
             filter_service=mock_services["filter"],
             checkpoint_service=mock_services["checkpoint"],
+            pdf_service=Mock(),  # Phase 9.5 REQ-9.5.1.1
             registry_service=registry_service,
         )
 
@@ -495,6 +497,7 @@ class TestRegistryPersistenceE2E:
             dedup_service=mock_services["dedup"],
             filter_service=mock_services["filter"],
             checkpoint_service=mock_services["checkpoint"],
+            pdf_service=Mock(),  # Phase 9.5 REQ-9.5.1.1
             registry_service=registry_service,
         )
 
@@ -551,6 +554,7 @@ class TestRegistryPersistenceE2E:
             dedup_service=mock_services["dedup"],
             filter_service=mock_services["filter"],
             checkpoint_service=mock_services["checkpoint"],
+            pdf_service=Mock(),  # Phase 9.5 REQ-9.5.1.1
             registry_service=registry_service,
         )
 
@@ -603,6 +607,7 @@ class TestRegistryPersistenceE2E:
             dedup_service=mock_services["dedup"],
             filter_service=mock_services["filter"],
             checkpoint_service=mock_services["checkpoint"],
+            pdf_service=Mock(),  # Phase 9.5 REQ-9.5.1.1
             registry_service=registry_service,
         )
 
@@ -647,6 +652,7 @@ class TestRegistryPersistenceE2E:
             dedup_service=mock_services["dedup"],
             filter_service=mock_services["filter"],
             checkpoint_service=mock_services["checkpoint"],
+            pdf_service=Mock(),  # Phase 9.5 REQ-9.5.1.1
             registry_service=registry_service,
         )
 

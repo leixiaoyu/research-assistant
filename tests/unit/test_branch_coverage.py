@@ -953,6 +953,7 @@ class TestConcurrentPipelineBranches:
         mock_dedup = Mock()
         mock_filter = Mock()
         mock_checkpoint = Mock()
+        mock_pdf = Mock()  # Phase 9.5 REQ-9.5.1.1
 
         pipeline = ConcurrentPipeline(
             config=config,
@@ -962,6 +963,7 @@ class TestConcurrentPipelineBranches:
             dedup_service=mock_dedup,
             filter_service=mock_filter,
             checkpoint_service=mock_checkpoint,
+            pdf_service=mock_pdf,
         )
         assert pipeline is not None
 

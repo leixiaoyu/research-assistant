@@ -25,6 +25,7 @@ from src.models.synthesis import ProcessingResult, ProcessingStatus
 
 # Phase 2.5 integration
 from src.services.pdf_extractors.fallback_service import FallbackPDFService
+from src.services.pdf_service import PDFService  # Phase 9.5 REQ-9.5.1.1
 
 # Phase 3 integrations
 from src.services.cache_service import CacheService
@@ -66,6 +67,7 @@ class ConcurrentPipeline:
         dedup_service: DeduplicationService,  # Phase 3
         filter_service: FilterService,  # Phase 3
         checkpoint_service: CheckpointService,  # Phase 3
+        pdf_service: PDFService,  # Phase 9.5 REQ-9.5.1.1
         registry_service: Optional[RegistryService] = None,  # Phase 3.5
     ):
         """Initialize concurrent pipeline.
@@ -78,6 +80,9 @@ class ConcurrentPipeline:
             dedup_service: Deduplication service (Phase 3)
             filter_service: Filtering service (Phase 3)
             checkpoint_service: Checkpoint service (Phase 3)
+            pdf_service: PDF download service (Phase 9.5 — required so
+                the concurrent path uses the shared acquire_pdf helper
+                instead of the prior URL-as-Path bug pattern)
             registry_service: Registry service for global identity (Phase 3.5)
         """
         self.config = config
@@ -87,6 +92,7 @@ class ConcurrentPipeline:
         self.dedup_service = dedup_service
         self.filter_service = filter_service
         self.checkpoint_service = checkpoint_service
+        self.pdf_service = pdf_service
         self.registry_service = registry_service
 
         # Processing results for Phase 3.6 synthesis
@@ -102,6 +108,7 @@ class ConcurrentPipeline:
             fallback_pdf_service=fallback_pdf_service,
             llm_service=llm_service,
             cache_service=cache_service,
+            pdf_service=pdf_service,
             download_semaphore=self.download_sem,
             llm_semaphore=self.llm_sem,
         )

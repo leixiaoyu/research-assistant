@@ -7,7 +7,6 @@ Handles the processing of individual papers through the extraction pipeline.
 import asyncio
 import time
 from typing import List, Optional
-from pathlib import Path
 import structlog
 
 from src.models.paper import PaperMetadata
@@ -19,6 +18,10 @@ from src.services.pdf_extractors.fallback_service import FallbackPDFService
 # Phase 3 integrations
 from src.services.cache_service import CacheService
 from src.services.llm import LLMService
+
+# Phase 9.5: shared download path (REQ-9.5.1.1)
+from src.services.pdf_acquisition import acquire_pdf
+from src.services.pdf_service import PDFService
 
 # Phase 4: Prometheus metrics
 from src.observability.metrics import (
@@ -46,6 +49,7 @@ class PaperProcessor:
         fallback_pdf_service: FallbackPDFService,
         llm_service: LLMService,
         cache_service: CacheService,
+        pdf_service: PDFService,
         download_semaphore: asyncio.Semaphore,
         llm_semaphore: asyncio.Semaphore,
     ):
@@ -55,12 +59,17 @@ class PaperProcessor:
             fallback_pdf_service: Multi-backend PDF service
             llm_service: LLM extraction service
             cache_service: Caching service
+            pdf_service: PDF download service (Phase 9.5 — required so
+                the concurrent path uses the same materialization step
+                as the synchronous extraction path; see
+                :mod:`src.services.pdf_acquisition`)
             download_semaphore: Semaphore for download concurrency
             llm_semaphore: Semaphore for LLM concurrency
         """
         self.fallback_pdf_service = fallback_pdf_service
         self.llm_service = llm_service
         self.cache_service = cache_service
+        self.pdf_service = pdf_service
         self.download_sem = download_semaphore
         self.llm_sem = llm_semaphore
 
@@ -139,10 +148,21 @@ class PaperProcessor:
             async with self.download_sem:
                 pdf_start = time.time()
                 try:
+                    # Phase 9.5 REQ-9.5.1.1: download URL → local Path via
+                    # the shared acquire_pdf helper. Casting the URL string
+                    # directly to Path() (the prior bug) collapsed
+                    # 'https://' to 'https:/' and failed extraction
+                    # silently for ~54% of papers per daily run.
+                    local_pdf_path = await acquire_pdf(
+                        self.pdf_service,
+                        str(paper.open_access_pdf),
+                        paper.paper_id,
+                    )
+
                     # Phase 2.5 FallbackPDFService automatically tries:
                     # PyMuPDF → pdfplumber → marker → pandoc
                     pdf_result = await self.fallback_pdf_service.extract_with_fallback(
-                        pdf_path=Path(str(paper.open_access_pdf))
+                        pdf_path=local_pdf_path
                     )
 
                     if pdf_result and pdf_result.success and pdf_result.markdown:

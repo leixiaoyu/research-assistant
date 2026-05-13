@@ -25,6 +25,9 @@ class TopicExtractionResult:
     papers_discovered: int = 0
     papers_processed: int = 0
     papers_with_extraction: int = 0
+    # Phase 9.5 REQ-9.5.1.4: provenance counts for SLO tracking.
+    papers_with_pdf: int = 0
+    papers_with_abstract_fallback: int = 0
     tokens_used: int = 0
     cost_usd: float = 0.0
     output_file: Optional[str] = None
@@ -43,6 +46,9 @@ class ExtractionResult:
     topics_failed: int = 0
     total_papers_processed: int = 0
     total_papers_with_extraction: int = 0
+    # Phase 9.5 REQ-9.5.1.4: aggregated provenance counts across topics.
+    total_papers_with_pdf: int = 0
+    total_papers_with_abstract_fallback: int = 0
     total_tokens_used: int = 0
     total_cost_usd: float = 0.0
     output_files: List[str] = field(default_factory=list)
@@ -118,6 +124,11 @@ class ExtractionPhase(PipelinePhase[ExtractionResult]):
                 result.total_papers_with_extraction += (
                     topic_result.papers_with_extraction
                 )
+                # Phase 9.5 REQ-9.5.1.4: roll up provenance counts.
+                result.total_papers_with_pdf += topic_result.papers_with_pdf
+                result.total_papers_with_abstract_fallback += (
+                    topic_result.papers_with_abstract_fallback
+                )
                 result.total_tokens_used += topic_result.tokens_used
                 result.total_cost_usd += topic_result.cost_usd
                 if topic_result.output_file:
@@ -191,6 +202,16 @@ class ExtractionPhase(PipelinePhase[ExtractionResult]):
                 if summary_stats:
                     result.papers_with_extraction = summary_stats.get(
                         "papers_with_extraction", 0
+                    )
+                    # Phase 9.5 REQ-9.5.1.4: provenance from
+                    # extraction_service.get_extraction_summary —
+                    # papers_with_pdf is the count of ExtractedPaper
+                    # instances whose pdf_available is True; the
+                    # difference vs papers_with_extraction is the
+                    # abstract-fallback count.
+                    result.papers_with_pdf = summary_stats.get("papers_with_pdf", 0)
+                    result.papers_with_abstract_fallback = max(
+                        0, result.papers_with_extraction - result.papers_with_pdf
                     )
                     result.tokens_used = summary_stats.get("total_tokens_used", 0)
                     result.cost_usd = summary_stats.get("total_cost_usd", 0.0)

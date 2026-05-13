@@ -113,6 +113,27 @@ settings:
     ttl_pdf_days: 7
     ttl_extraction_days: 30
 
+  # Citation exploration (Phase 7.2 capability, activated by Phase 9.5
+  # Workstream B). When enabled, the discovery phase runs in DEEP mode:
+  # for the top-N papers from initial provider results, traverse forward
+  # citations + backward references via Semantic Scholar to broaden the
+  # candidate pool beyond the narrow initial query slice.
+  #
+  # Phase 9.5 Workstream B activation:
+  # - citation_exploration is enabled here (REQ-9.5.2.1, broadens the
+  #   discovery funnel without requiring an LLM)
+  # - query_expansion is intentionally NOT enabled until OQ-9.5.1 (LLM
+  #   provider strategy) is resolved; DEEP mode gracefully falls back to
+  #   the original query when no LLM is available, so citation expansion
+  #   still runs.
+  citation_exploration:
+    enabled: true
+    forward: true                 # follow forward citations
+    backward: true                # follow backward references
+    max_citation_depth: 1         # 1 hop only (cap API cost + noise)
+    max_forward_per_paper: 10
+    max_backward_per_paper: 10
+
   # Notification Settings (Phase 3.7)
   notification_settings:
     slack:

@@ -797,3 +797,95 @@ class TestDiscoveryPhaseModeSelection:
             multi_source_enabled=True,
         )
         assert mode == DiscoveryMode.DEEP
+
+
+class TestPartitionSourceBreakdown:
+    """Phase 9.5 REQ-9.5.2.4 (PR β) — partition_source_breakdown helper.
+
+    The helper splits a per-source breakdown dict into
+    (papers_from_providers, papers_from_citations) using
+    CITATION_SOURCE_KEYS as the citation predicate. This is the unit
+    that the pipeline.py wiring delegates to so the formula is
+    testable in isolation. Self-review Issue #2 flagged that the
+    inline formula in pipeline.py was only exercised end-to-end via
+    the SLO event test; this class closes that gap.
+    """
+
+    def test_empty_breakdown_returns_zero_zero(self):
+        from src.orchestration.phases.discovery import partition_source_breakdown
+
+        providers, citations = partition_source_breakdown({})
+        assert providers == 0
+        assert citations == 0
+
+    def test_only_providers(self):
+        from src.orchestration.phases.discovery import partition_source_breakdown
+
+        providers, citations = partition_source_breakdown(
+            {"arxiv": 20, "semantic_scholar": 15}
+        )
+        assert providers == 35
+        assert citations == 0
+
+    def test_only_citations(self):
+        from src.orchestration.phases.discovery import partition_source_breakdown
+
+        providers, citations = partition_source_breakdown(
+            {"forward_citations": 5, "backward_citations": 3}
+        )
+        assert providers == 0
+        assert citations == 8
+
+    def test_mixed_provider_and_citation(self):
+        from src.orchestration.phases.discovery import partition_source_breakdown
+
+        providers, citations = partition_source_breakdown(
+            {
+                "arxiv": 20,
+                "semantic_scholar": 15,
+                "forward_citations": 5,
+                "backward_citations": 3,
+            }
+        )
+        assert providers == 35
+        assert citations == 8
+
+    def test_unknown_source_treated_as_provider(self):
+        """An unrecognised source name defaults to the provider bucket.
+
+        New citation source names MUST be added to CITATION_SOURCE_KEYS
+        explicitly; this default-to-provider stance prevents silent
+        misclassification of new providers.
+        """
+        from src.orchestration.phases.discovery import partition_source_breakdown
+
+        providers, citations = partition_source_breakdown(
+            {"some_future_provider": 10, "forward_citations": 2}
+        )
+        assert providers == 10
+        assert citations == 2
+
+    def test_citation_expansion_alias_recognised(self):
+        """The 'citation_expansion' name is also treated as a citation source."""
+        from src.orchestration.phases.discovery import partition_source_breakdown
+
+        providers, citations = partition_source_breakdown(
+            {"arxiv": 5, "citation_expansion": 7}
+        )
+        assert providers == 5
+        assert citations == 7
+
+    def test_helper_signature_returns_provider_count_first(self):
+        """Order matches PipelineResult unpacking convention.
+
+        pipeline.py uses ``(papers_from_providers, papers_from_citations)
+        = partition_source_breakdown(...)``, so the helper MUST return
+        provider count first.
+        """
+        from src.orchestration.phases.discovery import partition_source_breakdown
+
+        providers, citations = partition_source_breakdown(
+            {"arxiv": 100, "forward_citations": 1}
+        )
+        assert providers == 100, "Provider count must be first in tuple"
+        assert citations == 1

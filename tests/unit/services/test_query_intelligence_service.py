@@ -632,7 +632,14 @@ def test_get_llm_model_missing_config():
 
 
 def test_get_cache_key_format(service_with_llm):
-    """Test cache key format."""
+    """Test cache key format.
+
+    Phase 9.5 PR β follow-up (Issue #1): cache key now includes a 5th
+    segment for the recent_paper_titles hash so same query +
+    different recent corpus produces a distinct cache entry. Default
+    (no titles) uses the empty-set hash so backward-compatible
+    callers retain a stable key for "same query".
+    """
     key = service_with_llm._get_cache_key(
         "Test Query",
         "decompose",
@@ -640,13 +647,14 @@ def test_get_cache_key_format(service_with_llm):
         "claude-3-5-sonnet-20241022",
     )
 
-    # Format: {hash}:{strategy}:{max}:{model}
+    # Format: {hash}:{strategy}:{max}:{model}:{titles_hash}
     parts = key.split(":")
-    assert len(parts) == 4
+    assert len(parts) == 5
     assert len(parts[0]) == 12  # Hash is 12 chars
     assert parts[1] == "decompose"
     assert parts[2] == "5"
     assert parts[3] == "claude-3-5-sonnet-20241022"
+    assert len(parts[4]) == 8  # titles_hash is 8 chars
 
 
 def test_get_cache_key_case_insensitive(service_with_llm):
@@ -1235,3 +1243,202 @@ async def test_execute_expand_raises_without_llm(service_no_llm):
             max_variants=5,
             include_original=True,
         )
+
+
+class TestRecentPaperTitlesContext:
+    """Phase 9.5 REQ-9.5.2.2 (PR β follow-up, Issue #1).
+
+    QueryIntelligenceService now mirrors the recent_paper_titles
+    parameter that was added to QueryExpander in PR β. This closes
+    the gap where the discovery code path (QIS) lacked the API the
+    monitoring code path (QueryExpander) already had.
+    """
+
+    @pytest.fixture
+    def mock_llm(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        llm = MagicMock()
+        llm.config = MagicMock()
+        llm.config.model = "test-model"
+        llm.complete = AsyncMock()
+        return llm
+
+    @pytest.fixture
+    def service(self, mock_llm):
+        from src.services.query_intelligence_service import QueryIntelligenceService
+
+        return QueryIntelligenceService(llm_service=mock_llm)
+
+    @pytest.mark.asyncio
+    async def test_backward_compat_no_titles_param(self, service, mock_llm):
+        """Calling enhance() without recent_paper_titles works as before.
+
+        Pre-9.5 callers continue to compile and produce variants;
+        the prompt MUST NOT include a context section when no titles
+        are passed.
+        """
+        from unittest.mock import MagicMock
+        from src.models.query import QueryStrategy
+
+        response = MagicMock()
+        response.content = '[{"query": "v1", "focus": "methodology"}]'
+        mock_llm.complete.return_value = response
+
+        await service.enhance("test query", strategy=QueryStrategy.DECOMPOSE)
+
+        prompt = mock_llm.complete.call_args.kwargs["prompt"]
+        assert "Recent papers in this topic area" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_titles_inject_into_decompose_prompt(self, service, mock_llm):
+        """When titles provided, the decomposition prompt includes them."""
+        from unittest.mock import MagicMock
+        from src.models.query import QueryStrategy
+
+        response = MagicMock()
+        response.content = '[{"query": "v1", "focus": "methodology"}]'
+        mock_llm.complete.return_value = response
+
+        await service.enhance(
+            "machine translation",
+            strategy=QueryStrategy.DECOMPOSE,
+            recent_paper_titles=["Tree of Thoughts in NMT", "Sparse attention"],
+        )
+
+        prompt = mock_llm.complete.call_args.kwargs["prompt"]
+        assert "Recent papers in this topic area include" in prompt
+        assert "Tree of Thoughts in NMT" in prompt
+        assert "Sparse attention" in prompt
+
+    @pytest.mark.asyncio
+    async def test_titles_inject_into_expand_prompt(self, service, mock_llm):
+        """When titles provided, the expansion prompt also includes them."""
+        from unittest.mock import MagicMock
+        from src.models.query import QueryStrategy
+
+        response = MagicMock()
+        response.content = '["v1", "v2"]'
+        mock_llm.complete.return_value = response
+
+        await service.enhance(
+            "machine translation",
+            strategy=QueryStrategy.EXPAND,
+            recent_paper_titles=["Sparse attention for MT"],
+        )
+
+        prompt = mock_llm.complete.call_args.kwargs["prompt"]
+        assert "Sparse attention for MT" in prompt
+
+    @pytest.mark.asyncio
+    async def test_titles_capped_at_prompt_cap(self, service, mock_llm):
+        """More than 20 titles → only first 20 reach the prompt + truncation event."""
+        import structlog
+        from unittest.mock import MagicMock
+        from src.models.query import QueryStrategy
+        from src.services.query_intelligence_service import RECENT_TITLES_PROMPT_CAP
+
+        response = MagicMock()
+        response.content = '[{"query": "v1", "focus": "methodology"}]'
+        mock_llm.complete.return_value = response
+
+        many_titles = [f"Title {i}" for i in range(25)]
+
+        with structlog.testing.capture_logs() as logs:
+            await service.enhance(
+                "q",
+                strategy=QueryStrategy.DECOMPOSE,
+                recent_paper_titles=many_titles,
+            )
+
+        prompt = mock_llm.complete.call_args.kwargs["prompt"]
+        assert "Title 19" in prompt
+        assert "Title 20" not in prompt
+        trunc = [
+            e for e in logs if e["event"] == "query_intelligence_context_truncated"
+        ]
+        assert len(trunc) == 1
+        assert trunc[0]["original_count"] == 25
+        assert trunc[0]["used_count"] == RECENT_TITLES_PROMPT_CAP
+
+    @pytest.mark.asyncio
+    async def test_cache_key_differs_per_title_set(self, service, mock_llm):
+        """Same query, different titles → different cache entries (no collision)."""
+        from unittest.mock import MagicMock
+        from src.models.query import QueryStrategy
+
+        response = MagicMock()
+        response.content = '[{"query": "v1", "focus": "methodology"}]'
+        mock_llm.complete.return_value = response
+
+        await service.enhance(
+            "q",
+            strategy=QueryStrategy.DECOMPOSE,
+            recent_paper_titles=["A"],
+        )
+        await service.enhance(
+            "q",
+            strategy=QueryStrategy.DECOMPOSE,
+            recent_paper_titles=["B"],
+        )
+
+        # Two distinct calls because the cache key differs
+        assert mock_llm.complete.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_cache_key_same_for_same_titles_unordered(self, service, mock_llm):
+        """Order-insensitive: ["A", "B"] and ["B", "A"] hit the same cache entry."""
+        from unittest.mock import MagicMock
+        from src.models.query import QueryStrategy
+
+        response = MagicMock()
+        response.content = '[{"query": "v1", "focus": "methodology"}]'
+        mock_llm.complete.return_value = response
+
+        await service.enhance(
+            "q",
+            strategy=QueryStrategy.DECOMPOSE,
+            recent_paper_titles=["A", "B"],
+        )
+        await service.enhance(
+            "q",
+            strategy=QueryStrategy.DECOMPOSE,
+            recent_paper_titles=["B", "A"],
+        )
+
+        # Cache hit on second call → only one LLM invocation
+        assert mock_llm.complete.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_hybrid_threads_titles_through_decompose_and_expand(
+        self, service, mock_llm
+    ):
+        """Hybrid strategy passes titles to BOTH decompose and per-sub expand calls."""
+        from unittest.mock import MagicMock
+        from src.models.query import QueryStrategy
+
+        # Two sequential responses: one for decompose, one for expand-pass
+        decompose_response = MagicMock()
+        decompose_response.content = '[{"query": "subq", "focus": "methodology"}]'
+        expand_response = MagicMock()
+        expand_response.content = '["expanded variant"]'
+        mock_llm.complete.side_effect = [
+            decompose_response,
+            expand_response,
+        ]
+
+        await service.enhance(
+            "machine translation",
+            strategy=QueryStrategy.HYBRID,
+            max_queries=10,
+            recent_paper_titles=["Recent Paper Alpha", "Recent Paper Beta"],
+        )
+
+        # Both prompts MUST contain the recent-paper context bullets.
+        all_calls = mock_llm.complete.call_args_list
+        assert len(all_calls) >= 2  # at least decompose + 1 expand
+        for call in all_calls:
+            prompt = call.kwargs["prompt"]
+            assert (
+                "Recent Paper Alpha" in prompt and "Recent Paper Beta" in prompt
+            ), "Hybrid MUST thread titles into every internal call"

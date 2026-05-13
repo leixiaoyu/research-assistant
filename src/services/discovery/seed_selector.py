@@ -141,12 +141,16 @@ def select_citation_seeds(
 
     # Reconstruct PaperMetadata. Pydantic validation may fail on stale
     # snapshots written by older versions of the model; skip the bad
-    # ones rather than crash the discovery phase.
+    # ones rather than crash the discovery phase. The defensive branch
+    # is exercised by `test_invalid_snapshot_skipped_with_warning` in
+    # tests/unit/services/discovery/test_seed_selector.py — that test
+    # synthesises a snapshot missing required PaperMetadata fields and
+    # asserts the warning fires + the seed is skipped (not raised).
     seeds: List[PaperMetadata] = []
     for _, snapshot in capped:
         try:
             seeds.append(PaperMetadata(**snapshot))
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception as exc:
             logger.warning(
                 "citation_seed_snapshot_invalid",
                 topic=topic_slug,

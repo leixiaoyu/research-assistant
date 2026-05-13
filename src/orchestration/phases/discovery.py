@@ -75,6 +75,28 @@ CITATION_SOURCE_KEYS: tuple[str, ...] = (
 )
 
 
+def partition_source_breakdown(
+    source_breakdown: Dict[str, int],
+) -> tuple[int, int]:
+    """Phase 9.5 REQ-9.5.2.4 (PR β): split per-source counts into
+    (papers_from_providers, papers_from_citations).
+
+    The partition is governed by :data:`CITATION_SOURCE_KEYS`. Any
+    source name NOT in that set is treated as a provider (so unknown
+    or future provider names default to the provider bucket — a
+    citation source must explicitly opt in by being added to
+    CITATION_SOURCE_KEYS).
+
+    Returns a (providers, citations) tuple matching the field order on
+    :class:`PipelineResult` for ergonomic unpacking by callers.
+    """
+    citations = sum(
+        count for src, count in source_breakdown.items() if src in CITATION_SOURCE_KEYS
+    )
+    providers = sum(source_breakdown.values()) - citations
+    return providers, citations
+
+
 @dataclass
 class DiscoveryResult:
     """Result of the discovery phase.

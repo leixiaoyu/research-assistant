@@ -23,6 +23,7 @@ from src.orchestration.phases import (
     ExtractionPhase,
     SynthesisPhase,
 )
+from src.orchestration.phases.discovery import partition_source_breakdown
 from src.orchestration.result import PipelineResult
 from src.output.enhanced_generator import EnhancedMarkdownGenerator
 from src.output.markdown_generator import MarkdownGenerator
@@ -108,19 +109,14 @@ class ResearchPipeline:
             result.papers_discovered = discovery_result.total_papers
             # Phase 9.5 REQ-9.5.2.4: thread per-source breakdown up so the
             # daily-run job can compute the breadth metric SLO rate.
-            # Partition the breakdown into provider vs. citation totals
-            # using the canonical CITATION_SOURCE_KEYS set.
-            from src.orchestration.phases.discovery import CITATION_SOURCE_KEYS
-
+            # The partition (providers vs. citations) is delegated to
+            # `partition_source_breakdown` so the formula is unit-tested
+            # in isolation in tests/unit/orchestration/test_pipeline.py.
             result.source_breakdown = dict(discovery_result.source_breakdown)
-            result.papers_from_citations = sum(
-                count
-                for src, count in result.source_breakdown.items()
-                if src in CITATION_SOURCE_KEYS
-            )
-            result.papers_from_providers = (
-                sum(result.source_breakdown.values()) - result.papers_from_citations
-            )
+            (
+                result.papers_from_providers,
+                result.papers_from_citations,
+            ) = partition_source_breakdown(result.source_breakdown)
 
             # Phase 2: Extraction
             extraction_phase = ExtractionPhase(self._context)

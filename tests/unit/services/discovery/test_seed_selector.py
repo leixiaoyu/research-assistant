@@ -181,6 +181,52 @@ class TestSortAndCap:
         assert [p.paper_id for p in result] == ["p0", "p1", "p2"]
 
 
+class TestStaleSnapshotResilience:
+    """The selector skips entries whose snapshot fails Pydantic validation.
+
+    Old registry entries may carry snapshots written before a
+    PaperMetadata schema migration — e.g. a renamed required field or
+    a tightened validator. The selector MUST log a warning and skip
+    the bad snapshot rather than crash the entire discovery phase.
+    """
+
+    def test_invalid_snapshot_skipped_with_warning(self):
+        import structlog
+
+        # Valid entry: should make it through.
+        good = _make_entry("good", 90.0, _NOW - timedelta(days=1), ["topic-1"])
+        # Bad entry: snapshot is missing every required PaperMetadata
+        # field, but the entry itself is otherwise valid (so it passes
+        # the cohort filter and reaches reconstruction).
+        bad_entry = RegistryEntry(
+            paper_id="bad",
+            canonical_title="bad",
+            title_normalized="bad",
+            extraction_target_hash="0" * 64,
+            topic_affiliations=["topic-1"],
+            processed_at=_NOW - timedelta(days=1),
+            metadata_snapshot={
+                # Intentionally missing paper_id/title; quality_score
+                # is high enough to pass the threshold filter so we
+                # actually exercise the reconstruction try/except.
+                "quality_score": 95.0,
+            },
+        )
+
+        registry = _registry_returning([bad_entry, good])
+
+        with structlog.testing.capture_logs() as logs:
+            result = select_citation_seeds("topic-1", registry, now=_NOW)
+
+        # Good seed survives; bad one is skipped.
+        assert [p.paper_id for p in result] == ["good"]
+        # Warning event fires for the skipped snapshot.
+        warnings = [e for e in logs if e["event"] == "citation_seed_snapshot_invalid"]
+        assert len(warnings) == 1
+        assert warnings[0]["topic"] == "topic-1"
+        assert warnings[0]["error"] == "ValidationError"
+
+
 class TestDefaults:
     """Sanity check: the defaults match the Phase 9.5 spec."""
 

@@ -197,22 +197,14 @@ class DailyResearchJob(BaseJob):
             errors=len(result.errors),
         )
 
-        # Phase 9.5 REQ-9.5.1.4: emit abstract-fallback SLO event so ops
-        # can grep `pipeline_health_abstract_fallback_rate` in daily logs
-        # to verify the pipeline is producing full-text extractions, not
-        # silently degrading to abstract-only briefs. Per spec the SLO
-        # is defined on a 7-day rolling window; this event is the
-        # per-run building block.
-        self._emit_abstract_fallback_slo(result)
-
-        # Phase 9.5 REQ-9.5.2.4: emit breadth-metric SLO event so ops
-        # can grep `pipeline_health_breadth_metric` in daily logs to
-        # verify citation expansion is actually broadening the funnel
-        # (and not silently regressing if e.g. Semantic Scholar
-        # rate-limits or the registry seed pool is too sparse). Same
-        # per-run-building-block-of-rolling-SLO convention as the
-        # abstract-fallback event above.
-        self._emit_breadth_metric_slo(result)
+        # Phase 9.5 PR γ: SLO events (pipeline_health_abstract_fallback_rate
+        # and pipeline_health_breadth_metric) are now emitted from
+        # ResearchPipeline.run() itself — see
+        # src/orchestration/result.py::emit_pipeline_health_slo_events.
+        # This guarantees the events fire for ALL pipeline entry points
+        # including the production cron's `python -m src.cli run` (which
+        # bypasses DailyResearchJob entirely). DO NOT re-emit here, that
+        # would produce duplicate events in the scheduler path.
 
         # Phase 3.7 + 3.8: Send notifications with deduplication (fail-safe)
         await self._send_notifications(result, config, pipeline)
@@ -224,62 +216,6 @@ class DailyResearchJob(BaseJob):
         result_dict = result.to_dict()
         result_dict["dra_corpus_refresh"] = dra_result
         return result_dict
-
-    @staticmethod
-    def _emit_abstract_fallback_slo(result: Any) -> None:
-        """Emit the Phase 9.5 abstract-fallback SLO event (REQ-9.5.1.4).
-
-        Pulls the per-run rate from :class:`PipelineResult` and logs it
-        with the underlying counts so ops can grep
-        ``pipeline_health_abstract_fallback_rate`` for the daily
-        building block of the rolling 7-day SLO. The single-run rate is
-        not itself the SLO; ops aggregates over the window.
-
-        Side-effect-free with respect to the pipeline result: this is
-        observability only. The event includes ``within_slo`` so a
-        single run that breaches the threshold is filterable, but the
-        method does NOT raise or alter result state.
-        """
-        from src.orchestration.result import ABSTRACT_FALLBACK_RATE_SLO_PCT
-
-        logger.info(
-            "pipeline_health_abstract_fallback_rate",
-            rate_pct=result.abstract_fallback_rate_pct,
-            papers_with_extraction=result.papers_with_extraction,
-            papers_with_pdf=result.papers_with_pdf,
-            papers_with_abstract_fallback=result.papers_with_abstract_fallback,
-            slo_target_pct=ABSTRACT_FALLBACK_RATE_SLO_PCT,
-            within_slo=result.abstract_fallback_within_slo,
-        )
-
-    @staticmethod
-    def _emit_breadth_metric_slo(result: Any) -> None:
-        """Emit the Phase 9.5 breadth-metric SLO event (REQ-9.5.2.4).
-
-        Pulls the per-run rate from :class:`PipelineResult` and logs it
-        with the per-source breakdown so ops can grep
-        ``pipeline_health_breadth_metric`` for the daily building block
-        of the rolling 7-day SLO. The single-run rate is not itself the
-        SLO; ops aggregates over the window. The breakdown distinguishes
-        provider-sourced papers from citation-sourced papers using the
-        canonical ``CITATION_SOURCE_KEYS`` partition in
-        :mod:`src.orchestration.phases.discovery`.
-
-        Side-effect-free with respect to the pipeline result: this is
-        observability only.
-        """
-        from src.orchestration.result import BREADTH_METRIC_SLO_MIN_PCT
-
-        logger.info(
-            "pipeline_health_breadth_metric",
-            rate_pct=result.breadth_metric_rate_pct,
-            papers_discovered=result.papers_discovered,
-            papers_from_providers=result.papers_from_providers,
-            papers_from_citations=result.papers_from_citations,
-            source_breakdown=dict(result.source_breakdown),
-            slo_target_pct=BREADTH_METRIC_SLO_MIN_PCT,
-            within_slo=result.breadth_metric_within_slo,
-        )
 
     async def _send_notifications(
         self,

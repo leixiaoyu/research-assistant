@@ -3,13 +3,18 @@
 Phase 5.2: Extracted from research_pipeline.py.
 Phase 7.1: Added discovery statistics support.
 Phase 9.5: Added abstract-fallback SLO tracking (REQ-9.5.1.4).
+Phase 9.5 PR γ: Centralised SLO emission helpers (REQ-9.5.1.4 + REQ-9.5.2.4).
 """
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+import structlog
+
 from src.models.cross_synthesis import CrossTopicSynthesisReport
 from src.models.discovery import DiscoveryStats
+
+_logger = structlog.get_logger()
 
 # Phase 9.5 REQ-9.5.1.4: SLO threshold for abstract-only fallback rate.
 # Daily-run rate exceeding this signals the pipeline is producing
@@ -235,3 +240,49 @@ class PipelineResult:
         output_file = topic_result.get("output_file")
         if output_file:
             self.output_files.append(output_file)
+
+
+def emit_pipeline_health_slo_events(result: PipelineResult) -> None:
+    """Emit the Phase 9.5 SLO observability events for ``result``.
+
+    Centralised emission helper called from
+    :meth:`src.orchestration.pipeline.ResearchPipeline.run` so the
+    events fire regardless of pipeline entry point — the production
+    daily cron invokes ``python -m src.cli run`` (which goes through
+    ``ResearchPipeline.run`` directly), bypassing
+    ``src.scheduling.jobs.DailyResearchJob.run``. Putting emission
+    here closes the gap PRs #157 and #159 had where the events were
+    only fired from the scheduler entry point and were therefore
+    dead code in production.
+
+    Emits two events:
+
+    - ``pipeline_health_abstract_fallback_rate`` (REQ-9.5.1.4) —
+      per-run building block of the 7-day rolling SLO for "what
+      fraction of papers fell back to abstract-only extraction".
+    - ``pipeline_health_breadth_metric`` (REQ-9.5.2.4) — per-run
+      building block of the 7-day rolling SLO for "what fraction of
+      discovered papers came from citation expansion".
+
+    Side-effect-free with respect to ``result``: this is observability
+    only; the function does not mutate the result or raise.
+    """
+    _logger.info(
+        "pipeline_health_abstract_fallback_rate",
+        rate_pct=result.abstract_fallback_rate_pct,
+        papers_with_extraction=result.papers_with_extraction,
+        papers_with_pdf=result.papers_with_pdf,
+        papers_with_abstract_fallback=result.papers_with_abstract_fallback,
+        slo_target_pct=ABSTRACT_FALLBACK_RATE_SLO_PCT,
+        within_slo=result.abstract_fallback_within_slo,
+    )
+    _logger.info(
+        "pipeline_health_breadth_metric",
+        rate_pct=result.breadth_metric_rate_pct,
+        papers_discovered=result.papers_discovered,
+        papers_from_providers=result.papers_from_providers,
+        papers_from_citations=result.papers_from_citations,
+        source_breakdown=dict(result.source_breakdown),
+        slo_target_pct=BREADTH_METRIC_SLO_MIN_PCT,
+        within_slo=result.breadth_metric_within_slo,
+    )

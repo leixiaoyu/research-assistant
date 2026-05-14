@@ -24,7 +24,7 @@ from src.orchestration.phases import (
     SynthesisPhase,
 )
 from src.orchestration.phases.discovery import partition_source_breakdown
-from src.orchestration.result import PipelineResult
+from src.orchestration.result import PipelineResult, emit_pipeline_health_slo_events
 from src.output.enhanced_generator import EnhancedMarkdownGenerator
 from src.output.markdown_generator import MarkdownGenerator
 
@@ -161,6 +161,18 @@ class ResearchPipeline:
                     else 0
                 ),
             )
+
+            # Phase 9.5 PR γ: emit SLO observability events HERE so
+            # both production entry points fire them — the cron
+            # invokes `python -m src.cli run` (CLI path,
+            # ResearchPipeline.run() direct) and the scheduler invokes
+            # DailyResearchJob.run() (which also calls
+            # ResearchPipeline.run() under the hood). Putting the
+            # emission in the pipeline layer guarantees coverage
+            # regardless of caller. See
+            # `emit_pipeline_health_slo_events` in
+            # src/orchestration/result.py for event details.
+            emit_pipeline_health_slo_events(result)
 
         except Exception as e:
             logger.exception("pipeline_failed", error=str(e))

@@ -235,3 +235,123 @@ class TestResearchPipeline:
             assert mock_create.called
             # Verify the mock was called
             mock_create.assert_called_once()
+
+
+class TestPipelineEmitsSloEventsAtEnd:
+    """Phase 9.5 PR γ wiring test — ResearchPipeline.run() emits the
+    Phase 9.5 SLO events at the end of every successful run.
+
+    This test pins the wiring that PR γ established. PRs #157 and
+    #159 emitted the events from DailyResearchJob.run() instead, but
+    the production cron invokes ``python -m src.cli run`` which
+    bypasses DailyResearchJob entirely — making the events dead code
+    in production. PR γ moved emission into ResearchPipeline.run() so
+    both entry points emit. This test guards against a future
+    regression that puts emission back into the scheduler layer only.
+    """
+
+    @pytest.mark.asyncio
+    async def test_run_calls_emit_pipeline_health_slo_events(self):
+        """ResearchPipeline.run() MUST invoke emit_pipeline_health_slo_events."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.orchestration import ResearchPipeline
+
+        pipeline = ResearchPipeline()
+
+        # Mock everything inside run() so we isolate the emission call.
+        mock_context = MagicMock()
+        mock_context.config.research_topics = []
+        mock_context.errors = []
+        mock_context.discovery_service = None
+
+        # Mock all the phase classes — we don't care about their
+        # internals for this wiring assertion.
+        with (
+            patch.object(
+                ResearchPipeline,
+                "_create_context",
+                AsyncMock(return_value=mock_context),
+            ),
+            patch("src.orchestration.pipeline.DiscoveryPhase") as mock_discovery,
+            patch("src.orchestration.pipeline.ExtractionPhase") as mock_extraction,
+            patch("src.orchestration.pipeline.SynthesisPhase") as mock_synthesis,
+            patch("src.orchestration.pipeline.CrossSynthesisPhase") as mock_cross,
+            patch(
+                "src.orchestration.pipeline.emit_pipeline_health_slo_events"
+            ) as mock_emit,
+        ):
+            mock_discovery.return_value.run = AsyncMock(
+                return_value=MagicMock(
+                    topics_processed=0,
+                    topics_failed=0,
+                    total_papers=0,
+                    source_breakdown={},
+                )
+            )
+            mock_extraction.return_value.run = AsyncMock(
+                return_value=MagicMock(
+                    total_papers_processed=0,
+                    total_papers_with_extraction=0,
+                    total_papers_with_pdf=0,
+                    total_papers_with_abstract_fallback=0,
+                    total_tokens_used=0,
+                    total_cost_usd=0.0,
+                    output_files=[],
+                )
+            )
+            mock_synthesis.return_value.run = AsyncMock()
+            mock_cross.return_value.run = AsyncMock(return_value=MagicMock(report=None))
+
+            await pipeline.run()
+
+        mock_emit.assert_called_once(), (
+            "ResearchPipeline.run MUST call emit_pipeline_health_slo_events"
+            " so SLO events fire for both CLI and scheduler entry points"
+        )
+
+    @pytest.mark.asyncio
+    async def test_emission_is_skipped_when_pipeline_raises_pre_completion(self):
+        """If pipeline raises before end-of-pipeline emission, no SLO fires.
+
+        The emission lives AFTER the synthesis/cross-synthesis stages
+        (inside the try block, before `except`) so a phase failure
+        skips it. This is the right behavior — partial-run SLO data
+        would be misleading. The exception still propagates.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.orchestration import ResearchPipeline
+
+        pipeline = ResearchPipeline()
+        mock_context = MagicMock()
+        mock_context.config.research_topics = []
+        mock_context.errors = []
+        mock_context.discovery_service = None
+
+        with (
+            patch.object(
+                ResearchPipeline,
+                "_create_context",
+                AsyncMock(return_value=mock_context),
+            ),
+            patch("src.orchestration.pipeline.DiscoveryPhase") as mock_discovery,
+            patch(
+                "src.orchestration.pipeline.emit_pipeline_health_slo_events"
+            ) as mock_emit,
+        ):
+            mock_discovery.return_value.run = AsyncMock(
+                side_effect=RuntimeError("discovery exploded")
+            )
+
+            # The pipeline catches exceptions in run() (per the
+            # existing try/except), records them on result.errors,
+            # and returns. So we don't expect a raise here.
+            result = await pipeline.run()
+
+        mock_emit.assert_not_called(), (
+            "When discovery raises mid-pipeline, the SLO emission MUST"
+            " be skipped — partial-run telemetry would mislead ops"
+        )
+        # The exception was caught and recorded
+        assert any("discovery exploded" in e.get("error", "") for e in result.errors)

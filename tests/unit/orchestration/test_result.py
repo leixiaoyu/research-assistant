@@ -362,3 +362,89 @@ class TestAbstractFallbackSLO:
         assert result.papers_with_pdf == 5
         assert result.papers_with_abstract_fallback == 3
         assert result.abstract_fallback_rate_pct == 37.5
+
+
+class TestBreadthMetricSLO:
+    """Phase 9.5 REQ-9.5.2.4 — breadth metric rate computation.
+
+    The rate is the per-run building block of a 7-day rolling SLO. The
+    spec defines: rate = papers_from_citations / papers_discovered (zero
+    when denominator is zero, treated as "no SLO breach" since there's
+    nothing to broaden if nothing was discovered).
+    """
+
+    def test_rate_zero_when_no_papers_discovered(self):
+        """No discovery → rate is 0.0 and within_slo=True (no breach)."""
+        result = PipelineResult(papers_discovered=0)
+        assert result.breadth_metric_rate_pct == 0.0
+        assert result.breadth_metric_within_slo is True
+
+    def test_rate_zero_when_all_from_providers(self):
+        """All from providers, none from citations → 0% rate, OUT of SLO."""
+        result = PipelineResult(
+            papers_discovered=10,
+            papers_from_providers=10,
+            papers_from_citations=0,
+        )
+        assert result.breadth_metric_rate_pct == 0.0
+        assert result.breadth_metric_within_slo is False
+
+    def test_rate_one_hundred_when_all_from_citations(self):
+        """All from citations → 100% (well above SLO floor)."""
+        result = PipelineResult(
+            papers_discovered=10,
+            papers_from_providers=0,
+            papers_from_citations=10,
+        )
+        assert result.breadth_metric_rate_pct == 100.0
+        assert result.breadth_metric_within_slo is True
+
+    def test_rate_at_slo_boundary(self):
+        """Exactly 15% is within SLO (inclusive boundary)."""
+        result = PipelineResult(
+            papers_discovered=100,
+            papers_from_providers=85,
+            papers_from_citations=15,
+        )
+        assert result.breadth_metric_rate_pct == 15.0
+        assert result.breadth_metric_within_slo is True
+
+    def test_rate_just_under_slo(self):
+        """14% is OUT of SLO (citations under-contributing)."""
+        result = PipelineResult(
+            papers_discovered=100,
+            papers_from_providers=86,
+            papers_from_citations=14,
+        )
+        assert result.breadth_metric_rate_pct == 14.0
+        assert result.breadth_metric_within_slo is False
+
+    def test_rate_rounds_to_two_decimals(self):
+        """Rate is rounded for log-event readability (1/3 → 33.33%)."""
+        result = PipelineResult(
+            papers_discovered=3,
+            papers_from_providers=2,
+            papers_from_citations=1,
+        )
+        assert result.breadth_metric_rate_pct == 33.33
+
+    def test_to_dict_includes_breadth_fields(self):
+        """to_dict() exposes counts + computed rate + source_breakdown."""
+        result = PipelineResult(
+            papers_discovered=10,
+            papers_from_providers=7,
+            papers_from_citations=3,
+            source_breakdown={"arxiv": 7, "forward_citations": 3},
+        )
+        d = result.to_dict()
+        assert d["papers_from_providers"] == 7
+        assert d["papers_from_citations"] == 3
+        assert d["breadth_metric_rate_pct"] == 30.0
+        assert d["source_breakdown"] == {"arxiv": 7, "forward_citations": 3}
+
+    def test_source_breakdown_default_is_independent_per_instance(self):
+        """Default-factory dict must not be shared across PipelineResult instances."""
+        a = PipelineResult()
+        b = PipelineResult()
+        a.source_breakdown["arxiv"] = 5
+        assert "arxiv" not in b.source_breakdown

@@ -435,3 +435,65 @@ class TestGetDeltaHistory:
         assert history[0].name == "2025-01-15_Delta.md"
         assert history[1].name == "2025-01-12_Delta.md"
         assert history[2].name == "2025-01-10_Delta.md"
+
+
+class TestDeltaProvenanceDisplay:
+    """Phase 9.5 REQ-9.5.2.3 (PR β) — per-paper provenance in Delta brief."""
+
+    def _result(self, **overrides) -> ProcessingResult:
+        defaults = dict(
+            paper_id="p-1",
+            title="A Paper",
+            status=ProcessingStatus.NEW,
+            quality_score=80.0,
+            pdf_available=True,
+            extraction_success=True,
+            topic_slug="topic-1",
+        )
+        defaults.update(overrides)
+        return ProcessingResult(**defaults)
+
+    def test_renders_provenance_when_both_present(self):
+        """source + method → 'Provenance: arxiv (keyword)' style line."""
+        from src.output.delta_generator import DeltaGenerator
+
+        gen = DeltaGenerator()
+        result = self._result(discovery_source="arxiv", discovery_method="keyword")
+        rendered = gen._render_paper_entry(result)
+        assert "**Provenance:** arxiv (keyword)" in rendered
+        # The original "Source: PDF" line is REPLACED with "Content: PDF"
+        # when provenance is shown so we don't double up.
+        assert "**Content:** 📄 PDF" in rendered
+        assert "**Source:** 📄 PDF" not in rendered
+
+    def test_renders_provenance_for_citation_paper(self):
+        """citation_expansion + forward_citation → human-readable line."""
+        from src.output.delta_generator import DeltaGenerator
+
+        gen = DeltaGenerator()
+        result = self._result(
+            discovery_source="citation_expansion",
+            discovery_method="forward_citation",
+        )
+        rendered = gen._render_paper_entry(result)
+        assert "**Provenance:** citation_expansion (forward_citation)" in rendered
+
+    def test_renders_provenance_with_only_source(self):
+        from src.output.delta_generator import DeltaGenerator
+
+        gen = DeltaGenerator()
+        result = self._result(discovery_source="arxiv", discovery_method=None)
+        rendered = gen._render_paper_entry(result)
+        assert "**Provenance:** arxiv" in rendered
+
+    def test_no_provenance_keeps_legacy_source_line(self):
+        """Backward compat: ProcessingResults without provenance render unchanged."""
+        from src.output.delta_generator import DeltaGenerator
+
+        gen = DeltaGenerator()
+        result = self._result()  # no discovery_source / discovery_method
+        rendered = gen._render_paper_entry(result)
+        # The pre-9.5 line is preserved verbatim
+        assert "**Quality:**" in rendered
+        assert "**Source:** 📄 PDF" in rendered
+        assert "Provenance" not in rendered

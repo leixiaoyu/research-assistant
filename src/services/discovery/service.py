@@ -1,7 +1,7 @@
 """Discovery service with multi-provider intelligence (Phase 3.2, 3.4, 6 & 7.2)."""
 
 import asyncio
-from typing import List, Dict, Optional, Tuple, TYPE_CHECKING
+from typing import Any, List, Dict, Optional, Tuple, TYPE_CHECKING
 
 import structlog
 
@@ -93,6 +93,7 @@ class DiscoveryService:
         quality_scorer: Optional[QualityScorer] = None,
         enhanced_discovery_service: Optional["EnhancedDiscoveryService"] = None,
         settings: Optional[GlobalSettings] = None,
+        registry_service: Optional[Any] = None,
     ):
         """Initialize discovery service with providers.
 
@@ -113,11 +114,18 @@ class DiscoveryService:
                 this instance instead of creating one internally. This enables
                 easier testing and customization of the 4-stage pipeline.
             settings: Global settings including ArXiv configuration (Phase 7 Fix I1).
+            registry_service: Optional :class:`RegistryService` injected so DEEP
+                mode can use the Phase 9.5 quality-cohort seed selector
+                (REQ-9.5.2.1, PR β). When ``None``, DEEP mode falls back to
+                the legacy ``all_papers[:10]`` seed selection — no behavior
+                change for callers that don't pass a registry.
         """
         self.config = config or ProviderSelectionConfig()
         self.providers: Dict[ProviderType, DiscoveryProvider] = {}
         self._api_key = api_key
         self._settings = settings
+        # Phase 9.5 REQ-9.5.2.1 (PR β): registry for citation seed selection.
+        self._registry_service = registry_service
 
         # Phase 6: Store injected enhanced service (optional DI)
         self._enhanced_service = enhanced_discovery_service
@@ -274,6 +282,45 @@ class DiscoveryService:
             papers: Ranked papers with quality scores.
         """
         self._metrics_collector.log_quality_stats(papers)
+
+    def _select_citation_seeds(
+        self,
+        topic_slug: str,
+        fallback_papers: List[PaperMetadata],
+    ) -> List[PaperMetadata]:
+        """Pick citation seeds for DEEP mode (Phase 9.5 REQ-9.5.2.1, PR β).
+
+        Prefers the recent quality-cohort cohort from the registry.
+        Falls back to the legacy ``fallback_papers[:10]`` behavior when:
+
+        - No registry was injected (caller didn't wire it).
+        - The cohort is empty (cold registry, no recent papers above
+          quality threshold). The seed_selector logs the reason via
+          ``citation_seeds_empty_cohort``; this method additionally
+          logs ``citation_seeds_using_fallback`` so the operational
+          log shows both the why and the fallback.
+
+        Guarantees non-regressive behavior for first-week-after-merge
+        runs and for callers that don't pass a registry.
+        """
+        if self._registry_service is None:
+            return fallback_papers[:10]
+        # Local import keeps the dependency optional and avoids loading
+        # registry-related modules in non-DEEP code paths.
+        from src.services.discovery.seed_selector import select_citation_seeds
+
+        seeds = select_citation_seeds(
+            topic_slug=topic_slug,
+            registry_service=self._registry_service,
+        )
+        if not seeds:
+            logger.info(
+                "citation_seeds_using_fallback",
+                topic=topic_slug,
+                fallback_count=min(10, len(fallback_papers)),
+            )
+            return fallback_papers[:10]
+        return seeds
 
     async def _apply_arxiv_supplement(
         self,
@@ -1127,8 +1174,14 @@ class DiscoveryService:
                 ),
             )
 
-            # Limit seed papers to avoid excessive API calls
-            seed_papers = all_papers[:10]
+            # Phase 9.5 REQ-9.5.2.1 (PR β): prefer the recent quality-
+            # cohort cohort from the registry as citation seeds; fall
+            # back to the legacy top-10-from-current-run behavior when
+            # no registry is wired or the cohort is empty (cold-start).
+            seed_papers = self._select_citation_seeds(
+                topic_slug=topic.slug,
+                fallback_papers=all_papers,
+            )
 
             citation_result = await explorer.explore(
                 seed_papers=seed_papers,

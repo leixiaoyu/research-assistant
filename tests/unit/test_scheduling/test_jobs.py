@@ -317,6 +317,158 @@ class TestAbstractFallbackSLOEvent:
         assert slo_events[0]["within_slo"] is True
 
 
+class TestBreadthMetricSLOEvent:
+    """Phase 9.5 REQ-9.5.2.4 — DailyResearchJob emits the breadth SLO event.
+
+    Mirrors the abstract-fallback SLO test pattern, including the
+    documented module-logger rebind workaround for
+    ``cache_logger_on_first_use=True`` (per CLAUDE.md test
+    conventions).
+    """
+
+    @pytest.mark.asyncio
+    async def test_emits_event_with_rate_counts_and_source_breakdown(self):
+        """Event payload includes rate_pct, counts, breakdown, threshold, within_slo."""
+        import structlog
+        from src.orchestration import PipelineResult
+        from src.models.notification import NotificationSettings
+
+        job = DailyResearchJob()
+        mock_config = MagicMock()
+        mock_config.settings.notification_settings = NotificationSettings()
+
+        with (
+            patch(
+                "src.services.config_manager.ConfigManager"
+            ) as mock_config_manager_class,
+            patch("src.orchestration.ResearchPipeline") as mock_pipeline_class,
+        ):
+            mock_config_manager = MagicMock()
+            mock_config_manager.load_config.return_value = mock_config
+            mock_config_manager_class.return_value = mock_config_manager
+
+            mock_result = PipelineResult(
+                topics_processed=2,
+                papers_discovered=100,
+                papers_from_providers=80,
+                papers_from_citations=20,
+                source_breakdown={
+                    "arxiv": 50,
+                    "semantic_scholar": 30,
+                    "forward_citations": 12,
+                    "backward_citations": 8,
+                },
+            )
+            mock_pipeline = MagicMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_result)
+            mock_pipeline_class.return_value = mock_pipeline
+
+            import src.scheduling.jobs as _jobs_module
+
+            with patch.object(_jobs_module, "logger", structlog.get_logger()):
+                with structlog.testing.capture_logs() as logs:
+                    await job.run()
+
+        breadth_events = [
+            e for e in logs if e["event"] == "pipeline_health_breadth_metric"
+        ]
+        assert (
+            len(breadth_events) == 1
+        ), "Exactly one breadth SLO event MUST fire per run"
+        evt = breadth_events[0]
+        assert evt["rate_pct"] == 20.0
+        assert evt["papers_discovered"] == 100
+        assert evt["papers_from_providers"] == 80
+        assert evt["papers_from_citations"] == 20
+        assert evt["source_breakdown"]["arxiv"] == 50
+        assert evt["source_breakdown"]["forward_citations"] == 12
+        assert evt["slo_target_pct"] == 15.0
+        assert evt["within_slo"] is True
+
+    @pytest.mark.asyncio
+    async def test_emits_event_when_breadth_slo_breached(self):
+        """When citations under-contribute, within_slo=False (signal for ops)."""
+        import structlog
+        from src.orchestration import PipelineResult
+        from src.models.notification import NotificationSettings
+
+        job = DailyResearchJob()
+        mock_config = MagicMock()
+        mock_config.settings.notification_settings = NotificationSettings()
+
+        with (
+            patch(
+                "src.services.config_manager.ConfigManager"
+            ) as mock_config_manager_class,
+            patch("src.orchestration.ResearchPipeline") as mock_pipeline_class,
+        ):
+            mock_config_manager = MagicMock()
+            mock_config_manager.load_config.return_value = mock_config
+            mock_config_manager_class.return_value = mock_config_manager
+
+            mock_result = PipelineResult(
+                topics_processed=1,
+                papers_discovered=100,
+                papers_from_providers=95,
+                papers_from_citations=5,  # 5% < 15% floor
+                source_breakdown={"arxiv": 95, "forward_citations": 5},
+            )
+            mock_pipeline = MagicMock()
+            mock_pipeline.run = AsyncMock(return_value=mock_result)
+            mock_pipeline_class.return_value = mock_pipeline
+
+            import src.scheduling.jobs as _jobs_module
+
+            with patch.object(_jobs_module, "logger", structlog.get_logger()):
+                with structlog.testing.capture_logs() as logs:
+                    await job.run()
+
+        breadth_events = [
+            e for e in logs if e["event"] == "pipeline_health_breadth_metric"
+        ]
+        assert len(breadth_events) == 1
+        assert breadth_events[0]["rate_pct"] == 5.0
+        assert breadth_events[0]["within_slo"] is False
+
+    @pytest.mark.asyncio
+    async def test_emits_event_when_zero_papers_discovered(self):
+        """Empty run → rate=0.0, within_slo=True (no breach when nothing attempted)."""
+        import structlog
+        from src.orchestration import PipelineResult
+        from src.models.notification import NotificationSettings
+
+        job = DailyResearchJob()
+        mock_config = MagicMock()
+        mock_config.settings.notification_settings = NotificationSettings()
+
+        with (
+            patch(
+                "src.services.config_manager.ConfigManager"
+            ) as mock_config_manager_class,
+            patch("src.orchestration.ResearchPipeline") as mock_pipeline_class,
+        ):
+            mock_config_manager = MagicMock()
+            mock_config_manager.load_config.return_value = mock_config
+            mock_config_manager_class.return_value = mock_config_manager
+
+            mock_pipeline = MagicMock()
+            mock_pipeline.run = AsyncMock(return_value=PipelineResult())
+            mock_pipeline_class.return_value = mock_pipeline
+
+            import src.scheduling.jobs as _jobs_module
+
+            with patch.object(_jobs_module, "logger", structlog.get_logger()):
+                with structlog.testing.capture_logs() as logs:
+                    await job.run()
+
+        breadth_events = [
+            e for e in logs if e["event"] == "pipeline_health_breadth_metric"
+        ]
+        assert len(breadth_events) == 1
+        assert breadth_events[0]["rate_pct"] == 0.0
+        assert breadth_events[0]["within_slo"] is True
+
+
 class TestDailyResearchJobErrors:
     """Tests for DailyResearchJob error handling."""
 

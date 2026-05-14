@@ -4,6 +4,7 @@ This module coordinates between persistence, registration, and query layers
 to provide the main RegistryService API.
 """
 
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
 import structlog
@@ -265,6 +266,27 @@ class RegistryService:
         """
         state = self.load()
         return self._queries.get_entries_for_topic(topic_slug, state)
+
+    def get_recent_entries_for_topic(
+        self,
+        topic_slug: str,
+        since: datetime,
+    ) -> List[RegistryEntry]:
+        """Get topic entries with ``processed_at >= since``.
+
+        Phase 9.5 REQ-9.5.2.1 (PR β): used by citation seed selection
+        to surface the recent extracted-papers cohort. See
+        :meth:`RegistryQueries.get_recent_entries_for_topic`.
+
+        Args:
+            topic_slug: Topic slug to filter by.
+            since: Inclusive lower-bound timestamp.
+
+        Returns:
+            List of recent registry entries for the topic.
+        """
+        state = self.load()
+        return self._queries.get_recent_entries_for_topic(topic_slug, since, state)
 
     def get_stats(self) -> dict:
         """Get registry statistics.

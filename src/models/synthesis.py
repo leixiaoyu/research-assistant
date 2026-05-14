@@ -54,6 +54,25 @@ class ProcessingResult(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(
         default=None, description="Additional metadata from extraction"
     )
+    # Phase 9.5 REQ-9.5.2.3 (PR β): per-paper provenance for the
+    # Delta-brief display. Carried through from PaperMetadata so the
+    # generator doesn't need to reach back into the registry. Both
+    # default to None to preserve backward compatibility for existing
+    # ProcessingResult constructors that don't set them.
+    discovery_source: Optional[str] = Field(
+        default=None,
+        description=(
+            'Provenance source: "arxiv", "semantic_scholar", '
+            '"citation_expansion", etc.'
+        ),
+    )
+    discovery_method: Optional[str] = Field(
+        default=None,
+        description=(
+            'How the paper was found: "keyword", "forward_citation", '
+            '"backward_citation", etc.'
+        ),
+    )
 
 
 class KnowledgeBaseEntry(BaseModel):

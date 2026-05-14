@@ -471,6 +471,140 @@ class TestRegistryServiceQueries:
 
         assert len(entries) == 3
 
+
+class TestGetRecentEntriesForTopic:
+    """Phase 9.5 REQ-9.5.2.1 (PR β) — direct tests for the new method.
+
+    Self-review Issue #3 flagged that `RegistryQueries.get_recent_entries_for_topic`
+    and the `RegistryService` facade were tested only via mocks in the
+    seed_selector tests, leaving the actual filter logic uncovered.
+    These tests exercise the real filter against a real RegistryState.
+    """
+
+    @pytest.fixture
+    def service(self, tmp_path):
+        from src.services.registry_service import RegistryService
+
+        return RegistryService(registry_path=tmp_path / "registry.json")
+
+    @staticmethod
+    def _register(service, paper_id: str, topic_slug: str, processed_at):
+        """Register a paper, then mutate processed_at to a controlled value.
+
+        ``register_paper`` always stamps processed_at with ``datetime.now(utc)``,
+        so we override the timestamp via direct state mutation + persist
+        to exercise the time-window filter precisely (boundary cases
+        need exact timestamps).
+        """
+        paper = PaperMetadata(
+            paper_id=paper_id,
+            title=f"Title {paper_id}",
+            url=f"https://example.com/{paper_id}",
+        )
+        service.register_paper(paper, topic_slug=topic_slug, extraction_targets=[])
+        # Find the just-registered entry by its paper_id (the canonical
+        # registry UUID may differ from the source paper_id, so we
+        # match against metadata_snapshot["paper_id"] instead).
+        state = service.load()
+        for entry in state.entries.values():
+            if (
+                entry.metadata_snapshot
+                and entry.metadata_snapshot.get("paper_id") == paper_id
+            ):
+                entry.processed_at = processed_at
+                break
+        # Persist the mutation via the service's public save() API so
+        # subsequent load() calls observe the controlled timestamp.
+        service._state = state
+        service.save()
+
+    def test_empty_state_returns_empty_list(self, service):
+        from datetime import datetime, timedelta, timezone
+
+        since = datetime.now(timezone.utc) - timedelta(days=7)
+        result = service.get_recent_entries_for_topic("topic-1", since)
+        assert result == []
+
+    def test_entry_within_window_returned(self, service):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime(2026, 5, 13, 12, 0, 0, tzinfo=timezone.utc)
+        self._register(service, "p1", "topic-1", processed_at=now - timedelta(days=1))
+        result = service.get_recent_entries_for_topic(
+            "topic-1", since=now - timedelta(days=7)
+        )
+        assert len(result) == 1
+        assert result[0].metadata_snapshot["paper_id"] == "p1"
+
+    def test_entry_at_boundary_inclusive(self, service):
+        """Entry with processed_at == since is included (>= comparison)."""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime(2026, 5, 13, 12, 0, 0, tzinfo=timezone.utc)
+        boundary = now - timedelta(days=7)
+        self._register(service, "p1", "topic-1", processed_at=boundary)
+        result = service.get_recent_entries_for_topic("topic-1", since=boundary)
+        assert len(result) == 1, "processed_at == since must be inclusive"
+
+    def test_entry_just_before_boundary_excluded(self, service):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime(2026, 5, 13, 12, 0, 0, tzinfo=timezone.utc)
+        boundary = now - timedelta(days=7)
+        # 1 microsecond before the boundary
+        self._register(
+            service, "p1", "topic-1", processed_at=boundary - timedelta(microseconds=1)
+        )
+        result = service.get_recent_entries_for_topic("topic-1", since=boundary)
+        assert result == []
+
+    def test_mixed_timestamps_only_within_window_returned(self, service):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime(2026, 5, 13, 12, 0, 0, tzinfo=timezone.utc)
+        self._register(
+            service, "recent", "topic-1", processed_at=now - timedelta(days=1)
+        )
+        self._register(
+            service, "boundary", "topic-1", processed_at=now - timedelta(days=7)
+        )
+        self._register(service, "old", "topic-1", processed_at=now - timedelta(days=10))
+
+        result = service.get_recent_entries_for_topic(
+            "topic-1", since=now - timedelta(days=7)
+        )
+        ids = {e.metadata_snapshot["paper_id"] for e in result}
+        assert ids == {"recent", "boundary"}, "Only entries within window included"
+
+    def test_cross_topic_isolation(self, service):
+        """Entries for other topics are NOT returned."""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime(2026, 5, 13, 12, 0, 0, tzinfo=timezone.utc)
+        self._register(service, "a1", "topic-a", processed_at=now - timedelta(days=1))
+        self._register(service, "a2", "topic-a", processed_at=now - timedelta(days=2))
+        self._register(service, "b1", "topic-b", processed_at=now - timedelta(days=1))
+
+        result = service.get_recent_entries_for_topic(
+            "topic-a", since=now - timedelta(days=7)
+        )
+        ids = {e.metadata_snapshot["paper_id"] for e in result}
+        assert ids == {"a1", "a2"}
+
+    def test_facade_loads_state_before_delegating(self, service, mocker):
+        """Facade calls self.load() before delegating to the queries handler.
+
+        This ensures the facade observes any unflushed state changes a
+        caller has made via service.add_topic_affiliation etc.
+        """
+        from datetime import datetime, timezone
+
+        load_spy = mocker.spy(service, "load")
+        service.get_recent_entries_for_topic(
+            "topic-1", since=datetime.now(timezone.utc)
+        )
+        assert load_spy.call_count == 1, "Facade MUST call load() exactly once"
+
     def test_get_stats(self, service, sample_paper):
         """Test getting registry statistics."""
         service.register_paper(

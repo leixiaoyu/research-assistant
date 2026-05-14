@@ -23,6 +23,7 @@ from src.orchestration.phases import (
     ExtractionPhase,
     SynthesisPhase,
 )
+from src.orchestration.phases.discovery import partition_source_breakdown
 from src.orchestration.result import PipelineResult
 from src.output.enhanced_generator import EnhancedMarkdownGenerator
 from src.output.markdown_generator import MarkdownGenerator
@@ -106,6 +107,16 @@ class ResearchPipeline:
             result.topics_processed += discovery_result.topics_processed
             result.topics_failed += discovery_result.topics_failed
             result.papers_discovered = discovery_result.total_papers
+            # Phase 9.5 REQ-9.5.2.4: thread per-source breakdown up so the
+            # daily-run job can compute the breadth metric SLO rate.
+            # The partition (providers vs. citations) is delegated to
+            # `partition_source_breakdown` so the formula is unit-tested
+            # in isolation in tests/unit/orchestration/test_pipeline.py.
+            result.source_breakdown = dict(discovery_result.source_breakdown)
+            (
+                result.papers_from_providers,
+                result.papers_from_citations,
+            ) = partition_source_breakdown(result.source_breakdown)
 
             # Phase 2: Extraction
             extraction_phase = ExtractionPhase(self._context)
@@ -190,15 +201,19 @@ class ResearchPipeline:
         config = config_manager.load_config()
 
         # Core services
+        # Phase 9.5 REQ-9.5.2.1 (PR β): construct registry FIRST so it
+        # can be injected into DiscoveryService for the citation
+        # quality-cohort seed selector.
+        registry_service = RegistryService()
+
         discovery_service = DiscoveryService(
             api_key=config.settings.semantic_scholar_api_key or "",
             config=config.settings.provider_selection,
+            registry_service=registry_service,
         )
 
         catalog_service = CatalogService(config_manager)
         catalog_service.load()
-
-        registry_service = RegistryService()
 
         # Create context
         context = PipelineContext(

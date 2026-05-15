@@ -448,3 +448,146 @@ class TestBreadthMetricSLO:
         b = PipelineResult()
         a.source_breakdown["arxiv"] = 5
         assert "arxiv" not in b.source_breakdown
+
+
+class TestEmitPipelineHealthSloEvents:
+    """Phase 9.5 PR γ — centralised SLO emission helper.
+
+    Replaces the prior ``TestAbstractFallbackSLOEvent`` and
+    ``TestBreadthMetricSLOEvent`` classes that exercised emission
+    through DailyResearchJob.run(). Those tests had to mock the entire
+    ResearchPipeline, which made them silently dead when the
+    emission was moved out of the scheduler entry point. Testing the
+    helper directly is more honest and resilient: the helper is a
+    pure function over PipelineResult, and a separate wiring test in
+    test_research_pipeline.py confirms ResearchPipeline.run() calls
+    it at end-of-pipeline.
+    """
+
+    @staticmethod
+    def _capture_events(result: PipelineResult, target_event: str) -> list:
+        """Run the helper and return only the matching captured events."""
+        import structlog
+        from unittest.mock import patch as _patch
+
+        from src.orchestration import result as result_module
+
+        # Rebind the module-level _logger before capture_logs() so
+        # cache_logger_on_first_use=True doesn't bypass the test
+        # processor chain (documented pattern in CLAUDE.md test
+        # conventions).
+        new_logger = structlog.get_logger()
+        with _patch.object(result_module, "_logger", new_logger):
+            with structlog.testing.capture_logs() as logs:
+                result_module.emit_pipeline_health_slo_events(result)
+        return [e for e in logs if e["event"] == target_event]
+
+    def test_emits_abstract_fallback_event_with_rate_and_counts(self):
+        """abstract_fallback event MUST include rate, counts, threshold, within_slo."""
+        result = PipelineResult(
+            topics_processed=1,
+            papers_processed=10,
+            papers_with_extraction=10,
+            papers_with_pdf=8,
+            papers_with_abstract_fallback=2,
+        )
+        events = self._capture_events(result, "pipeline_health_abstract_fallback_rate")
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["rate_pct"] == 20.0
+        assert evt["papers_with_extraction"] == 10
+        assert evt["papers_with_pdf"] == 8
+        assert evt["papers_with_abstract_fallback"] == 2
+        assert evt["slo_target_pct"] == 20.0
+        assert evt["within_slo"] is True
+
+    def test_emits_abstract_fallback_event_when_slo_breached(self):
+        result = PipelineResult(
+            topics_processed=1,
+            papers_processed=10,
+            papers_with_extraction=10,
+            papers_with_pdf=3,
+            papers_with_abstract_fallback=7,
+        )
+        events = self._capture_events(result, "pipeline_health_abstract_fallback_rate")
+        assert len(events) == 1
+        assert events[0]["rate_pct"] == 70.0
+        assert events[0]["within_slo"] is False
+
+    def test_emits_abstract_fallback_event_with_zero_extractions(self):
+        events = self._capture_events(
+            PipelineResult(), "pipeline_health_abstract_fallback_rate"
+        )
+        assert len(events) == 1
+        assert events[0]["rate_pct"] == 0.0
+        assert events[0]["within_slo"] is True
+
+    def test_emits_breadth_event_with_rate_counts_and_breakdown(self):
+        """breadth event MUST include rate, counts, breakdown, threshold, within_slo."""
+        result = PipelineResult(
+            topics_processed=2,
+            papers_discovered=100,
+            papers_from_providers=80,
+            papers_from_citations=20,
+            source_breakdown={
+                "arxiv": 50,
+                "semantic_scholar": 30,
+                "forward_citations": 12,
+                "backward_citations": 8,
+            },
+        )
+        events = self._capture_events(result, "pipeline_health_breadth_metric")
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["rate_pct"] == 20.0
+        assert evt["papers_discovered"] == 100
+        assert evt["papers_from_providers"] == 80
+        assert evt["papers_from_citations"] == 20
+        assert evt["source_breakdown"]["arxiv"] == 50
+        assert evt["source_breakdown"]["forward_citations"] == 12
+        assert evt["slo_target_pct"] == 15.0
+        assert evt["within_slo"] is True
+
+    def test_emits_breadth_event_when_slo_breached(self):
+        result = PipelineResult(
+            topics_processed=1,
+            papers_discovered=100,
+            papers_from_providers=95,
+            papers_from_citations=5,
+            source_breakdown={"arxiv": 95, "forward_citations": 5},
+        )
+        events = self._capture_events(result, "pipeline_health_breadth_metric")
+        assert len(events) == 1
+        assert events[0]["rate_pct"] == 5.0
+        assert events[0]["within_slo"] is False
+
+    def test_emits_breadth_event_with_zero_papers_discovered(self):
+        events = self._capture_events(
+            PipelineResult(), "pipeline_health_breadth_metric"
+        )
+        assert len(events) == 1
+        assert events[0]["rate_pct"] == 0.0
+        assert events[0]["within_slo"] is True
+
+    def test_helper_emits_both_events_in_one_call(self):
+        """One invocation MUST fire both SLO events for the same result."""
+        import structlog
+        from unittest.mock import patch as _patch
+
+        from src.orchestration import result as result_module
+
+        result = PipelineResult(
+            papers_discovered=10,
+            papers_from_providers=8,
+            papers_from_citations=2,
+            papers_with_extraction=5,
+            papers_with_pdf=4,
+            papers_with_abstract_fallback=1,
+        )
+        with _patch.object(result_module, "_logger", structlog.get_logger()):
+            with structlog.testing.capture_logs() as logs:
+                result_module.emit_pipeline_health_slo_events(result)
+
+        event_names = [e["event"] for e in logs]
+        assert "pipeline_health_abstract_fallback_rate" in event_names
+        assert "pipeline_health_breadth_metric" in event_names
